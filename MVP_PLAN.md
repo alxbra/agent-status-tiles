@@ -1,7 +1,7 @@
 # Agent Status Tiles — MVP Implementation Plan
 
 **Document:** `MVP_PLAN.md` in the project root.  
-**Document status:** Implementation in progress; repository bootstrap, the Epic 0 application foundation, session state/persistence, the bounded Codex rollout reader, the Codex catalog (PR #7), the rounded-square tile renderer (PR #8), and unsigned helper packaging (PR #9) are merged. The presentational Settings view (PR #10) is implementation-complete on an open branch awaiting final merge. Native integration, live provider wiring, and later release gates remain pending.
+**Document status:** Implementation in progress; repository bootstrap, the Epic 0 application foundation, session state/persistence, the bounded Codex rollout reader, the Codex catalog (PR #7), the rounded-square tile renderer (PR #8), unsigned helper packaging (PR #9), and the presentational Settings view (PR #10) are merged. Native integration, live provider wiring, and later release gates remain pending.
 **Repository:** [alxbra/agent-status-tiles](https://github.com/alxbra/agent-status-tiles)
 
 ## 1. Product and release target
@@ -544,7 +544,7 @@ a signing/notarization claim.
 
 **PRs:** `feat/integration-settings`, `feat/desktop-preferences`.
 
-Implementation progress (not an acceptance checkoff): PR #10 provides the
+Implementation progress (not an acceptance checkoff): PR #10 merged the
 controlled, presentational Settings view using stock shadcn controls. Its
 renderer-only callbacks and browser fixture do not perform provider startup,
 IPC, filesystem, persistence, or native settings changes; those integration
@@ -610,11 +610,11 @@ Maintain this table in the plan:
 | [#7 `feat/codex catalog`](https://github.com/alxbra/agent-status-tiles/pull/7) | Read-only Codex app-server catalog client with bounded metadata projection | 1 completed CLI pass; 2 valid findings fixed | 2 | 83 unit tests, 3 Electron smoke tests, format/lint/type/build checks; green [CI run 34986281698](https://github.com/alxbra/agent-status-tiles/actions/runs/34986281698); [audit comment](https://github.com/alxbra/agent-status-tiles/pull/7#issuecomment-5682690186) | `419322edcfd277730acd0fef669c26479352c443` |
 | [#8 `feat: add rounded-square status tile UI`](https://github.com/alxbra/agent-status-tiles/pull/8) | Isolated rounded-square tile renderer, magnification, overflow, keyboard interaction, and visual fixtures | 1 completed CLI pass; 1 valid finding fixed | 2 | 94 unit tests, 3 Electron smoke tests, 22 browser fixture tests; final head `febe543d76a4e8d052b85c8e044bf612f471a1d3`; [CI run 34987937805](https://github.com/alxbra/agent-status-tiles/actions/runs/34987937805); [audit comment](https://github.com/alxbra/agent-status-tiles/pull/8#issuecomment-5682973864) | `1f3c523465de0cff9eb2cbafb65a04cb347ce301` |
 | [#9 `build/helper packaging`](https://github.com/alxbra/agent-status-tiles/pull/9) | Unsigned arm64/x64 packaging for the existing native hook helper | 1 completed CLI pass; 1 valid documentation finding fixed | 2 | 104 TypeScript unit tests, 11 native helper tests, 25 E2E tests (3 Electron and 22 browser), format/lint/type/build checks, and unsigned arm64/x64 resource validation; [CI run 34991704461](https://github.com/alxbra/agent-status-tiles/actions/runs/34991704461), [native run 34991704642](https://github.com/alxbra/agent-status-tiles/actions/runs/34991704642), [package run 34991704417](https://github.com/alxbra/agent-status-tiles/actions/runs/34991704417); [audit comment](https://github.com/alxbra/agent-status-tiles/pull/9#issuecomment-5683519994) | `c9905833628a533f7aadaf93ff82dfd0d8c9c94f` |
-| [#10 `feat: add presentational settings view`](https://github.com/alxbra/agent-status-tiles/pull/10) | Renderer-only stock-shadcn Settings view, controlled provider/display/preferences presentation, and browser fixture | 1 completed CLI pass; 0 findings | 2 | Final local validation at `d07b3a3`: 104 unit tests, 3 Electron smoke tests, 29 browser fixture tests, format/lint/type/build checks; prior green [CI run 34991670989](https://github.com/alxbra/agent-status-tiles/actions/runs/34991670989) at `6fd75f1`; post-sync CI pending | Open; no merge SHA |
+| [#10 `feat: add presentational settings view`](https://github.com/alxbra/agent-status-tiles/pull/10) | Renderer-only stock-shadcn Settings view, controlled provider/display/preferences presentation, and browser fixture | 1 completed CLI pass; 0 findings | 2 | Final local validation at `d07b3a3`: 104 unit tests, 3 Electron smoke tests, 29 browser fixture tests, format/lint/type/build checks; [CI run 34992343659](https://github.com/alxbra/agent-status-tiles/actions/runs/34992343659); [package run 34992343684](https://github.com/alxbra/agent-status-tiles/actions/runs/34992343684); [audit comment](https://github.com/alxbra/agent-status-tiles/pull/10#issuecomment-5683612055) | `07b399fb5d6b8b8bac696f599860a02797bd464b` |
 
 Foundation review corrections included strict IPC sender/frame validation, same-host renderer navigation checks, supported Node engine ranges, formatter coverage, and recovery after a failed settings-window load. No signing or notarization was claimed; Apple Developer credentials remain a release dependency.
 
-Hook helper PR #2 merged into `staging` at `b536b6c4a6246e6e31650304ea10c94b1f87963f`. Its CodeRabbit and QA corrections were partial-tail recovery, safe lock-path handling, canonical payload fields, private paths, bounded subprocess tests, and a monotonic 500 ms lock deadline. Helper packaging, app replay, hook installation, and the full Claude epic remain incomplete.
+Hook helper PR #2 merged into `staging` at `b536b6c4a6246e6e31650304ea10c94b1f87963f`. Its CodeRabbit and QA corrections were partial-tail recovery, safe lock-path handling, canonical payload fields, private paths, bounded subprocess tests, and a monotonic 500 ms lock deadline. App replay, hook installation, and the full Claude epic remain incomplete; unsigned helper packaging is covered by PR #9 below.
 
 Session-state PR #3 merged into `staging` at `33657030eff342466aa9bb8f4ffc001bce8212d4`. It completed one CodeRabbit CLI pass with zero findings and two root QA passes, including fixes for out-of-order waits, health overlays, safe identifier lookup, bounded UTF-8 fields, redundant state, and active child/archive filter coverage. The pure reducer, identity, ordering/filter, lifecycle, provider-health, and race-safe acknowledgement tasks above are verified; persistence and real-app replay remain pending.
 
@@ -648,13 +648,16 @@ and the [audit comment](https://github.com/alxbra/agent-status-tiles/pull/9#issu
 Signing/notarization, startup and hook installation, journal replay, and live
 provider integration remain unchecked.
 
-Settings presentation PR #10 is implementation-complete on its open branch at
+Settings presentation PR #10 merged into `staging` at
+`07b399fb5d6b8b8bac696f599860a02797bd464b` from implementation head
 `d07b3a3`. It completed exactly one CodeRabbit pass with zero findings and two
 root QA passes; QA1 requested only internal naming cleanup and fixture
 simplification, and QA2 found no further issues. Final post-sync local
 validation has 104 unit tests, 3 Electron smoke tests, 29 browser fixture tests,
-format/lint/type/build checks, and no live provider or native settings wiring.
-Merge remains pending.
+format/lint/type/build checks, and no live provider or native settings wiring;
+see [CI run 34992343659](https://github.com/alxbra/agent-status-tiles/actions/runs/34992343659),
+[package run 34992343684](https://github.com/alxbra/agent-status-tiles/actions/runs/34992343684),
+and the [audit comment](https://github.com/alxbra/agent-status-tiles/pull/10#issuecomment-5683612055).
 
 Record corrections made after review and the commit used for final validation.
 
