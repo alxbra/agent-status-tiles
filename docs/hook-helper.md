@@ -17,18 +17,20 @@ The helper reads one JSON object from stdin, up to 64 KiB. It accepts the
 allowlisted lifecycle names used by Claude hooks and the local Codex observer:
 `SessionStart`, `SessionEnd`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`,
 `PostToolUseFailure`, `PermissionRequest`, `Notification`, `Stop`,
-`StopFailure`, `SubagentStart`, `SubagentStop`, `TeammateIdle`,
-`TaskCompleted`, `ConfigChange`, `WorktreeCreate`, `WorktreeRemove`,
-`Elicitation`, and `ElicitationResult`.
+`StopFailure`, `Elicitation`, and `ElicitationResult`.
 
 For accepted events it retains only these bounded fields:
 
 - `provider`, `event_name`, `session_id`, optional `turn_id`, optional
-  `prompt_id`, optional `elicitation_id`, and optional `tool_call_id`;
+  `prompt_id`, optional `elicitation_id`, and optional `tool_call_id`. The
+  output `tool_call_id` is sourced from Claude's canonical `tool_use_id` or
+  Codex's canonical `tool_call_id` according to the explicit provider argument;
 - `timestamp` (canonical receipt time in Unix milliseconds);
 - `project_name` and a one-way SHA-256 `project_id` derived from a normalized
   absolute cwd. The raw cwd is never journaled;
-- validated `notification_type` values for `Notification` events; and
+- validated `notification_type` values (`permission_prompt`, `idle_prompt`,
+  `auth_success`, `elicitation_dialog`, `elicitation_complete`, or
+  `elicitation_response`) for `Notification` events; and
 - `stop_hook_active` when supplied as a boolean, so a Stop callback is not
   mistaken for definitive completion while another hook continues the turn.
 
@@ -59,16 +61,17 @@ schema is version `1` and has the following shape (optional fields are omitted):
   "session_id": "native-id",
   "turn_id": "turn-id",
   "prompt_id": "prompt-id",
-  "elicitation_id": "elicitation-id",
   "tool_call_id": "tool-id",
   "tool_name": "AskUserQuestion",
   "timestamp": 1700000000000,
   "project_name": "project",
   "project_id": "sha256-of-normalized-project-cwd",
-  "notification_type": "permission_prompt",
   "stop_hook_active": false
 }
 ```
+
+`elicitation_id` appears only on `Elicitation` and `ElicitationResult`
+records. `notification_type` appears only on `Notification` records.
 
 Every record, including its newline, is at most 4 KiB. The active journal is
 limited to 256 KiB. Before an append that would exceed the limit, the helper
@@ -82,7 +85,8 @@ replay archives oldest-to-newest and then tail the active file; records have no
 helper-side state mapping, so the app owns lifecycle reduction, deduplication,
 and cursor persistence. `Stop` and `StopFailure` are raw candidates only;
 `stop_hook_active` is preserved as metadata and the app must account for
-parallel hooks before declaring a turn complete.
+parallel hooks before declaring a turn complete. A contended lock is retried
+for at most 500 ms before the helper fails open with a silent success.
 
 Journal directories and files are private (`0700` directories and `0600`
 files on macOS). Existing symlinks or non-regular journal/lock paths cause a

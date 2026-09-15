@@ -18,7 +18,7 @@ const MAX_ID_BYTES: usize = 256;
 const MAX_EVENT_BYTES: usize = 64;
 const MAX_PROJECT_BYTES: usize = 256;
 const MAX_NAVIGATION_BYTES: usize = 64;
-const LOCK_RETRIES: usize = 1_000;
+const LOCK_RETRIES: usize = 100;
 const LOCK_WAIT: Duration = Duration::from_millis(5);
 
 #[derive(Debug)]
@@ -113,44 +113,39 @@ fn read_bounded<R: Read>(input: &mut R) -> Result<Vec<u8>, HelperError> {
 
 fn reduce_event(provider: &str, value: &Value) -> Option<ReducedEvent> {
     let object = value.as_object()?;
-    let event_name = string_field(
-        object,
-        &["hook_event_name", "event_name", "eventName", "event"],
-        MAX_EVENT_BYTES,
-    )?;
+    let event_name = string_field(object, &["hook_event_name"], MAX_EVENT_BYTES)?;
     if !is_allowed_event(&event_name) {
         return None;
     }
 
-    let session_id = string_field(object, &["session_id", "sessionId"], MAX_ID_BYTES)?;
-    let turn_id = string_field(object, &["turn_id", "turnId"], MAX_ID_BYTES);
-    let prompt_id = string_field(object, &["prompt_id", "promptId"], MAX_ID_BYTES);
+    let session_id = string_field(object, &["session_id"], MAX_ID_BYTES)?;
+    let turn_id = string_field(object, &["turn_id"], MAX_ID_BYTES);
+    let prompt_id = string_field(object, &["prompt_id"], MAX_ID_BYTES);
     let elicitation_id = matches!(event_name.as_str(), "Elicitation" | "ElicitationResult")
-        .then(|| string_field(object, &["elicitation_id", "elicitationId"], MAX_ID_BYTES))
+        .then(|| string_field(object, &["elicitation_id"], MAX_ID_BYTES))
         .flatten();
-    let tool_call_id = string_field(
-        object,
-        &["tool_call_id", "toolCallId", "tool_use_id", "toolUseId"],
-        MAX_ID_BYTES,
-    );
-    let tool_name = string_field(object, &["tool_name", "toolName"], MAX_NAVIGATION_BYTES)
+    let tool_call_id = if provider == "codex" {
+        string_field(object, &["tool_call_id"], MAX_ID_BYTES)
+    } else {
+        string_field(object, &["tool_use_id"], MAX_ID_BYTES)
+    };
+    let tool_name = string_field(object, &["tool_name"], MAX_NAVIGATION_BYTES)
         .filter(|value| value == "AskUserQuestion" || value == "request_user_input");
 
     let timestamp = now_millis();
     let (project_name, project_id) = project_metadata(object);
     let notification_type = (event_name == "Notification")
-        .then(|| {
-            string_field(
-                object,
-                &["notification_type", "notificationType"],
-                MAX_NAVIGATION_BYTES,
-            )
-        })
+        .then(|| string_field(object, &["notification_type"], MAX_NAVIGATION_BYTES))
         .flatten()
         .filter(|value| {
             matches!(
                 value.as_str(),
-                "permission_prompt" | "idle_prompt" | "auth_success" | "elicitation_dialog"
+                "permission_prompt"
+                    | "idle_prompt"
+                    | "auth_success"
+                    | "elicitation_dialog"
+                    | "elicitation_complete"
+                    | "elicitation_response"
             )
         });
     let stop_hook_active = object.get("stop_hook_active").and_then(Value::as_bool);
@@ -188,12 +183,7 @@ fn string_field(
 }
 
 fn project_metadata(object: &serde_json::Map<String, Value>) -> (Option<String>, Option<String>) {
-    let explicit_name = string_field(object, &["project_name", "projectName"], MAX_PROJECT_BYTES);
-    let cwd = string_field(
-        object,
-        &["project_cwd", "projectCwd", "cwd"],
-        4 * MAX_PROJECT_BYTES,
-    );
+    let cwd = string_field(object, &["cwd"], 4 * MAX_PROJECT_BYTES);
     let (cwd_name, project_id) = cwd
         .filter(|path| Path::new(path).is_absolute())
         .map(|path| {
@@ -209,7 +199,7 @@ fn project_metadata(object: &serde_json::Map<String, Value>) -> (Option<String>,
             (name, Some(sha256_id(&normalized)))
         })
         .unwrap_or((None, None));
-    (explicit_name.or(cwd_name), project_id)
+    (cwd_name, project_id)
 }
 
 fn normalize_absolute_path(path: &Path) -> String {
@@ -263,13 +253,6 @@ fn is_allowed_event(name: &str) -> bool {
             | "Notification"
             | "Stop"
             | "StopFailure"
-            | "SubagentStart"
-            | "SubagentStop"
-            | "TeammateIdle"
-            | "TaskCompleted"
-            | "ConfigChange"
-            | "WorktreeCreate"
-            | "WorktreeRemove"
             | "Elicitation"
             | "ElicitationResult"
     )
@@ -517,7 +500,9 @@ fn create_private_directory(path: &Path) -> io::Result<()> {
 #[cfg(unix)]
 fn add_no_follow(options: &mut OpenOptions) {
     use std::os::unix::fs::OpenOptionsExt;
-    options.custom_flags(libc::O_NOFOLLOW).mode(0o600);
+    options
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+        .mode(0o600);
 }
 
 #[cfg(not(unix))]
