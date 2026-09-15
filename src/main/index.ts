@@ -18,6 +18,7 @@ import { IPC_CHANNELS, type SettingsState } from '../shared/ipc';
 import type { OverlayState } from '../shared/overlay-ipc';
 import type { SessionSnapshot } from '../shared/session';
 import { PRIMARY_DISPLAY_ID } from '../shared/settings';
+import { createAppLifecycleController } from './app-lifecycle';
 
 const hasSingleInstanceLock = app.requestSingleInstanceLock();
 const TEST_KEYBOARD_ENTRY_HOOK = Symbol.for('agent-status-tiles.test.keyboard-entry');
@@ -29,6 +30,9 @@ let removeAppIpcHandlers: (() => void) | null = null;
 let desktopPreferences: DesktopPreferencesStore | null = null;
 let overlayState: OverlayState = createStartupOverlayState(app.isPackaged);
 let requestedLoginItemState: boolean | undefined;
+let removeRuntimeLifecycleListeners: (() => void) | null = null;
+let isQuitting = false;
+let runtimeInitialized = false;
 
 function isQualifyingSession(session: SessionSnapshot): boolean {
   return session.isTopLevel && !session.isArchived && session.status !== 'idle';
@@ -130,7 +134,20 @@ if (!hasSingleInstanceLock) {
     }
   });
 
-  app.on('will-quit', () => {
+  app.on('before-quit', () => {
+    // Electron can close BrowserWindows before emitting will-quit. Mark the
+    // controller destroyed first so its closed callbacks cannot recreate a
+    // replacement while the app is shutting down.
+    isQuitting = true;
+    removeRuntimeLifecycleListeners?.();
+    removeRuntimeLifecycleListeners = null;
+    overlayController?.destroy();
+  });
+
+  const onWillQuit = (): void => {
+    isQuitting = true;
+    removeRuntimeLifecycleListeners?.();
+    removeRuntimeLifecycleListeners = null;
     Reflect.deleteProperty(globalThis, TEST_KEYBOARD_ENTRY_HOOK);
     removeSettingsIpcHandlers?.();
     removeSettingsIpcHandlers = null;
@@ -142,9 +159,12 @@ if (!hasSingleInstanceLock) {
     overlayController?.destroy();
     menuBar = null;
     overlayController = null;
-  });
+  };
+  app.on('will-quit', onWillQuit);
 
   void app.whenReady().then(() => {
+    if (isQuitting || runtimeInitialized) return;
+    runtimeInitialized = true;
     if (process.platform === 'darwin') {
       app.dock?.hide();
     }
@@ -153,9 +173,14 @@ if (!hasSingleInstanceLock) {
     desktopPreferences = new DesktopPreferencesStore(app.getPath('userData'));
     const preferences = desktopPreferences.get();
     overlayState = { ...overlayState, reducedMotion: preferences.reduceMotion };
+    const lifecycle = createAppLifecycleController({
+      recoverOverlay: () => overlayController?.recover(),
+      openSettings: openSettingsWindow,
+    });
     overlayController = createOverlayController({
       preferredDisplayId: preferences.preferredDisplayId,
       onKeyboardEntry: () => publishOverlayKeyboardEntry(overlayController?.getWindow() ?? null),
+      onApplicationActivationExpected: lifecycle.expectOverlayRestoreActivation,
     });
     overlayController.setQualifyingSessionCount(qualifyingSessionCount(overlayState.sessions));
     removeOverlayIpcHandlers = registerOverlayIpcHandlers({
@@ -213,20 +238,25 @@ if (!hasSingleInstanceLock) {
       },
     });
     const onDisplayTopologyChanged = (): void => publishCurrentSettings();
+    const onActivate = (): void => lifecycle.handleActivate();
     screen.on('display-metrics-changed', onDisplayTopologyChanged);
     screen.on('display-added', onDisplayTopologyChanged);
     screen.on('display-removed', onDisplayTopologyChanged);
-    app.once('will-quit', () => {
+    app.on('activate', onActivate);
+    removeRuntimeLifecycleListeners = (): void => {
+      app.off('activate', onActivate);
       screen.off('display-metrics-changed', onDisplayTopologyChanged);
       screen.off('display-added', onDisplayTopologyChanged);
       screen.off('display-removed', onDisplayTopologyChanged);
+      lifecycle.destroy();
+    };
+    app.once('will-quit', () => {
+      removeRuntimeLifecycleListeners?.();
+      removeRuntimeLifecycleListeners = null;
       desktopPreferences = null;
     });
     if (shouldOpenSettingsAtStartup(startupLoginSettings)) {
       openSettingsWindow();
     }
-    app.on('activate', () => {
-      openSettingsWindow();
-    });
   });
 }

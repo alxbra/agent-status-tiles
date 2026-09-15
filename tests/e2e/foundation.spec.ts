@@ -291,6 +291,83 @@ test('creates a hidden nonactivating overlay in the primary work area', async ()
   }
 });
 
+test('recreates one native overlay after an unexpected close', async () => {
+  test.skip(process.platform !== 'darwin', 'the desktop shell targets macOS');
+  const userDataDir = await mkdtemp(join(tmpdir(), 'agent-status-tiles-recovery-e2e-'));
+  let application: ElectronApplication | undefined;
+
+  try {
+    application = await launch(userDataDir, 1);
+    await settingsWindow(application);
+    const initialOverlayPage = await overlayWindow(application);
+    const initialOverlayState = await initialOverlayPage.evaluate(() =>
+      window.agentStatusTilesOverlay.getState(),
+    );
+    const initialOverlayId = await application.evaluate(({ BrowserWindow }) => {
+      const window = BrowserWindow.getAllWindows().find((candidate) =>
+        candidate.webContents.getURL().includes('/renderer/overlay.html'),
+      );
+      if (window === undefined) throw new Error('Overlay window is unavailable');
+      return window.webContents.id;
+    });
+
+    const overlayClosed = initialOverlayPage.waitForEvent('close').catch(() => undefined);
+    await application.evaluate(({ BrowserWindow }) => {
+      const window = BrowserWindow.getAllWindows().find((candidate) =>
+        candidate.webContents.getURL().includes('/renderer/overlay.html'),
+      );
+      if (window === undefined) throw new Error('Overlay window is unavailable');
+      window.destroy();
+    });
+    await overlayClosed;
+
+    await expect
+      .poll(() =>
+        application!.evaluate(
+          ({ BrowserWindow }) =>
+            BrowserWindow.getAllWindows().filter((window) =>
+              window.webContents.getURL().includes('/renderer/overlay.html'),
+            ).length,
+        ),
+      )
+      .toBe(1);
+    await expect
+      .poll(() =>
+        application!.evaluate(({ BrowserWindow }) => {
+          const window = BrowserWindow.getAllWindows().find((candidate) =>
+            candidate.webContents.getURL().includes('/renderer/overlay.html'),
+          );
+          return window === undefined
+            ? null
+            : {
+                id: window.webContents.id,
+                visible: window.isVisible(),
+                focusable: window.isFocusable(),
+                destroyed: window.isDestroyed(),
+              };
+        }),
+      )
+      .toMatchObject({ visible: true, focusable: false, destroyed: false });
+    const replacementOverlayId = await application.evaluate(({ BrowserWindow }) => {
+      const window = BrowserWindow.getAllWindows().find((candidate) =>
+        candidate.webContents.getURL().includes('/renderer/overlay.html'),
+      );
+      if (window === undefined) throw new Error('Replacement overlay window is unavailable');
+      return window.webContents.id;
+    });
+    expect(replacementOverlayId).not.toBe(initialOverlayId);
+
+    const replacement = await overlayWindow(application);
+    await expect(replacement.locator('.status-tiles__tile')).toHaveCount(1);
+    expect(await replacement.evaluate(() => window.agentStatusTilesOverlay.getState())).toEqual(
+      initialOverlayState,
+    );
+  } finally {
+    await closeApplication(application);
+    await rm(userDataDir, { recursive: true, force: true });
+  }
+});
+
 for (const testSessionCount of [0, 1, 12, 30]) {
   test(`projects ${String(testSessionCount)} bounded test sessions through the native overlay`, async () => {
     test.skip(process.platform !== 'darwin', 'the desktop shell targets macOS');

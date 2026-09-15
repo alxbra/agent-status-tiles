@@ -106,17 +106,19 @@ export function OverlayApp(): ReactElement {
       receivedPublishedState = true;
       if (mounted) setState(nextState);
     });
-    void overlayApi
-      .getState()
-      .then((nextState) => {
-        if (mounted && !receivedPublishedState) setState(nextState);
-      })
-      .catch(() => undefined);
+    const initialState = overlayApi.getState().then((nextState) => {
+      if (mounted && !receivedPublishedState) setState(nextState);
+    });
 
     const unsubscribeKeyboardEntry = overlayApi.subscribeKeyboardEntry(() => {
       setKeyboardEntryRevision((revision) => revision + 1);
     });
-    void overlayApi.rendererReady().catch(() => undefined);
+    // Do not advertise readiness until the initial state request has settled;
+    // replacement windows remain hidden until both paths are durable.
+    void initialState
+      .catch(() => undefined)
+      .then(() => overlayApi.rendererReady())
+      .catch(() => undefined);
 
     return () => {
       mounted = false;

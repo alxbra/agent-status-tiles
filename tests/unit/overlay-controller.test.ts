@@ -35,6 +35,7 @@ type OverlayWindowMock = {
   closedListener?: () => void;
   loadingListener?: () => void;
   pointerListener?: (inputEvent: PointerEvent) => void;
+  markDestroyed: () => void;
   webContents: {
     focus: ReturnType<typeof vi.fn>;
     on: ReturnType<typeof vi.fn>;
@@ -62,6 +63,7 @@ function createOverlayWindowMock(
 ): OverlayWindowMock {
   let visible = false;
   let focusable = false;
+  let destroyed = false;
   let bounds = initialBounds;
   const mock: OverlayWindowMock = {
     blur: vi.fn(),
@@ -70,7 +72,7 @@ function createOverlayWindowMock(
     hide: vi.fn(() => {
       visible = false;
     }),
-    isDestroyed: vi.fn(() => false),
+    isDestroyed: vi.fn(() => destroyed),
     isVisible: vi.fn(() => visible),
     isFocusable: vi.fn(() => focusable),
     getBounds: vi.fn(() => bounds),
@@ -105,6 +107,9 @@ function createOverlayWindowMock(
         }
       }),
       setWindowOpenHandler: vi.fn(),
+    },
+    markDestroyed: () => {
+      destroyed = true;
     },
   };
 
@@ -316,7 +321,7 @@ describe('overlay controller', () => {
     controller.destroy();
   });
 
-  it('tears down keyboard mode when the native window closes before recreation', async () => {
+  it('tears down keyboard mode and recreates once when the native window closes', async () => {
     const firstWindow = createOverlayWindowMock();
     const secondWindow = createOverlayWindowMock();
     electronMocks.BrowserWindow.mockImplementationOnce(
@@ -341,14 +346,15 @@ describe('overlay controller', () => {
     controller.enterKeyboardMode();
     firstWindow.closedListener?.();
 
-    expect(controller.getWindow()).toBeNull();
+    expect(controller.getWindow()).toBe(secondWindow);
     expect(electronMocks.app.hide).toHaveBeenCalledOnce();
     expect(electronMocks.app.show).toHaveBeenCalledOnce();
-    controller.setQualifyingSessionCount(1);
     secondWindow.readyListener?.();
-    expect(secondWindow.showInactive).toHaveBeenCalledOnce();
+    expect(secondWindow.showInactive).not.toHaveBeenCalled();
     expect(secondWindow.show).not.toHaveBeenCalled();
     expect(secondWindow.focus).not.toHaveBeenCalled();
+    controller.setRendererReady();
+    expect(secondWindow.showInactive).toHaveBeenCalledOnce();
     controller.destroy();
   });
 
@@ -382,6 +388,7 @@ describe('overlay controller', () => {
     failedWindow.readyListener?.();
     expect(recoveredWindow.showInactive).not.toHaveBeenCalled();
     recoveredWindow.readyListener?.();
+    controller.setRendererReady();
     expect(recoveredWindow.showInactive).toHaveBeenCalledOnce();
 
     const resume = electronMocks.powerMonitor.on.mock.calls.find(
@@ -526,5 +533,136 @@ describe('overlay controller', () => {
     overlayWindow.pointerListener?.({ type: 'mouseLeave', x: 34, y: 22 });
     expect(overlayWindow.setIgnoreMouseEvents).toHaveBeenLastCalledWith(true, { forward: true });
     controller.destroy();
+  });
+
+  it('ignores stale callbacks from a closed generation after one replacement', async () => {
+    const firstWindow = createOverlayWindowMock();
+    const secondWindow = createOverlayWindowMock();
+    electronMocks.BrowserWindow.mockImplementationOnce(
+      class BrowserWindowMock {
+        constructor() {
+          return firstWindow;
+        }
+      } as unknown as typeof electronMocks.BrowserWindow,
+    ).mockImplementationOnce(
+      class BrowserWindowMock {
+        constructor() {
+          return secondWindow;
+        }
+      } as unknown as typeof electronMocks.BrowserWindow,
+    );
+    const { createOverlayController } = await import('../../src/main/overlay-controller');
+    const controller = createOverlayController();
+    controller.setQualifyingSessionCount(1);
+    firstWindow.readyListener?.();
+    firstWindow.closedListener?.();
+    expect(electronMocks.BrowserWindow).toHaveBeenCalledTimes(2);
+
+    firstWindow.loadingListener?.();
+    firstWindow.pointerListener?.({ type: 'mouseMove', x: 20, y: 20 });
+    firstWindow.closedListener?.();
+    firstWindow.readyListener?.();
+    expect(electronMocks.BrowserWindow).toHaveBeenCalledTimes(2);
+    expect(secondWindow.showInactive).not.toHaveBeenCalled();
+
+    secondWindow.readyListener?.();
+    expect(secondWindow.showInactive).not.toHaveBeenCalled();
+    controller.setRendererReady();
+    expect(secondWindow.showInactive).toHaveBeenCalledOnce();
+    controller.destroy();
+  });
+
+  it('does not recover a hidden or empty overlay until both visibility and sessions return', async () => {
+    const firstWindow = createOverlayWindowMock();
+    const secondWindow = createOverlayWindowMock();
+    electronMocks.BrowserWindow.mockImplementationOnce(
+      class BrowserWindowMock {
+        constructor() {
+          return firstWindow;
+        }
+      } as unknown as typeof electronMocks.BrowserWindow,
+    ).mockImplementationOnce(
+      class BrowserWindowMock {
+        constructor() {
+          return secondWindow;
+        }
+      } as unknown as typeof electronMocks.BrowserWindow,
+    );
+    const { createOverlayController } = await import('../../src/main/overlay-controller');
+    const controller = createOverlayController();
+
+    controller.setVisible(false);
+    firstWindow.closedListener?.();
+    controller.recover();
+    expect(electronMocks.BrowserWindow).toHaveBeenCalledOnce();
+
+    controller.setVisible(true);
+    expect(electronMocks.BrowserWindow).toHaveBeenCalledOnce();
+    controller.setQualifyingSessionCount(1);
+    expect(electronMocks.BrowserWindow).toHaveBeenCalledTimes(2);
+    controller.destroy();
+  });
+
+  it('recreates a destroyed window from display, resume, or explicit recovery exactly once', async () => {
+    const firstWindow = createOverlayWindowMock();
+    const secondWindow = createOverlayWindowMock();
+    electronMocks.BrowserWindow.mockImplementationOnce(
+      class BrowserWindowMock {
+        constructor() {
+          return firstWindow;
+        }
+      } as unknown as typeof electronMocks.BrowserWindow,
+    ).mockImplementationOnce(
+      class BrowserWindowMock {
+        constructor() {
+          return secondWindow;
+        }
+      } as unknown as typeof electronMocks.BrowserWindow,
+    );
+    const { createOverlayController } = await import('../../src/main/overlay-controller');
+    const controller = createOverlayController();
+    controller.setQualifyingSessionCount(1);
+    firstWindow.markDestroyed();
+
+    const onDisplayAdded = electronMocks.screen.on.mock.calls.find(
+      ([event]) => event === 'display-added',
+    )?.[1] as (() => void) | undefined;
+    const onResume = electronMocks.powerMonitor.on.mock.calls.find(
+      ([event]) => event === 'resume',
+    )?.[1] as (() => void) | undefined;
+    onDisplayAdded?.();
+    onResume?.();
+    controller.recover();
+
+    expect(electronMocks.BrowserWindow).toHaveBeenCalledTimes(2);
+    expect(controller.getWindow()).toBe(secondWindow);
+    controller.destroy();
+  });
+
+  it('clears hit regions and remains inert across repeated destruction', async () => {
+    const overlayWindow = createOverlayWindowMock();
+    mockOverlayWindow(overlayWindow);
+    const { createOverlayController } = await import('../../src/main/overlay-controller');
+    const controller = createOverlayController();
+    overlayWindow.readyListener?.();
+    controller.setQualifyingSessionCount(1);
+    expect(controller.setHitRegions([{ x: 10, y: 20, width: 24, height: 24 }])).toBe(true);
+
+    controller.destroy();
+    controller.destroy();
+    overlayWindow.closedListener?.();
+    overlayWindow.loadingListener?.();
+    controller.recover();
+    controller.setRendererReady();
+    controller.setVisible(true);
+    controller.setQualifyingSessionCount(1);
+
+    expect(controller.setHitRegions([{ x: 10, y: 20, width: 24, height: 24 }])).toBe(false);
+    expect(electronMocks.BrowserWindow).toHaveBeenCalledOnce();
+    expect(electronMocks.screen.off).toHaveBeenCalledWith(
+      'display-metrics-changed',
+      expect.any(Function),
+    );
+    expect(electronMocks.powerMonitor.off).toHaveBeenCalledWith('resume', expect.any(Function));
   });
 });
