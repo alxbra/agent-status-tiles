@@ -65,7 +65,8 @@ function statusFor(record: SessionRecord): SessionSnapshot['status'] {
   return 'idle';
 }
 
-function refreshStatus(record: SessionRecord): SessionRecord {
+/** Recompute the public status after restoring internal session fields. */
+export function refreshSessionRecord(record: SessionRecord): SessionRecord {
   const status = statusFor(record);
   return record.status === status ? record : { ...record, status };
 }
@@ -79,7 +80,7 @@ function replaceRecord(
   const order = promote ? promoteSession(state.order, sessionId) : state.order;
   return {
     ...state,
-    sessions: { ...state.sessions, [sessionId]: refreshStatus(record) },
+    sessions: { ...state.sessions, [sessionId]: refreshSessionRecord(record) },
     ...(order === state.order ? {} : { order }),
   };
 }
