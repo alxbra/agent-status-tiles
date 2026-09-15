@@ -1,7 +1,7 @@
 # Agent Status Tiles — MVP Implementation Plan
 
 **Document:** `MVP_PLAN.md` in the project root.  
-**Document status:** The implementation batch through PR #12 is merged into `staging` (PR #12 merge `0d4b5ebfaebdca68bb57f27188fb41aec5c27d21`; final feature head `2f6d7d89d67d86cb60157ca042c5e1c5fcf56b09`). Standalone components and review gates through PR #12 are recorded below. Native integration, live provider wiring, cross-file baseline coordination, and later release gates remain pending; this document does not claim MVP completion.
+**Document status:** The native overlay implementation batch through PR #18 is merged into `staging` (PR #18 merge `9dc43416eb6e060ded084977717ae35a7bb2ca35`). The renderer bridge, portal hit-region synchronization, selected-display preferences, deliberate keyboard entry, and lifecycle recovery are implemented and reviewed. Physical multi-display, Spaces/full-screen, real sleep/wake, and arbitrary underlying-application click-through acceptance remain pending, as do live provider wiring, cross-file baseline coordination, signing, and release gates; this document does not claim MVP completion.
 **Repository:** [alxbra/agent-status-tiles](https://github.com/alxbra/agent-status-tiles)
 
 ## 1. Product and release target
@@ -30,22 +30,24 @@ The main interface is a vertical row of tiny colored rounded-square tiles on the
 - Deliver signed, notarized macOS installers ready for publication.
 - Integrate completed work continuously through small PRs targeting `staging`.
 
-### Current runtime readiness after PR #12
+### Current runtime readiness after PR #18
 
-The merged work is still a set of independently tested slices, not an
-end-to-end provider-connected companion. The main entry currently provides the
-Electron shell, menu bar, settings-window lifecycle, and version/settings IPC;
-the overlay controller is created but receives no session snapshots. The
-renderer `App.tsx` is a placeholder Settings page, and `overlay-main.ts` loads
-CSS without mounting React or `StatusTiles`. Because the qualifying-session
-count is unwired, production overlay state remains hidden. The session reducer,
-session/cursor persistence, Codex catalog and rollout readers, hook-journal
-reader, native helper, navigation primitive, Settings presentation, and tile
-renderer are present and tested independently. Persistence covers session state
-and cursors, not selected-display preferences. The next bounded handoff is
-[macOS overlay lifecycle and native renderer bridge](NEXT_EPIC_PROMPT.md); live
-provider replay, cross-file baseline coordination, and native acceptance remain
-unchecked.
+The merged application now mounts `StatusTiles` in the sandboxed native overlay
+through a typed, sender/frame-validated preload and IPC bridge. It projects only
+bounded session metadata, keeps zero-session production state hidden,
+synchronizes tile and portal hit regions, persists the selected display and
+reduced-motion preference, supports deliberate menu-bar keyboard entry, and
+recovers from window closure, renderer crash/load failure, display events,
+resume, and activation without duplicate controllers or stale listeners, and
+tears down cleanly on shutdown. Sanitized test-only snapshots verify native
+0/1/12/30-session behavior; no fake production activity is shipped.
+
+The application is still not an end-to-end provider-connected companion. The
+session reducer, persistence, Codex readers, hook-journal reader, helper, and
+navigation primitive remain independently tested rather than coordinated into
+live runtime state. The next bounded handoff is [live local provider
+coordination](NEXT_EPIC_PROMPT.md). Physical overlay acceptance and all live
+provider, baseline, signing, and release gates remain unchecked.
 
 ### Deferred
 
@@ -433,16 +435,16 @@ The synthetic/source-derived Codex rollout fixtures under `tests/fixtures/codex/
 
 ### Epic 1 — macOS overlay and menu-bar lifecycle
 
-**PRs:** `feat/desktop-shell`, `feat/display-placement`.
+**PRs:** #4, #14–#18.
 
 - [x] Create the frameless transparent strip window and separate settings window.
 - [x] Add menu-bar actions: Show/Hide, Settings, Quit.
 - [x] Keep the utility out of the macOS Dock during normal operation.
 - [x] Implement primary-display default placement (verified by merged PR #4).
-- [ ] Persist the selected display and restore it after reconnect.
-- [ ] Implement Spaces/full-screen visibility without taking focus on hover.
-- [ ] Implement accurate mouse passthrough.
-- [ ] Handle display changes, sleep/wake, and application shutdown.
+- [x] Persist the selected display, fall back to primary while absent, and restore the preference when it reconnects (PR #16; simulated topology and native restart verified, physical unplug/reconnect remains below).
+- [ ] Implement Spaces/full-screen visibility without taking focus on hover. The all-workspaces/full-screen native flags and non-focusable hover path are automated; actual Space/full-screen transitions remain physically unverified.
+- [ ] Implement accurate mouse passthrough. Bounded native tile/portal regions and transparent-region ignore mode are automated; a real click reaching an arbitrary application behind the overlay remains physically unverified.
+- [ ] Handle display changes, sleep/wake, and application shutdown. Display/resume recovery, close/crash/load-failure replacement, activation, and shutdown cleanup are automated; physical sleep/wake and display reconfiguration remain unverified.
 - [ ] **E2E and corrections:** test real clicks into an application behind the overlay, hover without focus theft, full-screen apps, two displays, unplug/reconnect, and wake recovery; fix, rerun, harden, and merge.
 
 ### Epic 2 — Rounded-square status tiles and Dock magnification
@@ -456,20 +458,23 @@ renderer, magnification, overflow and keyboard behavior, stock
 tooltip/context-menu composition, and browser visual fixtures. Its 94 total
 unit tests, 3 Electron smoke tests, and 22 browser fixture tests pass in [CI run
 34987937805](https://github.com/alxbra/agent-status-tiles/actions/runs/34987937805).
-Renderer/browser review and merge are complete. Native overlay integration,
-portal bounds, passthrough hit testing, underlying-app click-through,
-Spaces/full-screen, and multi-display acceptance remain pending; those native
-acceptance tasks below remain unchecked.
+Renderer/browser review and merge are complete. PRs #14 and #15 mount the same
+renderer in the sandboxed native overlay and synchronize bounded tile, tooltip,
+and context-menu hit regions. Native 0/1/12/30-session, keyboard, lifecycle,
+state-restoration, and portal tests are automated. Underlying-app click-through,
+native visual baseline comparison, Spaces/full-screen, and physical
+multi-display acceptance remain pending; those acceptance tasks below stay
+unchecked.
 Formal root QA1 found and corrected the height-observer remount lifecycle,
 zero/non-finite wheel delta handling, and redundant reverse packing pass. Formal
 root QA2 found and removed the unused `TileGeometry.expanded` field; it found no
 further issues. The final merged validation passed 94 unit tests and 25 E2E
 tests (3 Electron smoke tests and 22 browser fixture tests), with [CI run
 34987937805](https://github.com/alxbra/agent-status-tiles/actions/runs/34987937805).
-The merged renderer work remains scoped to browser/renderer behavior; native
-overlay integration and interaction acceptance remain unchecked.
+The merged renderer is integrated with the native overlay; physical desktop
+interaction and visual-baseline acceptance remain unchecked.
 
-- [x] Implement the exact palette and rounded-square geometry at collapsed, intermediate, and expanded sizes (renderer/browser verified; native integration remains pending).
+- [x] Implement the exact palette and rounded-square geometry at collapsed, intermediate, and expanded sizes (renderer/browser verified and mounted natively in PR #14; native visual baseline comparison remains pending).
 - [x] Render provider and state icons only at expanded sizes (renderer/browser verified).
 - [x] Implement stable distance-based magnification (renderer/browser verified).
 - [x] Implement one-line tooltips, keyboard selection, and reduced motion (renderer/browser verified).
@@ -477,7 +482,7 @@ overlay integration and interaction acceptance remain unchecked.
 - [x] Freeze list geometry during interaction (renderer/browser verified).
 - [x] Generate browser visual fixtures/screenshots for all states, light/dark backgrounds, and 1x/2x display scales (visual evidence only; not native baseline comparison).
 - [ ] Capture and compare native visual baselines for the integrated overlay.
-- [ ] Wire the renderer into the native overlay and synchronize portal bounds and hit regions.
+- [x] Wire the renderer into the native overlay and synchronize bounded tile, tooltip, and context-menu hit regions (PRs #14–#15).
 - [ ] Verify native passthrough and underlying-app click-through for the integrated overlay.
 - [ ] **E2E and corrections:** exercise 1, 12, and 30 sessions; sweep the pointer across neighbors; verify no flicker, clipping, accidental activation, unexpected labels, or blocked desktop clicks; fix, rerun, harden, and merge.
 
@@ -563,19 +568,19 @@ a signing/notarization claim.
 **PRs:** `feat/integration-settings`, `feat/desktop-preferences`.
 
 Implementation progress (not an acceptance checkoff): PR #10 merged the
-controlled, presentational Settings view using stock shadcn controls. Its
-renderer-only callbacks and browser fixture do not perform provider startup,
-IPC, filesystem, persistence, or native settings changes; those integration
-gates remain pending.
+controlled Settings view using stock shadcn controls. PR #16 connected the
+selected-display, launch-at-login, and reduced-motion controls to validated IPC
+and native persistence/effects. Provider startup, hook management, advanced
+paths, and diagnostics remain pending.
 
-- [x] Implement the presentational settings mockup using stock shadcn controls (PR #10 renderer/browser verified; native integration remains pending).
+- [x] Implement the Settings view using stock shadcn controls (PR #10 renderer/browser verified; desktop controls integrated in PR #16).
 - [ ] Add provider connect, disconnect, repair, and hook-removal flows.
-- [x] Add controlled display selection, launch-at-login, and reduced-motion controls (PR #10 renderer/browser verified; persistence and native effects remain pending).
+- [x] Add functional display selection, launch-at-login, and reduced-motion controls with validated IPC and native persistence/effects (PR #16).
 - [ ] Add advanced path overrides and reduced diagnostics export.
 - [x] Show one concise actionable error sentence for controlled failures (PR #10 renderer/browser verified).
 - [ ] Add required setup instructions for missing or unavailable integrations.
 - [x] Remove redundant labels, descriptions, helper text, and repeated status from the presentational view (PR #10 renderer/browser verified).
-- [ ] Persist changes immediately.
+- [ ] Persist changes immediately. Desktop display/reduced-motion preferences and launch-at-login effects are implemented; future provider/setup settings remain pending.
 - [ ] **E2E and corrections:** complete fresh setup with both harnesses, test missing installations, permission/config errors, settings persistence, and hook removal; visually compare against the strict UI contract; fix, rerun, harden, and merge.
 
 ### Epic 8 — Reliability, privacy, and performance
@@ -631,6 +636,12 @@ Maintain this table in the plan:
 | [#10 `feat: add presentational settings view`](https://github.com/alxbra/agent-status-tiles/pull/10) | Renderer-only stock-shadcn Settings view, controlled provider/display/preferences presentation, and browser fixture | 1 completed CLI pass; 0 findings | 2 | Final local validation at `d07b3a3`: 104 unit tests, 3 Electron smoke tests, 29 browser fixture tests, format/lint/type/build checks; [CI run 34992343659](https://github.com/alxbra/agent-status-tiles/actions/runs/34992343659); [package run 34992343684](https://github.com/alxbra/agent-status-tiles/actions/runs/34992343684); [audit comment](https://github.com/alxbra/agent-status-tiles/pull/10#issuecomment-5683612055) | `07b399fb5d6b8b8bac696f599860a02797bd464b` |
 | [#11 `feat: add application navigation`](https://github.com/alxbra/agent-status-tiles/pull/11) | Main-only macOS navigation primitive for validated Codex, Claude Desktop, qualified terminal, and unknown-owner selection results | 1 completed CLI pass; 0 findings (2 rate-limited attempts were not passes) | 2 | 121 unit tests, 32 E2E tests (3 Electron and 29 browser), format/lint/type/build checks; standalone process, target-validation, single-flight, and dispatch tests; live activation and native acceptance pending; [CI run 34997982330](https://github.com/alxbra/agent-status-tiles/actions/runs/34997982330); [audit comment](https://github.com/alxbra/agent-status-tiles/pull/11#issuecomment-5684446594) | `8f368b6872317755039a4599a94a898048db1ac1` |
 | [#12 `feat/hook-journal-reader`](https://github.com/alxbra/agent-status-tiles/pull/12) | Provider-neutral bounded hook-journal replay reader with privacy projection, inode-aware rotation, cursor continuation, and fixed diagnostics | 1 completed CLI pass; 2 findings (1 documentation fixed, 1 Windows-test-skip request rejected for the macOS-first target) | 2 | Final combined validation at `6482549`: 139 unit tests, 32 E2E tests (3 Electron and 29 browser), format/lint/type/build checks; final feature head `2f6d7d8`; [CI run 34998566345](https://github.com/alxbra/agent-status-tiles/actions/runs/34998566345); [audit comment](https://github.com/alxbra/agent-status-tiles/pull/12#issuecomment-5684450834) | `0d4b5ebfaebdca68bb57f27188fb41aec5c27d21` |
+| [#13 `docs: update MVP plan and next epic handoff`](https://github.com/alxbra/agent-status-tiles/pull/13) | Documentation-only implementation record and native-overlay handoff | 1 completed CLI pass; 0 findings | 2 | 139 unit tests, 32 E2E tests, format/lint/type/build checks; [CI run 35000784355](https://github.com/alxbra/agent-status-tiles/actions/runs/35000784355); [audit comment](https://github.com/alxbra/agent-status-tiles/pull/13#issuecomment-5684843653) | `1c99aee8bef78db088a9c128d643977407218071` |
+| [#14 `feat: mount native overlay renderer`](https://github.com/alxbra/agent-status-tiles/pull/14) | Typed native overlay bridge, sanitized state projection, renderer mount, and empty-state hiding | 1 completed CLI pass; 1 valid finding fixed | 2 | 147 unit tests, 36 E2E tests, format/lint/type/build checks; [CI run 35018045475](https://github.com/alxbra/agent-status-tiles/actions/runs/35018045475); [audit comment](https://github.com/alxbra/agent-status-tiles/pull/14#issuecomment-5687441317) | `177935dcad9f899cb30afa012f474b0e73392fa7` |
+| [#15 `feat: synchronize overlay portal hit regions`](https://github.com/alxbra/agent-status-tiles/pull/15) | Viewport-aware tile, tooltip, and context-menu hit regions with bounded native passthrough control | 1 completed CLI pass; 2 valid findings fixed | 2 | 154 unit tests, 40 E2E tests (10 Electron and 30 browser), format/lint/type/build checks; [CI run 35021089851](https://github.com/alxbra/agent-status-tiles/actions/runs/35021089851); [audit comment](https://github.com/alxbra/agent-status-tiles/pull/15#issuecomment-5687812504) | `d063d5aa8e942f3a9b8d94296a32d4abe0c67f9b` |
+| [#16 `feat: persist selected display preferences`](https://github.com/alxbra/agent-status-tiles/pull/16) | Selected-display/reduced-motion/login settings integration, persistence, fallback, and reconnect behavior | 1 completed CLI pass; 1 valid finding fixed | 2 | 170 unit tests, 41 E2E tests, format/lint/type/build checks; [CI run 35025029306](https://github.com/alxbra/agent-status-tiles/actions/runs/35025029306); [audit comment](https://github.com/alxbra/agent-status-tiles/pull/16#issuecomment-5688279296) | `11677a5f4eafd9413ed092b64503521751b2327c` |
+| [#17 `feat: add deliberate overlay keyboard mode`](https://github.com/alxbra/agent-status-tiles/pull/17) | Explicit menu-bar keyboard entry, durable renderer handshake, arrow navigation, and Escape teardown | 1 completed CLI pass; 0 findings | 2 | 181 unit tests, 43 E2E tests, format/lint/type/build checks; [CI run 35027865925](https://github.com/alxbra/agent-status-tiles/actions/runs/35027865925); [audit comment](https://github.com/alxbra/agent-status-tiles/pull/17#issuecomment-5688603468) | `2a0c3f6d02069d6a963461aedb184d91ae13e42c` |
+| [#18 `feat: recover native overlay lifecycle`](https://github.com/alxbra/agent-status-tiles/pull/18) | Display/resume/activation recovery, close/crash/load-failure replacement, bounded renderer handshakes, and listener cleanup | 1 completed CLI pass; 0 findings | 2 | 191 unit tests, 46 E2E tests, format/lint/type/build checks; [CI run 35031233902](https://github.com/alxbra/agent-status-tiles/actions/runs/35031233902); [audit comment](https://github.com/alxbra/agent-status-tiles/pull/18#issuecomment-5688980090) | `9dc43416eb6e060ded084977717ae35a7bb2ca35` |
 
 Foundation review corrections included strict IPC sender/frame validation, same-host renderer navigation checks, supported Node engine ranges, formatter coverage, and recovery after a failed settings-window load. No signing or notarization was claimed; Apple Developer credentials remain a release dependency.
 
@@ -638,7 +649,7 @@ Hook helper PR #2 merged into `staging` at `b536b6c4a6246e6e31650304ea10c94b1f87
 
 Session-state PR #3 merged into `staging` at `33657030eff342466aa9bb8f4ffc001bce8212d4`. It completed one CodeRabbit CLI pass with zero findings and two root QA passes, including fixes for out-of-order waits, health overlays, safe identifier lookup, bounded UTF-8 fields, redundant state, and active child/archive filter coverage. The pure reducer, identity, ordering/filter, lifecycle, provider-health, and race-safe acknowledgement tasks above are verified; standalone persistence merged in PR #5, while live-app persistence replay and the cross-file baseline gate remain pending.
 
-Desktop-shell PR #4 merged into `staging` at `a454bf22a8c9521eeefb9db87845fd438d44e7c9`. It completed one CodeRabbit CLI pass with one invalid fake-session finding rejected and two root QA passes. The frameless strip/settings windows, menu-bar actions, Dock hiding, and default placement scaffolding are verified. Selected-display persistence, native click-through, Spaces/full-screen, multi-display, sleep/wake, and real desktop interaction acceptance remain pending.
+Desktop-shell PR #4 merged into `staging` at `a454bf22a8c9521eeefb9db87845fd438d44e7c9`. It completed one CodeRabbit CLI pass with one invalid fake-session finding rejected and two root QA passes. The frameless strip/settings windows, menu-bar actions, Dock hiding, and default placement scaffolding are verified. PRs #14–#18 subsequently added the renderer bridge, display persistence, hit regions, keyboard entry, and recovery. Physical click-through, Spaces/full-screen, multi-display, sleep/wake, and real desktop interaction acceptance remain pending.
 
 Persistence PR #5 merged into `staging` at `5deb6aeb1f6dee9a5d0ab44e038102b3efb6c6fd`. It completed one CodeRabbit CLI pass with zero findings and two root QA passes, including canonical status refresh and queued-failure/short-read regressions. The persistence implementation is verified by 33 unit tests, 3 Electron E2E tests, format/lint/type/build checks, and [CI run 34978274333](https://github.com/alxbra/agent-status-tiles/actions/runs/34978274333). Live-app persistence replay and the cross-file baseline gate remain pending.
 
@@ -651,8 +662,9 @@ pass with one valid finding fixed and two root QA passes. The renderer/browser
 scope is verified by 94 unit tests, 3 Electron smoke tests, 22 browser fixture
 tests, and [CI run 34987937805](https://github.com/alxbra/agent-status-tiles/actions/runs/34987937805);
 see the [audit comment](https://github.com/alxbra/agent-status-tiles/pull/8#issuecomment-5682973864).
-Native overlay integration, portal and passthrough behavior, and multi-display
-acceptance remain pending.
+Native overlay integration and bounded portal/passthrough behavior subsequently
+merged in PRs #14–#15. Physical underlying-app click-through, visual-baseline,
+and multi-display acceptance remain pending.
 
 Helper packaging PR #9 merged into `staging` at
 `c9905833628a533f7aadaf93ff82dfd0d8c9c94f`. It completed one CodeRabbit CLI
@@ -709,17 +721,37 @@ is green. Live journal coordination, lifecycle reduction, first-run baseline,
 provider wiring, and surface acceptance remain pending; see the [PR12 final
 audit record](https://github.com/alxbra/agent-status-tiles/pull/12#issuecomment-5684450834).
 
-Work boundary: the original implementation batch stopped after PR #12. This
-plan update and the linked next-epic handoff are documentation only; they do not
-resume implementation, start the next implementation epic, claim MVP completion,
-promote to `main`, or start release work. The remaining integration, acceptance,
-and release gates stay pending.
+Native overlay batch PRs #14–#18 merged into `staging` between
+`177935dcad9f899cb30afa012f474b0e73392fa7` and
+`9dc43416eb6e060ded084977717ae35a7bb2ca35`. Each completed exactly one
+CodeRabbit CLI pass and two root QA/refactor passes. Corrections covered bridge
+startup races, canonical/bounded metadata, portal publication races, rejected
+hit-region recovery, maximum-length tooltips, display-label byte bounds,
+Settings load and login-item state, durable keyboard readiness and teardown,
+window/renderer recovery generations, renderer crashes and failed loads, and
+bounded state/readiness handshakes. Final PR #18 validation passed 191 unit
+tests and 46 E2E tests, including 15 native Electron lifecycle/bridge tests.
+
+Automated native evidence covers empty-state hiding; sanitized 1/12/30-session
+projection; non-focusable visibility; keyboard entry/Escape; bounded tile and
+portal regions; selected-display preference restart; close, crash, and
+main-frame load-failure replacement; state restoration; resume repositioning;
+activation; and clean shutdown paths. It does not prove clicks reaching an
+arbitrary third-party application, focus restoration to that application,
+physical dual-display unplug/reconnect or scaling, actual Spaces/full-screen
+transitions, or real sleep/wake. Those physical dependencies remain unchecked.
+
+Work boundary: the native overlay implementation epic is complete at its
+automatable boundary. This plan update and linked handoff do not start live
+provider coordination, promote to `main`, or start release work. Remaining
+physical overlay acceptance, live integration, baseline, signing, and release
+gates stay pending.
 
 Record corrections made after review and the commit used for final validation.
 
 ### Historical merged implementation batch
 
-- [x] PRs #1–#12 have verified merge SHAs, recorded CodeRabbit outcomes, two root QA passes, and final validation evidence in the per-PR record above. This historical implementation/review record is not the final native/live/release acceptance.
+- [x] PRs #1–#18 have verified merge SHAs, recorded CodeRabbit outcomes, two root QA passes, and final validation evidence in the per-PR record above. This implementation/review record is not the final physical/live/release acceptance.
 
 ### Final acceptance checklist
 
@@ -737,7 +769,7 @@ Record corrections made after review and the commit used for final validation.
 - [ ] Integration failures remain distinguishable from task failures.
 - [ ] Hook setup preserves other tools and uninstall removes only owned entries.
 - [ ] Privacy and performance checks pass.
-- [ ] Every implementation PR has one CodeRabbit pass, two QA passes, final E2E evidence, and a verified merge into `staging`.
+- [x] Every implementation PR through #18 has one CodeRabbit pass, two QA passes, final E2E evidence, and a verified merge into `staging`.
 - [ ] Signed and notarized macOS artifacts pass clean-install tests.
 - [ ] No unresolved release-blocking findings remain.
 - [ ] Draft release artifacts and documentation are ready to publish.

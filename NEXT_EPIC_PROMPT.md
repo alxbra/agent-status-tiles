@@ -1,125 +1,91 @@
-# Next epic: macOS overlay lifecycle and native renderer bridge
+# Next implementation boundary: live local provider coordination
 
-Paste this prompt into the next implementation task:
+Paste this prompt into a future implementation task. The native overlay epic is
+complete at its automatable boundary; this handoff does not start the work.
 
-You are the next root agent coordinating the earliest unfinished part of Epic 1
-in this repository. Start from the latest `origin/staging` and create a fresh
-bounded feature worktree. Read [AGENTS.md](AGENTS.md), [MVP_PLAN.md](MVP_PLAN.md),
-and this [handoff prompt](NEXT_EPIC_PROMPT.md) completely in that new
-staging-based worktree before delegating. The root checkout/main may be a stale
-bootstrap checkout; do not use it as the plan or source baseline. You orchestrate
-architecture, review, validation, integration, and merge only. Delegate all
-implementation edits to Luna xhigh subagents; do not create descendants from
-those subagents, edit another worktree, or work directly on `main`/`staging`.
-Repository: [alxbra/agent-status-tiles](https://github.com/alxbra/agent-status-tiles).
-The scope is Epic 1 macOS overlay/menu-bar lifecycle with only the minimum Epic
-2 renderer/native bridge dependency needed to mount the existing tile renderer.
+Start from the latest `origin/staging` in a fresh feature worktree. Read
+`AGENTS.md`, `MVP_PLAN.md`, and this file completely before planning. Do not use
+the stale `main` checkout as the implementation baseline.
 
-## Baseline and current boundary
+## Verified baseline
 
-PRs #1–#12 are merged into `staging`; PR #12 merged at
-`0d4b5ebfaebdca68bb57f27188fb41aec5c27d21`. Its final feature head is
-`2f6d7d89d67d86cb60157ca042c5e1c5fcf56b09`; synchronized validation commit
-`6482549` passed 139 unit tests, 32 E2E tests (3 Electron and 29 browser), and
-format/lint/type/build checks; CI `34998566345` is green. Standalone state,
-persistence, Codex readers, the provider-neutral hook-journal reader, helper,
-navigation, settings presentation, and tile renderer are reviewed/merged, but
-they are not a claim of live four-surface integration.
+PRs #14–#18 completed the native overlay batch. PR #18 merged into `staging` at
+`9dc43416eb6e060ded084977717ae35a7bb2ca35`. Its final validation passed 191
+unit tests and 46 E2E tests, including 15 native Electron tests; CI
+`35031233902` is green. Every implementation PR through #18 has one completed
+CodeRabbit CLI pass, two root QA/refactor passes, final E2E evidence, and a
+verified squash merge.
 
-Verify this runtime snapshot in source before designing the bridge:
+The runtime now has:
 
-- [`src/main/index.ts`](src/main/index.ts)
-  currently owns the single-instance/menu-bar/settings shell, creates the
-  overlay controller, and registers only version/settings IPC handlers.
-- [`src/renderer/App.tsx`](src/renderer/App.tsx)
-  is a placeholder Settings page, not the full settings presentation.
-- [`src/renderer/overlay-main.ts`](src/renderer/overlay-main.ts)
-  imports overlay CSS only; it does not mount React or `StatusTiles`.
-- [`src/main/overlay-controller.ts`](src/main/overlay-controller.ts)
-  already provides the transparent, non-focusable window, primary-display
-  placement, all-workspaces behavior, visibility, mouse-ignore mode, and bounded
-  hit-region primitives, but it receives no session snapshots.
-- [`src/renderer/tiles/StatusTiles.tsx`](src/renderer/tiles/StatusTiles.tsx)
-  and its geometry/interaction/theme modules are existing renderer contracts.
-- [`src/shared/ipc.ts`](src/shared/ipc.ts)
-  and [`src/preload/index.ts`](src/preload/index.ts)
-  currently expose no overlay/session bridge. Add only the narrow, validated
-  channels required by this epic.
-- [`src/main/sessions/persistence.ts`](src/main/sessions/persistence.ts)
-  persists session state and cursors, not desktop display preferences. Do not
-  claim selected-display persistence already exists; define and validate the
-  smallest real preference contract needed here.
+- a sandboxed, typed, sender/frame-validated overlay bridge;
+- the existing `StatusTiles` renderer mounted natively with zero-session hiding;
+- bounded tile, tooltip, and context-menu hit regions;
+- persisted selected-display and reduced-motion preferences plus launch-at-login;
+- deliberate menu-bar keyboard entry and Escape teardown;
+- close, renderer-crash/load-failure, display, resume, and activation recovery
+  with bounded renderer handshakes plus clean shutdown teardown;
+- sanitized test-only native 0/1/12/30-session coverage.
 
-Production with zero qualifying sessions must remain hidden. Use sanitized,
-test-only synthetic `SessionSnapshot` injection to exercise the bridge and
-renderer; do not wire providers, hook installation, catalog qualification,
-reader replay, or live status acceptance in this epic.
+This is not yet a live agent monitor. Production has no provider coordinator,
+so it correctly remains hidden with no qualifying sessions. The reducer,
+session persistence, Codex catalog/rollout readers, Claude hook-journal reader,
+native helper, and navigation primitive are merged but still independent.
 
-## Required scope
+## Earliest unfinished scope
 
-Implement the smallest native overlay lifecycle and renderer bridge that can be
-verified on macOS:
+Design the smallest provider-neutral runtime coordinator that can replay
+allowlisted local observations through the existing reducer and persistence
+into the overlay without weakening privacy or lifecycle boundaries. Split it
+into small PRs. Start with one provider/surface path only after defining the
+cross-file first-run baseline that prevents historical completions from
+appearing unread.
 
-1. Mount the existing `StatusTiles` through a typed, sender/frame-validated
-   preload/IPC boundary. Project only the existing allowlisted session snapshot
-   fields and bounded display/control data. Keep empty production state hidden.
-2. Preserve the plan’s exact tile geometry, palette, spacing, typography, stock
-   shadcn controls, and interaction conventions. Do not redesign the UI or add
-   placeholder callbacks that pretend provider, navigation, acknowledgement,
-   setup, or release operations work.
-3. Make selected-display control functional through the existing
-   [`SettingsView`](src/renderer/settings/SettingsView.tsx) only as needed for
-   this epic, with a narrow validated desktop-preference interface chosen and
-   documented by the root. Restore by stable display identity; if that display
-   is disconnected or its identity is unavailable, use the primary display as a
-   deterministic fallback and recover the selection when it returns. Existing
-   persistence does not cover desktop preferences. Do not add no-op provider
-   callbacks or broaden session persistence into an opaque settings store.
-4. Synchronize overlay bounds and renderer hit regions, including portal/menu
-   content used by existing tile interactions. Validate coordinates, counts,
-   dimensions, and IPC payloads before applying them. Keep the strip transparent,
-   non-focusable, and mouse-passthrough outside validated hit regions.
-5. Preserve hover without focus theft (`showInactive`, focusability, and
-   `setIgnoreMouseEvents` behavior), while providing a deliberate keyboard entry
-   path from the menu-bar action. Keyboard mode must have explicit focus/exit
-   behavior and must not make ordinary hover focus the window.
-6. Handle display-added/removed/metrics-changed, sleep/wake, app activation,
-   window close, and shutdown/destroy without stale listeners, orphan windows,
-   or duplicate controllers. Keep Spaces/full-screen visibility consistent with
-   the existing macOS window contract.
-7. Reuse existing reduced-motion and accessibility behavior from `StatusTiles`;
-   expose only the minimal desktop control needed for this epic. Keep provider
-   connect/disconnect, advanced settings, hook setup/removal, navigation
-   acknowledgement, and live monitoring outside scope.
+The coordinator must:
 
-## Verification contract
+1. keep prompts, transcripts, tool bodies, credentials, and arbitrary paths out
+   of state, IPC, logs, diagnostics, and fixtures;
+2. preserve provider health separately from task failure;
+3. reuse canonical provider/native IDs and existing causal ordering rules;
+4. persist cursors and session state atomically and recover safely after restart;
+5. establish the first-run cross-file baseline before emitting unread
+   completion state;
+6. publish only the existing bounded `OverlayState` projection;
+7. stop readers and remove listeners cleanly on shutdown, sleep, configuration
+   changes, and provider loss;
+8. use sanitized fixtures for fault injection, then add controlled live-format
+   evidence without storing private content.
 
-Write focused unit tests for IPC schemas, sender/frame validation, display
-selection/fallback, bounds and portal hit regions, empty-state hiding, ordering,
-keyboard entry/exit, reduced motion, cleanup, and event races. Add native Electron
-tests—not only browser fixtures—for:
+Do not combine Codex and Claude live wiring into one large PR. Do not implement
+new overlay visuals, provider setup UI, hook installation/removal, real
+navigation acknowledgement, signing, notarization, release publication, or
+promotion to `main` unless a later request explicitly authorizes that scope.
 
-- an underlying app receiving clicks through transparent regions and no focus
-  theft during hover;
-- 1, 12, and 30 sanitized synthetic sessions, overflow, and zero sessions hidden;
-- display scaling, negative coordinates, selected-display reconnect, unplug,
-  re-addition, and metrics changes;
-- Spaces/full-screen visibility and sleep/wake recovery;
-- shutdown, repeated show/hide, window destruction, and listener cleanup;
-- keyboard entry, Escape/exit, accessibility semantics, and reduced motion.
+## Remaining overlay acceptance dependency
 
-Browser fixtures may cover renderer geometry and visual behavior, but they are not
-native proof. Never include prompts, transcripts, tool bodies, credentials, raw
-provider paths, or arbitrary payloads in fixtures, logs, diagnostics, or IPC.
+Do not retroactively check off the physical native gates without evidence. A
+real macOS acceptance pass still must verify:
 
-Split the work into small PRs from the latest `staging`, with each PR independently
-formatted, linted, typechecked, unit-tested, built, and covered by the relevant
-Electron tests. Root owns exactly one completed `coderabbit review --agent
---base origin/staging --committed` per PR, then two formal QA passes, final E2E,
-latest green CI, safe squash/merge, and plan evidence. Leave live provider wiring,
-cross-file baseline acceptance, real harness lifecycle tests, signing,
-notarization, main promotion, release, and any blocked acceptance checkbox
-unchecked until their evidence exists. Creating this handoff did not start
-implementation. When the user supplies this prompt for execution, complete only
-this overlay epic and stop before provider/live-harness work, main promotion, or
-release work.
+- clicks reaching an arbitrary application behind transparent overlay regions;
+- focus remaining with and returning to that application;
+- two displays, scaling, negative coordinates, unplug/reconnect, and work-area
+  changes;
+- actual Spaces and full-screen transitions;
+- real sleep/wake recovery;
+- native visual baseline comparison.
+
+Record automated and manual evidence separately. Browser screenshots and mocked
+Electron APIs do not satisfy these physical checks.
+
+## Delivery workflow
+
+For each bounded PR targeting `staging`, run formatting, lint, types, unit
+tests, build, and relevant native/browser E2E. Run exactly one completed
+`coderabbit review --agent --base origin/staging --committed`, triage every
+finding, perform two separate root QA/refactor passes with fixes after each,
+process review comments, rerun final E2E, wait for green CI, squash-merge safely,
+delete only the feature branch, and update `MVP_PLAN.md` with exact evidence.
+
+Stop after the explicitly requested provider slice. Leave every unverified
+live-surface, physical-overlay, signing, release, and publication checkbox
+unchecked.
