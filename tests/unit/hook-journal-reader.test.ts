@@ -580,6 +580,39 @@ describe('HookJournalReader', () => {
     ).toBe(8192);
     expect(recordResume.nextTargetIndex).toBeUndefined();
 
+    const recordTailRoot = await isolatedJournalRoot();
+    const recordTailTarget = target('record-limit-tail');
+    const archiveRecords = record({}, 'record-limit-tail').repeat(1365);
+    const activeTail = [
+      record({ turn_id: 'active-1' }, 'record-limit-tail'),
+      record({ turn_id: 'active-2' }, 'record-limit-tail'),
+      record({ turn_id: 'active-3' }, 'record-limit-tail'),
+    ].join('');
+    await Promise.all([
+      writeFile(archivePath(recordTailRoot, recordTailTarget, 3), archiveRecords),
+      writeFile(archivePath(recordTailRoot, recordTailTarget, 2), archiveRecords),
+      writeFile(archivePath(recordTailRoot, recordTailTarget, 1), archiveRecords),
+      writeFile(activePath(recordTailRoot, recordTailTarget), activeTail),
+    ]);
+    const recordTailReader = new HookJournalReader({ appDataPath: recordTailRoot });
+    const recordTailFirst = await recordTailReader.read([recordTailTarget]);
+    expect(recordTailFirst.events).toHaveLength(4096);
+    expect(recordTailFirst.events.at(-1)?.turnId).toBe('active-1');
+    expect(recordTailFirst.nextTargetIndex).toBe(0);
+    const recordTailSecond = await recordTailReader.read(
+      [recordTailTarget],
+      recordTailFirst.cursors,
+      { startTargetIndex: recordTailFirst.nextTargetIndex },
+    );
+    expect(recordTailSecond.events).toHaveLength(2);
+    expect(recordTailSecond.events.map((event) => event.turnId)).toEqual(['active-2', 'active-3']);
+    expect(recordTailSecond.nextTargetIndex).toBeUndefined();
+    const recordTailThird = await recordTailReader.read(
+      [recordTailTarget],
+      recordTailSecond.cursors,
+    );
+    expect(recordTailThird.events).toEqual([]);
+
     const diagnosticRoot = await isolatedJournalRoot();
     const diagnosticTarget = target('diagnostic-limit');
     await writeFile(activePath(diagnosticRoot, diagnosticTarget), 'not-json\n'.repeat(200));

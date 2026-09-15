@@ -571,6 +571,7 @@ export class HookJournalReader {
           bounded = consumed.byteLimitReached || consumed.recordLimitReached;
           hasMore =
             consumed.hasMore ||
+            (consumed.recordLimitReached && consumed.hasPendingTail) ||
             (index + 1 < snapshots.length &&
               (consumed.recordLimitReached || bytesRead >= byteBudget));
           break;

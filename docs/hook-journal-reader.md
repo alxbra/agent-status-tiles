@@ -32,13 +32,15 @@ are not reported as a gap.
 Every call is bounded: at most 128 targets, 512 input/output cursors, 8 MiB of
 actual file reads, 256 KiB per file, 4 KiB per JSONL record, 4,096 projected
 records, 128 diagnostics, and 16 KiB per read operation. When the byte or
-record budget pauses work, the result includes `nextTargetIndex`; callers pass
-that index back as `startTargetIndex` with the returned cursors. A full cursor
-map produces `cursor-limit` for a new source without consuming it. An
-unterminated tail at EOF is checkpointed but does not request an immediate
-retry, so other targets are still covered; the next ordinary poll revisits it.
-Persistent snapshot instability or a read failure likewise reports a fixed
-diagnostic without creating a busy continuation loop.
+record budget pauses work with unread complete records remaining, the result
+includes `nextTargetIndex`; callers pass that index back as `startTargetIndex`
+with the returned cursors. A full cursor map produces `cursor-limit` for a new
+source without consuming it. An unterminated tail at EOF is checkpointed but
+does not request an immediate retry, so other targets are still covered; the
+next ordinary poll revisits it. A record limit that stops before the file's
+unread complete records does request continuation. Persistent snapshot
+instability or a read failure likewise reports a fixed diagnostic without
+creating a busy continuation loop.
 
 This module does not provide cross-file first-run baseline initialization,
 watchers, cursor persistence, lifecycle reduction, Claude turn/status mapping,
