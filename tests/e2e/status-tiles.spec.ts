@@ -179,8 +179,15 @@ test('magnification survives a pointer sweep through transparent inter-tile gaps
 
 async function sampleTransition(page: Page): Promise<
   readonly {
-    target: { x: number; y: number; width: number; height: number };
-    surfaces: readonly { right: number; top: number; bottom: number; width: number }[];
+    targets: readonly { x: number; y: number; width: number; height: number }[];
+    surfaces: readonly {
+      left: number;
+      right: number;
+      top: number;
+      bottom: number;
+      width: number;
+      icons: readonly { left: number; right: number; opacity: string; visibility: string }[];
+    }[];
     rootRight: number;
   }[]
 > {
@@ -188,28 +195,44 @@ async function sampleTransition(page: Page): Promise<
     const root = document.querySelector<HTMLElement>('.status-tiles');
     if (root === null) throw new Error('Status tile strip has no bounds');
     const samples: {
-      target: { x: number; y: number; width: number; height: number };
-      surfaces: readonly { right: number; top: number; bottom: number; width: number }[];
+      targets: readonly { x: number; y: number; width: number; height: number }[];
+      surfaces: readonly {
+        left: number;
+        right: number;
+        top: number;
+        bottom: number;
+        width: number;
+        icons: readonly { left: number; right: number; opacity: string; visibility: string }[];
+      }[];
       rootRight: number;
     }[] = [];
     const startedAt = performance.now();
     while (performance.now() - startedAt <= 220) {
       const rootBounds = root.getBoundingClientRect();
-      const firstTarget = root.querySelector<HTMLElement>('.status-tiles__tile');
-      if (firstTarget === null) throw new Error('Status tile target is missing');
       samples.push({
-        target: (() => {
-          const bounds = firstTarget.getBoundingClientRect();
+        targets: [...root.querySelectorAll<HTMLElement>('.status-tiles__tile')].map((target) => {
+          const bounds = target.getBoundingClientRect();
           return { x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height };
-        })(),
+        }),
         surfaces: [...root.querySelectorAll<HTMLElement>('.status-tiles__tile-surface')].map(
           (surface) => {
             const bounds = surface.getBoundingClientRect();
             return {
+              left: bounds.left,
               right: bounds.right,
               top: bounds.top,
               bottom: bounds.bottom,
               width: bounds.width,
+              icons: [...surface.querySelectorAll<HTMLElement>('[class*="-icon"]')].map((icon) => {
+                const iconBounds = icon.getBoundingClientRect();
+                const styles = getComputedStyle(icon);
+                return {
+                  left: iconBounds.left,
+                  right: iconBounds.right,
+                  opacity: styles.opacity,
+                  visibility: styles.visibility,
+                };
+              }),
             };
           },
         ),
@@ -223,21 +246,45 @@ async function sampleTransition(page: Page): Promise<
 
 function expectTransitionGeometry(
   samples: readonly {
-    target: { x: number; y: number; width: number; height: number };
-    surfaces: readonly { right: number; top: number; bottom: number; width: number }[];
+    targets: readonly { x: number; y: number; width: number; height: number }[];
+    surfaces: readonly {
+      left: number;
+      right: number;
+      top: number;
+      bottom: number;
+      width: number;
+      icons: readonly { left: number; right: number; opacity: string; visibility: string }[];
+    }[];
     rootRight: number;
   }[],
-  initialTarget: { x: number; y: number; width: number; height: number },
 ): void {
   expect(samples.length).toBeGreaterThan(4);
   for (const sample of samples) {
-    expect(sample.target.width).toBe(24);
-    expect(sample.target.height).toBe(24);
-    expect(Math.abs(sample.target.x - initialTarget.x)).toBeLessThan(0.01);
-    expect(Math.abs(sample.target.y - initialTarget.y)).toBeLessThan(0.01);
+    expect(sample.targets).toHaveLength(sample.surfaces.length);
+    for (const [index, target] of sample.targets.entries()) {
+      expect(target.width).toBeGreaterThanOrEqual(24);
+      expect(target.height).toBeGreaterThanOrEqual(24);
+      const surface = sample.surfaces[index]!;
+      expect(target.x).toBeLessThanOrEqual(surface.left + 0.1);
+      expect(target.x + target.width).toBeGreaterThanOrEqual(surface.right - 0.1);
+      expect(target.y).toBeLessThanOrEqual(surface.top + 0.1);
+      expect(target.y + target.height).toBeGreaterThanOrEqual(surface.bottom - 0.1);
+      expect(target.width).toBeGreaterThanOrEqual(surface.width - 0.01);
+      expect(target.height).toBeGreaterThanOrEqual(surface.bottom - surface.top - 0.01);
+    }
     const surfaces = [...sample.surfaces].sort((left, right) => left.top - right.top);
-    for (const surface of surfaces) {
-      expect(Math.abs(surface.right - (sample.rootRight - 12))).toBeLessThan(0.01);
+    for (const [index, surface] of surfaces.entries()) {
+      expect(Math.abs(surface.right - (sample.rootRight - 12))).toBeLessThan(0.1);
+      const icons = surface.icons;
+      expect(icons).toHaveLength(2);
+      if (surface.width < 38) {
+        expect(icons.every((icon) => icon.visibility === 'hidden')).toBe(true);
+      } else {
+        expect(icons.every((icon) => icon.visibility === 'visible')).toBe(true);
+        expect(icons.every((icon) => Number(icon.opacity) >= 0)).toBe(true);
+        expect(icons[0]!.right).toBeLessThanOrEqual(icons[1]!.left + 0.01);
+      }
+      if (index === 0) expect(surface.width).toBeGreaterThanOrEqual(10);
     }
     for (let index = 1; index < surfaces.length; index += 1) {
       expect(surfaces[index]!.top - surfaces[index - 1]!.bottom).toBeGreaterThanOrEqual(5.99);
@@ -245,7 +292,7 @@ function expectTransitionGeometry(
   }
 }
 
-test('animates anchored surfaces while fixed hit targets and gaps stay valid', async ({ page }) => {
+test('animates anchored surfaces while hit targets and gaps stay valid', async ({ page }) => {
   await openFixture(page, 5);
   const root = page.locator('.status-tiles');
   const rootBox = await root.boundingBox();
@@ -257,17 +304,19 @@ test('animates anchored surfaces while fixed hit targets and gaps stay valid', a
     initialTarget.x + initialTarget.width / 2,
     initialTarget.y + initialTarget.height / 2,
   );
-  expectTransitionGeometry(await sampleTransition(page), initialTarget);
+  expectTransitionGeometry(await sampleTransition(page));
 
   await page.mouse.move(rootBox.x - 8, rootBox.y + rootBox.height / 2);
-  expectTransitionGeometry(await sampleTransition(page), initialTarget);
+  expectTransitionGeometry(await sampleTransition(page));
 });
 
 test('waits for enough expanded surface room before revealing both icons', async ({ page }) => {
   await openFixture(page, 2, '&visual=all');
   const first = page.locator('.status-tiles__tile').first();
+  const second = page.locator('.status-tiles__tile').nth(1);
   const firstTarget = await first.boundingBox();
-  if (firstTarget === null) throw new Error('First tile has no target box');
+  const secondTarget = await second.boundingBox();
+  if (firstTarget === null || secondTarget === null) throw new Error('Tile has no target box');
 
   await page.mouse.move(
     firstTarget.x + firstTarget.width / 2,
@@ -287,11 +336,17 @@ test('waits for enough expanded surface room before revealing both icons', async
     expanded: node.parentElement?.getAttribute('data-expanded'),
     providerIcons: node.querySelectorAll('.status-tiles__provider-icon').length,
     statusIcons: node.querySelectorAll('.status-tiles__status-icon').length,
+    providerVisibility: getComputedStyle(node.querySelector('.status-tiles__provider-icon')!)
+      .visibility,
+    statusVisibility: getComputedStyle(node.querySelector('.status-tiles__status-icon')!)
+      .visibility,
   }));
   expect(intermediate.width).toBeLessThan(38);
   expect(intermediate.expanded).toBe('false');
-  expect(intermediate.providerIcons).toBe(0);
-  expect(intermediate.statusIcons).toBe(0);
+  expect(intermediate.providerIcons).toBe(1);
+  expect(intermediate.statusIcons).toBe(1);
+  expect(intermediate.providerVisibility).toBe('hidden');
+  expect(intermediate.statusVisibility).toBe('hidden');
 
   await page.mouse.move(
     firstTarget.x + firstTarget.width / 2,
@@ -301,9 +356,6 @@ test('waits for enough expanded surface room before revealing both icons', async
   await expect(first.locator('.status-tiles__provider-icon')).toHaveCSS('opacity', '1');
   await expect(first.locator('.status-tiles__status-icon')).toHaveCSS('opacity', '1');
 
-  const second = page.locator('.status-tiles__tile').nth(1);
-  const secondTarget = await second.boundingBox();
-  if (secondTarget === null) throw new Error('Second tile has no target box');
   await page.mouse.move(
     secondTarget.x + secondTarget.width / 2,
     secondTarget.y + secondTarget.height / 2,
@@ -350,6 +402,112 @@ test('opens from the invisible part of a 24px target outside the colored surface
     .toBe('codex:fixture-0');
 });
 
+test('expanded surfaces remain owned by their session at edges and during motion', async ({
+  page,
+}) => {
+  await openFixture(page, 5);
+  const cdp = await page.context().newCDPSession(page);
+  const first = page.locator('.status-tiles__tile').first();
+  const firstTarget = await first.boundingBox();
+  if (firstTarget === null) throw new Error('First tile has no target box');
+  await page.mouse.move(
+    firstTarget.x + firstTarget.width / 2,
+    firstTarget.y + firstTarget.height / 2,
+  );
+  await expect(first.locator('.status-tiles__tile-surface')).toHaveCSS('width', '40px');
+
+  async function clickAt(x: number, y: number, expectedSessionId: string): Promise<void> {
+    await page.evaluate(() => {
+      window.__fixtureOpenTarget = undefined;
+    });
+    await cdp.send('Input.dispatchMouseEvent', {
+      type: 'mousePressed',
+      x,
+      y,
+      button: 'left',
+      clickCount: 1,
+    });
+    await cdp.send('Input.dispatchMouseEvent', {
+      type: 'mouseReleased',
+      x,
+      y,
+      button: 'left',
+      clickCount: 1,
+    });
+    await expect
+      .poll(() => page.evaluate(() => window.__fixtureOpenTarget?.sessionId))
+      .toBe(expectedSessionId);
+  }
+
+  const expandedSurface = await first.locator('.status-tiles__tile-surface').boundingBox();
+  if (expandedSurface === null) throw new Error('Expanded surface has no bounds');
+  await clickAt(
+    expandedSurface.x + 1,
+    expandedSurface.y + expandedSurface.height / 2,
+    'codex:fixture-0',
+  );
+  await clickAt(
+    expandedSurface.x + expandedSurface.width / 2,
+    expandedSurface.y + 1,
+    'codex:fixture-0',
+  );
+  await clickAt(
+    expandedSurface.x + expandedSurface.width / 2,
+    expandedSurface.y + expandedSurface.height - 1,
+    'codex:fixture-0',
+  );
+
+  const packedNeighbor = page.locator('.status-tiles__tile').nth(1);
+  const packedNeighborSurface = await packedNeighbor
+    .locator('.status-tiles__tile-surface')
+    .boundingBox();
+  if (packedNeighborSurface === null) throw new Error('Packed neighbor surface has no bounds');
+  await clickAt(
+    packedNeighborSurface.x + packedNeighborSurface.width / 2,
+    packedNeighborSurface.y + packedNeighborSurface.height / 2,
+    'claude:fixture-1',
+  );
+
+  await page.goto(fixtureUrl('count=5'));
+  await expect(page.locator('.status-tiles')).toBeVisible();
+  const animatedFirst = page.locator('.status-tiles__tile').first();
+  const animatedTarget = await animatedFirst.boundingBox();
+  if (animatedTarget === null) throw new Error('Animated tile has no target box');
+  await page.mouse.move(
+    animatedTarget.x + animatedTarget.width / 2,
+    animatedTarget.y + animatedTarget.height / 2,
+  );
+  await page.waitForTimeout(40);
+  const midMotionSurface = await animatedFirst.locator('.status-tiles__tile-surface').boundingBox();
+  if (midMotionSurface === null) throw new Error('Mid-motion surface has no bounds');
+  await clickAt(
+    midMotionSurface.x + 1,
+    midMotionSurface.y + midMotionSurface.height / 2,
+    'codex:fixture-0',
+  );
+  await clickAt(
+    midMotionSurface.x + midMotionSurface.width / 2,
+    midMotionSurface.y + 1,
+    'codex:fixture-0',
+  );
+  await clickAt(
+    midMotionSurface.x + midMotionSurface.width / 2,
+    midMotionSurface.y + midMotionSurface.height - 1,
+    'codex:fixture-0',
+  );
+  const midMotionNeighbor = await page
+    .locator('.status-tiles__tile')
+    .nth(1)
+    .locator('.status-tiles__tile-surface')
+    .boundingBox();
+  if (midMotionNeighbor === null) throw new Error('Mid-motion neighbor surface has no bounds');
+  await clickAt(
+    midMotionNeighbor.x + midMotionNeighbor.width / 2,
+    midMotionNeighbor.y + midMotionNeighbor.height / 2,
+    'claude:fixture-1',
+  );
+});
+
 test('keyboard navigation reaches sessions beyond the twelve-slot viewport', async ({ page }) => {
   await openFixture(page, 30);
   const first = page.locator('.status-tiles__tile').first();
@@ -361,6 +519,24 @@ test('keyboard navigation reaches sessions beyond the twelve-slot viewport', asy
   await expect(page.locator('[data-session-id="codex:fixture-0"]')).toBeFocused();
   await page.keyboard.press('Escape');
   await expect.poll(() => page.evaluate(() => document.body.dataset.keyboardExit)).toBe('true');
+});
+
+test('keyboard focus expands the selected tile while the pointer stays inside', async ({
+  page,
+}) => {
+  await openFixture(page, 3);
+  const first = page.locator('.status-tiles__tile').first();
+  const firstTarget = await first.boundingBox();
+  if (firstTarget === null) throw new Error('First tile has no target box');
+  await page.mouse.move(
+    firstTarget.x + firstTarget.width / 2,
+    firstTarget.y + firstTarget.height / 2,
+  );
+  await first.focus();
+  await page.keyboard.press('ArrowDown');
+  const second = page.locator('.status-tiles__tile').nth(1);
+  await expect(second).toBeFocused();
+  await expect(second.locator('.status-tiles__tile-surface')).toHaveCSS('width', '40px');
 });
 
 test('reduced motion disables working animation while preserving keyboard focus expansion', async ({

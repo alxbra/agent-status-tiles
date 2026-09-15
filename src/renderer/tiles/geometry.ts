@@ -30,13 +30,11 @@ export interface TileHitRegion {
 export interface TileGeometry {
   index: number;
   sessionId: string;
-  /** Stable unmagnified slot coordinate used by the fixed 24px hit target. */
+  /** Stable unmagnified slot coordinate used by pointer influence math. */
   stableCenterY: number;
   centerY: number;
   size: number;
   radius: number;
-  /** Animated surface displacement from the stable hit-target center. */
-  surfaceOffsetY: number;
   x: number;
   y: number;
   influence: number;
@@ -208,15 +206,14 @@ function packCenters(
 }
 
 function hitRegionForTile(
-  tile: Pick<TileGeometry, 'stableCenterY' | 'sessionId'>,
-  width: number,
+  tile: Pick<TileGeometry, 'x' | 'size' | 'centerY' | 'sessionId'>,
 ): TileHitRegion {
-  const targetCenterX = width - RIGHT_EDGE_INSET - TILE_SIZE / 2;
+  const hitSize = Math.max(TILE_HIT_SIZE, tile.size);
   return {
-    x: targetCenterX - TILE_HIT_SIZE / 2,
-    y: tile.stableCenterY - TILE_HIT_SIZE / 2,
-    width: TILE_HIT_SIZE,
-    height: TILE_HIT_SIZE,
+    x: tile.x + tile.size / 2 - hitSize / 2,
+    y: tile.centerY - hitSize / 2,
+    width: hitSize,
+    height: hitSize,
     sessionId: tile.sessionId,
   };
 }
@@ -253,7 +250,6 @@ export function layoutTiles(
       centerY,
       size,
       radius: tileRadiusForInfluence(influence),
-      surfaceOffsetY: centerY - stableCenters[index],
       x,
       y: centerY - size / 2,
       influence,
@@ -266,7 +262,7 @@ export function layoutTiles(
         sessionId: session.id,
       },
     };
-    tile.hitRegion = hitRegionForTile(tile, width);
+    tile.hitRegion = hitRegionForTile(tile);
     return tile;
   });
 

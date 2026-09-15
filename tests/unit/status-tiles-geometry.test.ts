@@ -63,6 +63,8 @@ describe('status tile geometry', () => {
     expect(hovered.size).toBe(40);
     expect(hovered.radius).toBe(8);
     expect(hovered.x + hovered.size).toBe(DEFAULT_STRIP_WIDTH - 12);
+    expect(hovered.hitRegion.width).toBe(40);
+    expect(hovered.hitRegion.height).toBe(40);
     expect(surfacesHaveMinimumGap(layout.tiles)).toBe(true);
   });
 

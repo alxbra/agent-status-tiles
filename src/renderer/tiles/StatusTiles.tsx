@@ -113,6 +113,24 @@ function pointIsInside(bounds: DOMRect, clientX: number, clientY: number): boole
   );
 }
 
+function readRenderedHitRegions(root: HTMLElement): readonly TileHitRegion[] {
+  const rootBounds = root.getBoundingClientRect();
+  return [...root.querySelectorAll<HTMLButtonElement>('.status-tiles__tile')].flatMap((tile) => {
+    const sessionId = tile.dataset.sessionId;
+    if (sessionId === undefined) return [];
+    const bounds = tile.getBoundingClientRect();
+    return [
+      {
+        x: bounds.left - rootBounds.left,
+        y: bounds.top - rootBounds.top,
+        width: bounds.width,
+        height: bounds.height,
+        sessionId,
+      },
+    ];
+  });
+}
+
 export function StatusTiles({
   sessions,
   onOpenSession,
@@ -205,12 +223,30 @@ export function StatusTiles({
   }, [layout.maxStart, scrollOffset]);
 
   useEffect(() => {
-    const hitRegionsKey = JSON.stringify(layout.hitRegions);
-    const callbackChanged = lastHitRegionsCallbackRef.current !== onHitRegionsChange;
-    if (hitRegionsKey === lastHitRegionsRef.current && !callbackChanged) return;
-    lastHitRegionsRef.current = hitRegionsKey;
-    lastHitRegionsCallbackRef.current = onHitRegionsChange;
-    onHitRegionsChange(layout.hitRegions);
+    const root = rootRef.current;
+    if (root === null) {
+      onHitRegionsChange(layout.hitRegions);
+      return undefined;
+    }
+    let frame = 0;
+    const startedAt = performance.now();
+    const publish = (): void => {
+      const renderedRegions = readRenderedHitRegions(root);
+      const regions =
+        renderedRegions.length === layout.hitRegions.length ? renderedRegions : layout.hitRegions;
+      const regionsKey = JSON.stringify(regions);
+      const callbackChanged = lastHitRegionsCallbackRef.current !== onHitRegionsChange;
+      if (regionsKey !== lastHitRegionsRef.current || callbackChanged) {
+        lastHitRegionsRef.current = regionsKey;
+        lastHitRegionsCallbackRef.current = onHitRegionsChange;
+        onHitRegionsChange(regions);
+      }
+      if (performance.now() - startedAt < 220) {
+        frame = window.requestAnimationFrame(publish);
+      }
+    };
+    publish();
+    return () => window.cancelAnimationFrame(frame);
   }, [layout.hitRegions, onHitRegionsChange]);
 
   useEffect(() => {
@@ -311,6 +347,7 @@ export function StatusTiles({
     if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return;
     event.preventDefault();
     beginInteractionFromRef();
+    setPointerY(undefined);
     const current = focusedIndex ?? layout.visibleStart;
     const next =
       event.key === 'ArrowDown'
@@ -401,7 +438,6 @@ export function StatusTiles({
           height: `${tile.hitRegion.height}px`,
         } satisfies CSSProperties;
         const surfaceStyle = {
-          top: `calc(50% + ${tile.surfaceOffsetY}px)`,
           width: `${tile.size}px`,
           height: `${tile.size}px`,
           borderRadius: `${tile.radius}px`,
@@ -449,15 +485,8 @@ export function StatusTiles({
             }}
           >
             <span className="status-tiles__tile-surface" style={surfaceStyle} aria-hidden="true">
-              {expanded ? (
-                <>
-                  <ProviderIcon
-                    provider={session.provider}
-                    className="status-tiles__provider-icon"
-                  />
-                  <StatusIcon status={session.status} className="status-tiles__status-icon" />
-                </>
-              ) : null}
+              <ProviderIcon provider={session.provider} className="status-tiles__provider-icon" />
+              <StatusIcon status={session.status} className="status-tiles__status-icon" />
             </span>
           </button>
         );
