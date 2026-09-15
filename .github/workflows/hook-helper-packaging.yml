@@ -1,0 +1,76 @@
+name: Hook helper packaging
+
+on:
+  pull_request:
+    paths:
+      - 'crates/hook-helper/**'
+      - 'docs/hook-helper.md'
+      - 'scripts/build-hook-helper.*'
+      - 'scripts/validate-hook-helper-pack.*'
+      - 'tests/unit/hook-helper-packaging.test.ts'
+      - 'package.json'
+      - 'pnpm-lock.yaml'
+      - '.github/workflows/hook-helper-packaging.yml'
+  push:
+    branches:
+      - staging
+      - main
+    paths:
+      - 'crates/hook-helper/**'
+      - 'docs/hook-helper.md'
+      - 'scripts/build-hook-helper.*'
+      - 'scripts/validate-hook-helper-pack.*'
+      - 'tests/unit/hook-helper-packaging.test.ts'
+      - 'package.json'
+      - 'pnpm-lock.yaml'
+      - '.github/workflows/hook-helper-packaging.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.30.3
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.98.1
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm format:check
+      - run: pnpm lint
+      - run: pnpm typecheck
+      - run: pnpm test
+      - run: pnpm run pack
+      - name: Inspect the unsigned helper resource
+        shell: bash
+        run: |
+          set -euo pipefail
+          app_path="$(find release -type d -name '*.app' -print -quit)"
+          test -n "$app_path"
+          helper_root="$app_path/Contents/Resources/hook-helper"
+          test -x "$helper_root/arm64/hook-helper"
+          test -x "$helper_root/x64/hook-helper"
+          file "$helper_root/arm64/hook-helper" "$helper_root/x64/hook-helper"
+          case "$(uname -m)" in
+            arm64) helper_path="$helper_root/arm64/hook-helper" ;;
+            x86_64) helper_path="$helper_root/x64/hook-helper" ;;
+            *) echo "Unsupported runner architecture: $(uname -m)" >&2; exit 1 ;;
+          esac
+          data_dir="$(mktemp -d)"
+          trap 'rm -R "$data_dir"' EXIT
+          umask 077
+          printf '%s' '{"hook_event_name":"SessionStart","session_id":"ci-packaging","cwd":"/tmp/project"}' \
+            | "$helper_path" --provider claude --data-dir "$data_dir" \
+            >stdout.txt 2>stderr.txt
+          test ! -s stdout.txt
+          test ! -s stderr.txt
+          test "$(find "$data_dir/journals/claude" -type f -name '*.jsonl' -print -quit)" != ''
