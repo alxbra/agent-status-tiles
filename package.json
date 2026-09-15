@@ -14,14 +14,15 @@
     "dev": "electron-vite dev",
     "start": "electron-vite preview",
     "build": "electron-vite build",
-    "format": "prettier --write 'src/**/*.{ts,tsx,css,html}' 'tests/**/*.{ts,tsx}' '*.{js,mjs,ts,json,yaml,yml}' '.github/**/*.{yml,yaml}'",
-    "format:check": "prettier --check 'src/**/*.{ts,tsx,css,html}' 'tests/**/*.{ts,tsx}' '*.{js,mjs,ts,json,yaml,yml}' '.github/**/*.{yml,yaml}'",
+    "build:hook-helper": "node scripts/build-hook-helper.mjs",
+    "format": "prettier --write 'src/**/*.{ts,tsx,css,html}' 'scripts/**/*.{d.mts,js,mjs,ts}' 'tests/**/*.{ts,tsx}' '*.{js,mjs,ts,json,yaml,yml}' '.github/**/*.{yml,yaml}'",
+    "format:check": "prettier --check 'src/**/*.{ts,tsx,css,html}' 'scripts/**/*.{d.mts,js,mjs,ts}' 'tests/**/*.{ts,tsx}' '*.{js,mjs,ts,json,yaml,yml}' '.github/**/*.{yml,yaml}'",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:e2e": "pnpm build && playwright test",
-    "pack": "pnpm build && electron-builder --dir"
+    "pack": "pnpm build && pnpm build:hook-helper && electron-builder --dir"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
@@ -57,8 +58,19 @@
     "files": [
       "out/**/*"
     ],
+    "asar": true,
+    "beforePack": "./scripts/validate-hook-helper-pack.mjs",
     "mac": {
       "category": "public.app-category.utilities",
+      "extraResources": [
+        {
+          "from": "build/hook-helper",
+          "to": "hook-helper",
+          "filter": [
+            "**/*"
+          ]
+        }
+      ],
       "target": [
         "dmg",
         "zip"
@@ -66,6 +78,7 @@
     }
   },
   "dependencies": {
+    "class-variance-authority": "^0.7.1",
     "cn": "^0.3.0",
     "lucide-react": "^1.46.0",
     "radix-ui": "^1.6.7"

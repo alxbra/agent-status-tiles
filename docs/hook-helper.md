@@ -11,6 +11,37 @@ hook-helper --provider codex|claude --data-dir /absolute/private/app-data
 The provider and data directory are explicit arguments. Relative data paths and
 unknown arguments are rejected as a silent successful no-op.
 
+## Developer packaging
+
+The packaged application carries the helper outside its ASAR archive as an
+executable resource. `pnpm run pack` builds both supported macOS targets and
+places them at these stable resource paths:
+
+```text
+Agent Status Tiles.app/Contents/Resources/hook-helper/arm64/hook-helper
+Agent Status Tiles.app/Contents/Resources/hook-helper/x64/hook-helper
+```
+
+The future app integration selects the directory matching Electron's
+`process.arch` and invokes the helper by absolute path. Packaging does not
+install hooks or choose a user-data directory; those are separate integration
+and installer responsibilities. To build one target while developing, use
+`pnpm run build:hook-helper -- --arch arm64` (or `x64`). If Cargo is not on
+`PATH`, pass its executable explicitly with `--cargo PATH` or set
+`HOOK_HELPER_CARGO`. The selected Rust toolchain must provide the corresponding
+`aarch64-apple-darwin` or `x86_64-apple-darwin` target; missing toolchains,
+targets, build output, and architecture mismatches fail the build clearly.
+
+The helper is copied by electron-builder's `extraResources` configuration,
+which places it under macOS `Contents/Resources` rather than inside ASAR. The
+macOS `beforePack` hook validates the helper matching the selected Electron
+architecture, so direct `electron-builder --dir` packaging also fails clearly
+when that resource is missing, non-executable, truncated, or the wrong arch.
+The developer package is unsigned: these checks do not establish code-signing,
+notarization, or Gatekeeper acceptance. See electron-builder's
+[application contents documentation](https://www.electron.build/docs/contents/)
+for the `extraResources` placement contract.
+
 ## Input and privacy
 
 The helper reads one JSON object from stdin, up to 64 KiB. It accepts the
