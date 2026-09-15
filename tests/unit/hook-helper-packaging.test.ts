@@ -18,8 +18,8 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import {
   ARCHITECTURES,
-  cargoBuildArguments,
-  helperBuildPath,
+  getCargoBuildArguments,
+  getHelperBuildPath,
   parseBuildOptions,
   validateMachOArchitecture,
 } from '../../scripts/build-hook-helper.mjs';
@@ -36,7 +36,7 @@ afterEach(() => {
   }
 });
 
-function temporaryDirectory() {
+function createTemporaryDirectory() {
   const directory = mkdtempSync(join(tmpdir(), 'agent-status-tiles-packaging-'));
   temporaryDirectories.push(directory);
   return directory;
@@ -57,7 +57,7 @@ function writeMachO(directory: string, arch: HelperArch, fileType = 2, size = 32
 }
 
 function createBuildFixture() {
-  const directory = temporaryDirectory();
+  const directory = createTemporaryDirectory();
   const scriptsDirectory = join(directory, 'scripts');
   const manifestDirectory = join(directory, 'crates', 'hook-helper');
   const fakeCargo = join(directory, 'fake-cargo.mjs');
@@ -114,18 +114,18 @@ describe('hook-helper packaging contract', () => {
     expect(parseBuildOptions(['--arch', 'arm64'], {}).architectures).toEqual(['arm64']);
     expect(parseBuildOptions(['--arch', 'x64'], {}).architectures).toEqual(['x64']);
     expect(parseBuildOptions(['--', '--arch', 'arm64'], {}).architectures).toEqual(['arm64']);
-    expect(helperBuildPath('arm64')).toBe(
+    expect(getHelperBuildPath('arm64')).toBe(
       join(projectRoot, 'build', 'hook-helper', 'arm64', 'hook-helper'),
     );
-    expect(helperBuildPath('x64')).toBe(
+    expect(getHelperBuildPath('x64')).toBe(
       join(projectRoot, 'build', 'hook-helper', 'x64', 'hook-helper'),
     );
-    expect(() => helperBuildPath('__proto__')).toThrow('Unsupported helper architecture');
+    expect(() => getHelperBuildPath('__proto__')).toThrow('Unsupported helper architecture');
   });
 
   it('pins Cargo output to the repository target directory', () => {
-    const inheritedTargetDirectory = join(temporaryDirectory(), 'stale-target');
-    const args = cargoBuildArguments('aarch64-apple-darwin');
+    const inheritedTargetDirectory = join(createTemporaryDirectory(), 'stale-target');
+    const args = getCargoBuildArguments('aarch64-apple-darwin');
 
     expect(args.slice(-2)).toEqual([
       '--target-dir',
@@ -163,7 +163,7 @@ describe('hook-helper packaging contract', () => {
 
   it('refuses a symlinked build parent without touching its external contents', () => {
     const { directory, buildScript, fakeCargo } = createBuildFixture();
-    const externalDirectory = temporaryDirectory();
+    const externalDirectory = createTemporaryDirectory();
     const externalHelperDirectory = join(externalDirectory, 'hook-helper');
     const sentinelPath = join(externalHelperDirectory, 'sentinel');
     mkdirSync(externalHelperDirectory, { recursive: true });
@@ -182,7 +182,7 @@ describe('hook-helper packaging contract', () => {
   });
 
   it('fails beforePack for missing or wrong-architecture helpers in an isolated fixture', () => {
-    const directory = temporaryDirectory();
+    const directory = createTemporaryDirectory();
     const scriptsDirectory = join(directory, 'scripts');
     const helperDirectory = join(directory, 'build', 'hook-helper', 'arm64');
     const validatorPath = join(scriptsDirectory, 'validate-hook-helper-pack.mjs');
@@ -231,11 +231,11 @@ describe('hook-helper packaging contract', () => {
     );
     expect(() => parseBuildOptions(['--cargo'], {})).toThrow('--cargo requires an executable path');
     expect(() => parseBuildOptions(['--unknown'], {})).toThrow('Unknown argument');
-    expect(() => helperBuildPath('__proto__')).toThrow('Unsupported helper architecture');
+    expect(() => getHelperBuildPath('__proto__')).toThrow('Unsupported helper architecture');
   });
 
   it('checks each copied helper for a 64-bit Mach-O CPU type', () => {
-    const directory = temporaryDirectory();
+    const directory = createTemporaryDirectory();
     const arm64Binary = writeMachO(directory, 'arm64');
     const x64Binary = writeMachO(directory, 'x64');
 
@@ -259,7 +259,7 @@ describe('hook-helper packaging contract', () => {
   });
 
   it('rejects non-Mach-O output instead of packaging an arbitrary executable', () => {
-    const directory = temporaryDirectory();
+    const directory = createTemporaryDirectory();
     const path = join(directory, 'not-a-helper');
     writeFileSync(path, Buffer.alloc(32, 0x2a));
     chmodSync(path, 0o755);
@@ -270,7 +270,7 @@ describe('hook-helper packaging contract', () => {
   });
 
   it('reports missing Cargo without silently producing a package', () => {
-    const missingCargo = join(temporaryDirectory(), 'cargo-not-installed');
+    const missingCargo = join(createTemporaryDirectory(), 'cargo-not-installed');
     const result = spawnSync(
       process.execPath,
       [scriptPath, '--arch', 'arm64', '--cargo', missingCargo],

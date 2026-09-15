@@ -67,7 +67,7 @@ export function parseBuildOptions(argv, environment = process.env) {
   };
 }
 
-export function helperBuildPath(arch) {
+export function getHelperBuildPath(arch) {
   if (!isSupportedArchitecture(arch)) {
     throw new Error(`Unsupported helper architecture: ${arch}`);
   }
@@ -87,7 +87,7 @@ function describeCommandFailure(result, cargoPath, target) {
 }
 
 function runCargo(cargoPath, target) {
-  const result = spawnSync(cargoPath, cargoBuildArguments(target), {
+  const result = spawnSync(cargoPath, getCargoBuildArguments(target), {
     cwd: repositoryRoot,
     encoding: 'utf8',
     stdio: 'pipe',
@@ -97,7 +97,7 @@ function runCargo(cargoPath, target) {
   }
 }
 
-export function cargoBuildArguments(target) {
+export function getCargoBuildArguments(target) {
   return [
     'build',
     '--manifest-path',
@@ -153,7 +153,7 @@ function assertRegularExecutable(path, arch) {
 }
 
 export function validateBuiltHelper(arch) {
-  const path = helperBuildPath(arch);
+  const path = getHelperBuildPath(arch);
   assertRegularExecutable(path, arch);
   return path;
 }
@@ -226,7 +226,7 @@ function buildHookHelper({ cargoPath, architectures }) {
     const cargoBinary = join(targetDirectory, architecture.target, 'release', 'hook-helper');
     assertRegularExecutable(cargoBinary, arch);
 
-    const destination = helperBuildPath(arch);
+    const destination = getHelperBuildPath(arch);
     mkdirSync(dirname(destination), { recursive: true, mode: 0o755 });
     copyFileSync(cargoBinary, destination);
     chmodSync(destination, 0o755);
