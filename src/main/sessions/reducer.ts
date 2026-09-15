@@ -15,8 +15,8 @@ function compareTurnKeys(left: TurnKey, right: TurnKey): number {
   return left.turnId.localeCompare(right.turnId);
 }
 
-function isNewerTurn(
-  record: SessionRecord,
+export function isNewerTurn(
+  record: Pick<SessionRecord, 'turnKey'>,
   event: Extract<SessionEvent, { type: 'turn-started' }>,
 ): boolean {
   if (record.turnKey?.turnId === event.turnId) return false;

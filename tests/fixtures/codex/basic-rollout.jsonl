@@ -1,0 +1,7 @@
+{"timestamp":"2026-09-15T10:00:00.000Z","type":"session_meta","payload":{"id":"019f6b6d-644d-7701-8858-9da6837aaaaa","forked_from_id":null,"cwd":"/Users/example/private-project","originator":"codex-cli","source":"cli","cli_version":"0.154.0-alpha.6.2"}}
+{"timestamp":"2026-09-15T10:00:01.000Z","type":"event_msg","payload":{"type":"task_started","turn_id":"turn-basic"}}
+{"timestamp":"2026-09-15T10:00:02.000Z","type":"response_item","payload":{"type":"function_call","name":"request_user_input","call_id":"call-basic","turn_id":"turn-basic","arguments":{"question":"PRIVATE_PROMPT_SHOULD_NOT_LEAK"}}}
+{"timestamp":"2026-09-15T10:00:03.000Z","type":"response_item","payload":{"type":"function_call_output","call_id":"call-basic","turn_id":"turn-basic","output":"PRIVATE_ANSWER_SHOULD_NOT_LEAK"}}
+{"timestamp":"2026-09-15T10:00:04.000Z","type":"event_msg","payload":{"type":"stream_error","turn_id":"turn-basic","message":"PRIVATE_ERROR_BODY_SHOULD_NOT_LEAK"}}
+{"timestamp":"2026-09-15T10:00:05.000Z","type":"response_item","payload":{"type":"message","role":"assistant","content":"PRIVATE_TRANSCRIPT_SHOULD_NOT_LEAK"}}
+{"timestamp":"2026-09-15T10:00:06.000Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-basic","last_agent_message":"PRIVATE_FINAL_SHOULD_NOT_LEAK"}}
