@@ -2,7 +2,7 @@ import { BrowserWindow, app } from 'electron';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-import { isAllowedRendererNavigation } from './security';
+import { protectWebContents } from './security';
 
 let settingsWindow: BrowserWindow | null = null;
 
@@ -16,23 +16,6 @@ function rendererUrl(): string {
   }
 
   return pathToFileURL(rendererFilePath()).href;
-}
-
-function protectWebContents(window: BrowserWindow, allowedUrl: string): void {
-  window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
-  window.webContents.on('will-navigate', (event, targetUrl) => {
-    if (!isAllowedRendererNavigation(targetUrl, allowedUrl)) {
-      event.preventDefault();
-    }
-  });
-  window.webContents.on('will-redirect', (event, targetUrl) => {
-    if (!isAllowedRendererNavigation(targetUrl, allowedUrl)) {
-      event.preventDefault();
-    }
-  });
-  window.webContents.on('will-attach-webview', (event) => {
-    event.preventDefault();
-  });
 }
 
 export function getSettingsWindow(): BrowserWindow | null {

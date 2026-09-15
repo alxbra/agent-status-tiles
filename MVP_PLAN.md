@@ -1,7 +1,7 @@
 # Agent Status Tiles — MVP Implementation Plan
 
 **Document:** `MVP_PLAN.md` in the project root.  
-**Document status:** Ready for implementation handoff; tasks are not yet implemented.  
+**Document status:** Implementation in progress; repository bootstrap and the Epic 0 application foundation are merged. Fixture evidence and later epics remain pending.
 **Repository:** [alxbra/agent-status-tiles](https://github.com/alxbra/agent-status-tiles)
 
 ## 1. Product and release target
@@ -404,15 +404,17 @@ Every epic ends with E2E verification, corrections, and the PR hardening/merge g
 
 **PRs:** bootstrap, then `chore/app-foundation`.
 
-- [ ] Save this plan in the project root and add project instructions preserving its UI and review requirements.
-- [ ] Establish `main`, `staging`, and the feature-branch workflow.
-- [ ] Scaffold Electron, React, TypeScript, Vite, Tailwind, and stock shadcn.
-- [ ] Add pnpm scripts for development, build, checks, tests, and packaging.
-- [ ] Add CI for lint, types, unit tests, build, and Electron smoke tests.
-- [ ] Configure one-pass CodeRabbit operation.
+- [x] Save this plan in the project root and add project instructions preserving its UI and review requirements.
+- [x] Establish `main`, `staging`, and the feature-branch workflow.
+- [x] Scaffold Electron, React, TypeScript, Vite, Tailwind, and the stock shadcn configuration. Generated shadcn primitives are not needed yet.
+- [x] Add pnpm scripts for development, build, checks, tests, and packaging.
+- [x] Add CI for lint, types, unit tests, build, and Electron smoke tests.
+- [x] Configure one-pass CodeRabbit operation.
 - [ ] Add a test-only fixture source isolated from production data.
-- [ ] Add Apache-2.0 licensing and attribution for reused project code.
-- [ ] **E2E and corrections:** launch the built Electron application, open and close settings, verify single-instance behavior, fix failures, rerun, harden, and merge.
+- [x] Add Apache-2.0 licensing and attribution for reused project code.
+- [x] **E2E and corrections:** launch the built Electron application, open and close settings, verify single-instance behavior, fix failures, rerun, harden, and merge.
+
+The current `tests/fixtures/README.md` documents the production-data boundary but is not a real fixture source, so that task remains unchecked.
 
 ### Epic 1 — macOS overlay and menu-bar lifecycle
 
@@ -444,14 +446,14 @@ Every epic ends with E2E verification, corrections, and the PR hardening/merge g
 
 **PRs:** `feat/session-state`, `feat/session-persistence`.
 
-- [ ] Implement shared session types and the deterministic status reducer.
-- [ ] Namespace identities and deduplicate surfaces.
-- [ ] Implement new-turn ordering and active/unread filtering.
+- [x] Implement shared session types and the deterministic status reducer.
+- [x] Namespace identities and deduplicate surfaces.
+- [x] Implement new-turn ordering and active/unread filtering.
 - [ ] Persist unread state, acknowledgement IDs, ordering, and cursors.
 - [ ] Suppress historical unread completions on first installation.
-- [ ] Handle late events, duplicate events, overlapping input requests, and archived sessions.
-- [ ] Keep provider health separate from task failures.
-- [ ] Implement race-safe completion acknowledgement.
+- [x] Handle late events, duplicate events, overlapping input requests, and archived sessions.
+- [x] Keep provider health separate from task failures.
+- [x] Implement race-safe completion acknowledgement.
 - [ ] **E2E and corrections:** replay working → waiting → working → unread → acknowledged through the real app; restart between transitions; inject late/duplicate events and simultaneous completion/click; fix, rerun, harden, and merge.
 
 ### Epic 4 — Codex Desktop and CLI
@@ -548,7 +550,16 @@ Maintain this table in the plan:
 
 | PR | Epic/tasks | CodeRabbit passes | QA passes | Final E2E evidence | Merge SHA |
 |---|---|---:|---:|---|---|
-| Pending | — | — | — | — | — |
+| Bootstrap `99c7200` | Repository bootstrap and branch workflow | — | — | — | `99c72007c0380a29373be2579ef8b4e5a6b314cc` |
+| [#1 `chore/app-foundation`](https://github.com/alxbra/agent-status-tiles/pull/1) | Epic 0 application foundation | 1 completed CLI pass after 1 failed transport attempt; 5 findings, 1 valid fixed, 4 rejected | 2 | 5 unit tests, 2 native Electron E2E tests, format/lint/type/build checks, and unsigned arm64 packaging; [CI run 34971932124](https://github.com/alxbra/agent-status-tiles/actions/runs/34971932124) | `4593ee4346272ac1db24510adb821b79fc1d940e` |
+| [#2 `feat: add bounded native hook helper`](https://github.com/alxbra/agent-status-tiles/pull/2) | Bounded Claude hook-helper foundation | 1 completed CLI pass; 2 valid findings fixed | 2 | 11 native helper tests, 5 app unit tests, 2 Electron E2E tests, format/lint/type/build checks; [CI run 34972446167](https://github.com/alxbra/agent-status-tiles/actions/runs/34972446167), [CI run 34972446325](https://github.com/alxbra/agent-status-tiles/actions/runs/34972446325) | `b536b6c4a6246e6e31650304ea10c94b1f87963f` |
+| [#3 `feat: add deterministic session state`](https://github.com/alxbra/agent-status-tiles/pull/3) | Pure session types, reducer, selectors, lifecycle, and provider-health behavior | 1 completed CLI pass; 0 findings | 2 | 18 unit tests, 2 Electron E2E tests, format/lint/type/build checks; [CI run 34973408658](https://github.com/alxbra/agent-status-tiles/actions/runs/34973408658) | `33657030eff342466aa9bb8f4ffc001bce8212d4` |
+
+Foundation review corrections included strict IPC sender/frame validation, same-host renderer navigation checks, supported Node engine ranges, formatter coverage, and recovery after a failed settings-window load. No signing or notarization was claimed; Apple Developer credentials remain a release dependency.
+
+Hook helper PR #2 merged into `staging` at `b536b6c4a6246e6e31650304ea10c94b1f87963f`. Its CodeRabbit and QA corrections were partial-tail recovery, safe lock-path handling, canonical payload fields, private paths, bounded subprocess tests, and a monotonic 500 ms lock deadline. Helper packaging, app replay, hook installation, and the full Claude epic remain incomplete.
+
+Session-state PR #3 merged into `staging` at `33657030eff342466aa9bb8f4ffc001bce8212d4`. It completed one CodeRabbit CLI pass with zero findings and two root QA passes, including fixes for out-of-order waits, health overlays, safe identifier lookup, bounded UTF-8 fields, redundant state, and active child/archive filter coverage. The pure reducer, identity, ordering/filter, lifecycle, provider-health, and race-safe acknowledgement tasks above are verified; persistence and real-app replay remain pending.
 
 Record corrections made after review and the commit used for final validation.
 
