@@ -102,6 +102,7 @@ function rendererUrl(): string {
 function createOverlayWindow(
   display: Display,
   onClosed: (window: BrowserWindow) => void,
+  onRendererInvalidated: (window: BrowserWindow) => void,
   onPointerInput: (inputEvent: InputEvent) => void,
 ): BrowserWindow {
   const allowedUrl = rendererUrl();
@@ -136,6 +137,7 @@ function createOverlayWindow(
   window.setIgnoreMouseEvents(true, { forward: true });
 
   protectWebContents(window, allowedUrl);
+  window.webContents.on('did-start-loading', () => onRendererInvalidated(window));
   window.webContents.on('input-event', (_event, inputEvent) => onPointerInput(inputEvent));
   window.on('closed', () => onClosed(window));
 
@@ -165,6 +167,7 @@ export function createOverlayController(options: OverlayControllerOptions = {}):
   let hasQualifyingSessions = false;
   let keyboardMode = false;
   let keyboardEntryNotified = false;
+  let keyboardWindowActivated = false;
   let rendererReady = false;
   let preferredDisplayId = options.preferredDisplayId ?? PRIMARY_DISPLAY_ID;
   let hitRegions: readonly OverlayHitRegion[] = [];
@@ -181,6 +184,7 @@ export function createOverlayController(options: OverlayControllerOptions = {}):
     const window = createOverlayWindow(
       selectPreferredDisplay(preferredDisplayId, connectedDisplays(), screen.getPrimaryDisplay()),
       onClosed,
+      onRendererInvalidated,
       onPointerInput,
     );
     overlayWindow = window;
@@ -224,6 +228,7 @@ export function createOverlayController(options: OverlayControllerOptions = {}):
           app.focus({ steal: true });
           overlayWindow.focus();
           overlayWindow.webContents.focus();
+          keyboardWindowActivated = true;
           if (rendererReady) {
             keyboardEntryNotified = options.onKeyboardEntry?.() ?? false;
           }
@@ -278,6 +283,30 @@ export function createOverlayController(options: OverlayControllerOptions = {}):
     );
   };
 
+  const leaveKeyboardMode = (): boolean => {
+    const shouldDeactivate = keyboardWindowActivated;
+    keyboardMode = false;
+    keyboardEntryNotified = false;
+    keyboardWindowActivated = false;
+    if (overlayWindow && !overlayWindow.isDestroyed()) {
+      overlayWindow.blur();
+      overlayWindow.setFocusable(false);
+    }
+    return shouldDeactivate;
+  };
+
+  const restorePreviousApplication = (
+    shouldDeactivate: boolean,
+    keepOverlayVisible: boolean,
+  ): void => {
+    if (!shouldDeactivate || process.platform !== 'darwin') return;
+    app.hide();
+    app.show();
+    if (keepOverlayVisible && overlayWindow && !overlayWindow.isDestroyed()) {
+      overlayWindow.showInactive();
+    }
+  };
+
   const onPointerInput = (inputEvent: InputEvent): void => {
     if (!overlayWindow || overlayWindow.isDestroyed()) {
       return;
@@ -303,11 +332,20 @@ export function createOverlayController(options: OverlayControllerOptions = {}):
 
   const onClosed = (window: BrowserWindow): void => {
     if (overlayWindow === window) {
+      const shouldDeactivate = isDestroyed ? false : leaveKeyboardMode();
       overlayWindow = null;
       readyToShow = false;
+      rendererReady = false;
       ignoringMouseEvents = true;
       hitRegions = [];
+      restorePreviousApplication(shouldDeactivate, false);
     }
+  };
+
+  const onRendererInvalidated = (window: BrowserWindow): void => {
+    if (overlayWindow !== window) return;
+    rendererReady = false;
+    keyboardEntryNotified = false;
   };
 
   createWindow();
@@ -333,24 +371,14 @@ export function createOverlayController(options: OverlayControllerOptions = {}):
       syncVisibility();
     },
     exitKeyboardMode: () => {
-      const wasInKeyboardMode = keyboardMode;
-      keyboardMode = false;
-      keyboardEntryNotified = false;
-      if (overlayWindow && !overlayWindow.isDestroyed()) {
-        overlayWindow.blur();
-        overlayWindow.setFocusable(false);
-      }
+      const shouldDeactivate = leaveKeyboardMode();
       syncVisibility();
       reapplyMousePassthrough();
-      if (wasInKeyboardMode && process.platform === 'darwin') {
-        app.hide();
-        app.show();
-        if (overlayWindow?.isVisible()) overlayWindow.showInactive();
-      }
+      restorePreviousApplication(shouldDeactivate, overlayWindow?.isVisible() ?? false);
     },
     setRendererReady: () => {
+      if (rendererReady) return;
       rendererReady = true;
-      keyboardEntryNotified = false;
       syncVisibility();
     },
     setPreferredDisplayId: (displayId) => {
@@ -359,32 +387,26 @@ export function createOverlayController(options: OverlayControllerOptions = {}):
     },
     setQualifyingSessionCount: (count) => {
       hasQualifyingSessions = Number.isFinite(count) && count > 0;
+      let shouldDeactivate = false;
       if (hasQualifyingSessions) {
         createWindow();
       } else {
-        keyboardMode = false;
-        keyboardEntryNotified = false;
-        if (overlayWindow && !overlayWindow.isDestroyed()) {
-          overlayWindow.blur();
-          overlayWindow.setFocusable(false);
-        }
+        shouldDeactivate = leaveKeyboardMode();
       }
       syncVisibility();
       if (!hasQualifyingSessions) reapplyMousePassthrough();
+      restorePreviousApplication(shouldDeactivate, false);
     },
     setVisible: (visible) => {
+      const shouldDeactivate = visible ? false : leaveKeyboardMode();
       if (!visible) {
-        keyboardMode = false;
         keyboardEntryNotified = false;
-        if (overlayWindow && !overlayWindow.isDestroyed()) {
-          overlayWindow.blur();
-          overlayWindow.setFocusable(false);
-        }
       }
       requestedVisible = visible;
       if (requestedVisible) createWindow();
       syncVisibility();
       if (!visible) reapplyMousePassthrough();
+      restorePreviousApplication(shouldDeactivate, false);
     },
     setHitRegions: (regions) => {
       if (isDestroyed || !overlayWindow || overlayWindow.isDestroyed()) {
@@ -403,6 +425,8 @@ export function createOverlayController(options: OverlayControllerOptions = {}):
     destroy: () => {
       if (isDestroyed) return;
       isDestroyed = true;
+      keyboardMode = false;
+      keyboardWindowActivated = false;
       screen.off('display-metrics-changed', reposition);
       screen.off('display-added', reposition);
       screen.off('display-removed', reposition);

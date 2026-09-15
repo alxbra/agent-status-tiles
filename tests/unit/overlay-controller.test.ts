@@ -32,6 +32,8 @@ type OverlayWindowMock = {
   showInactive: ReturnType<typeof vi.fn>;
   show: ReturnType<typeof vi.fn>;
   readyListener?: () => void;
+  closedListener?: () => void;
+  loadingListener?: () => void;
   pointerListener?: (inputEvent: PointerEvent) => void;
   webContents: {
     focus: ReturnType<typeof vi.fn>;
@@ -94,6 +96,9 @@ function createOverlayWindowMock(
     webContents: {
       focus: vi.fn(),
       on: vi.fn((event: string, callback: unknown) => {
+        if (event === 'did-start-loading') {
+          mock.loadingListener = callback as () => void;
+        }
         if (event === 'input-event') {
           const inputCallback = callback as (event: unknown, inputEvent: PointerEvent) => void;
           mock.pointerListener = (inputEvent) => inputCallback(undefined, inputEvent);
@@ -111,7 +116,9 @@ function createOverlayWindowMock(
       mock.readyListener = callback as () => void;
     }
   });
-  const on = vi.fn();
+  const on = vi.fn((event: string, callback: unknown) => {
+    if (event === 'closed') mock.closedListener = callback as () => void;
+  });
   Object.assign(mock, { once, on });
   return mock;
 }
@@ -222,6 +229,14 @@ describe('overlay controller', () => {
     expect(overlayWindow.show).toHaveBeenCalledTimes(2);
     expect(overlayWindow.focus).toHaveBeenCalledTimes(2);
     expect(onKeyboardEntry).toHaveBeenCalledTimes(2);
+    controller.setRendererReady();
+    expect(overlayWindow.focus).toHaveBeenCalledTimes(2);
+    expect(onKeyboardEntry).toHaveBeenCalledTimes(2);
+
+    overlayWindow.loadingListener?.();
+    controller.setRendererReady();
+    expect(overlayWindow.focus).toHaveBeenCalledTimes(3);
+    expect(onKeyboardEntry).toHaveBeenCalledTimes(3);
     controller.exitKeyboardMode();
     expect(overlayWindow.blur).toHaveBeenCalledOnce();
     expect(overlayWindow.setFocusable).toHaveBeenLastCalledWith(false);
@@ -255,6 +270,10 @@ describe('overlay controller', () => {
     controller.setQualifyingSessionCount(0);
     expect(overlayWindow.hide).toHaveBeenCalledOnce();
     expect(overlayWindow.isFocusable()).toBe(false);
+    expect(electronMocks.app.hide).toHaveBeenCalledOnce();
+    expect(electronMocks.app.show).toHaveBeenCalledOnce();
+    controller.setQualifyingSessionCount(1);
+    expect(overlayWindow.focus).toHaveBeenCalledTimes(2);
     controller.destroy();
   });
 
@@ -292,6 +311,44 @@ describe('overlay controller', () => {
     expect(overlayWindow.setFocusable).toHaveBeenLastCalledWith(false);
     expect(overlayWindow.hide).toHaveBeenCalledOnce();
     expect(overlayWindow.setIgnoreMouseEvents).toHaveBeenLastCalledWith(true, { forward: true });
+    expect(electronMocks.app.hide).toHaveBeenCalledOnce();
+    expect(electronMocks.app.show).toHaveBeenCalledOnce();
+    controller.destroy();
+  });
+
+  it('tears down keyboard mode when the native window closes before recreation', async () => {
+    const firstWindow = createOverlayWindowMock();
+    const secondWindow = createOverlayWindowMock();
+    electronMocks.BrowserWindow.mockImplementationOnce(
+      class BrowserWindowMock {
+        constructor() {
+          return firstWindow;
+        }
+      } as unknown as typeof electronMocks.BrowserWindow,
+    ).mockImplementationOnce(
+      class BrowserWindowMock {
+        constructor() {
+          return secondWindow;
+        }
+      } as unknown as typeof electronMocks.BrowserWindow,
+    );
+    const { createOverlayController } = await import('../../src/main/overlay-controller');
+    const controller = createOverlayController({ onKeyboardEntry: () => true });
+
+    controller.setRendererReady();
+    firstWindow.readyListener?.();
+    controller.setQualifyingSessionCount(1);
+    controller.enterKeyboardMode();
+    firstWindow.closedListener?.();
+
+    expect(controller.getWindow()).toBeNull();
+    expect(electronMocks.app.hide).toHaveBeenCalledOnce();
+    expect(electronMocks.app.show).toHaveBeenCalledOnce();
+    controller.setQualifyingSessionCount(1);
+    secondWindow.readyListener?.();
+    expect(secondWindow.showInactive).toHaveBeenCalledOnce();
+    expect(secondWindow.show).not.toHaveBeenCalled();
+    expect(secondWindow.focus).not.toHaveBeenCalled();
     controller.destroy();
   });
 

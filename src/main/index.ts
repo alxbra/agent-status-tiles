@@ -167,10 +167,7 @@ if (!hasSingleInstanceLock) {
     });
     menuBar = createMenuBar({
       showOverlay: () => overlayController?.enterKeyboardMode(),
-      hideOverlay: () => {
-        overlayController?.exitKeyboardMode();
-        overlayController?.setVisible(false);
-      },
+      hideOverlay: () => overlayController?.setVisible(false),
       openSettings: openSettingsWindow,
       quit: () => app.quit(),
     });
