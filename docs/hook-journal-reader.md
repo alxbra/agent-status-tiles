@@ -35,9 +35,11 @@ records, 128 diagnostics, and 16 KiB per read operation. When the byte or
 record budget pauses work with unread complete records remaining, the result
 includes `nextTargetIndex`; callers pass that index back as `startTargetIndex`
 with the returned cursors. A full cursor map produces `cursor-limit` for a new
-source without consuming it. An unterminated tail at EOF is checkpointed but
-does not request an immediate retry, so other targets are still covered; the
-next ordinary poll revisits it. A record limit that stops before the file's
+source without consuming it. An unterminated active tail at EOF is checkpointed
+but does not request an immediate retry, so other targets are still covered;
+the next ordinary poll revisits it. Archived files are immutable after helper
+rotation, so an unterminated archived tail is diagnosed and dropped while
+newer retained files continue. A record limit that stops before the file's
 unread complete records does request continuation. Persistent snapshot
 instability or a read failure likewise reports a fixed diagnostic without
 creating a busy continuation loop.

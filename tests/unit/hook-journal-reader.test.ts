@@ -319,6 +319,45 @@ describe('HookJournalReader', () => {
     expect(completed.nextTargetIndex).toBeUndefined();
   });
 
+  it('does not let unfinished archived tails starve newer journal files', async () => {
+    const partialRoot = await isolatedJournalRoot();
+    const partialTarget = target('archived-partial');
+    await writeFile(
+      archivePath(partialRoot, partialTarget, 1),
+      record({ event_name: 'SessionStart' }, 'archived-partial').trimEnd(),
+    );
+    await writeFile(
+      activePath(partialRoot, partialTarget),
+      record({ event_name: 'Stop' }, 'archived-partial'),
+    );
+
+    const partialResult = await new HookJournalReader({ appDataPath: partialRoot }).read([
+      partialTarget,
+    ]);
+    expect(partialResult.events.map((event) => event.eventName)).toEqual(['Stop']);
+    expect(partialResult.diagnostics.map((diagnostic) => diagnostic.code)).toContain(
+      'record-malformed',
+    );
+    expect(partialResult.nextTargetIndex).toBeUndefined();
+
+    const oversizedRoot = await isolatedJournalRoot();
+    const oversizedTarget = target('archived-oversized');
+    await writeFile(archivePath(oversizedRoot, oversizedTarget, 1), 'x'.repeat(MAX_RECORD_BYTES));
+    await writeFile(
+      activePath(oversizedRoot, oversizedTarget),
+      record({ event_name: 'Stop' }, 'archived-oversized'),
+    );
+
+    const oversizedResult = await new HookJournalReader({ appDataPath: oversizedRoot }).read([
+      oversizedTarget,
+    ]);
+    expect(oversizedResult.events.map((event) => event.eventName)).toEqual(['Stop']);
+    expect(oversizedResult.diagnostics.map((diagnostic) => diagnostic.code)).toContain(
+      'record-oversized',
+    );
+    expect(oversizedResult.nextTargetIndex).toBeUndefined();
+  });
+
   it('carries shared cursor watermarks and oversized-line continuation state', async () => {
     const root = await isolatedJournalRoot();
     const journalTarget = target();

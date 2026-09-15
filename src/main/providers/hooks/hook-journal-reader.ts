@@ -139,6 +139,10 @@ interface SourceSnapshot {
   handle: Awaited<ReturnType<typeof open>>;
 }
 
+function isActiveSnapshot(snapshot: SourceSnapshot): boolean {
+  return snapshot.path.endsWith('.jsonl');
+}
+
 type SnapshotSlotState = 'missing' | 'regular' | 'non-regular' | 'error';
 
 interface SnapshotSlotObservation {
@@ -564,7 +568,7 @@ export class HookJournalReader {
         if (
           consumed.hasMore ||
           consumed.recordLimitReached ||
-          consumed.hasPendingTail ||
+          (consumed.hasPendingTail && isActiveSnapshot(snapshot)) ||
           bytesRead >= byteBudget ||
           index + 1 >= snapshots.length
         ) {
@@ -734,7 +738,8 @@ export class HookJournalReader {
     byteBudget: number,
   ): Promise<ConsumedFile> {
     let offset = requestedOffset;
-    let discarding = previous?.isDiscardingOversizedLine ?? false;
+    const isActive = isActiveSnapshot(snapshot);
+    let discarding = isActive ? (previous?.isDiscardingOversizedLine ?? false) : false;
     if (offset > snapshot.size) {
       addDiagnostic(diagnostics, 'cursor-truncated', target);
       offset = 0;
@@ -762,7 +767,17 @@ export class HookJournalReader {
       const newline = bytes.indexOf(0x0a, index);
       if (newline < 0) {
         const partialLength = bytes.length - index;
-        if (discarding || partialLength + 1 > MAX_RECORD_BYTES) {
+        if (!isActive) {
+          addDiagnostic(
+            diagnostics,
+            discarding || partialLength + 1 > MAX_RECORD_BYTES
+              ? 'record-oversized'
+              : 'record-malformed',
+            target,
+          );
+          discarding = false;
+          cursorOffset = offset + bytes.length;
+        } else if (discarding || partialLength + 1 > MAX_RECORD_BYTES) {
           if (!discarding) addDiagnostic(diagnostics, 'record-oversized', target);
           discarding = true;
           cursorOffset = offset + bytes.length;
