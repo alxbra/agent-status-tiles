@@ -1,7 +1,7 @@
 # Agent Status Tiles — MVP Implementation Plan
 
 **Document:** `MVP_PLAN.md` in the project root.  
-**Document status:** Implementation in progress; repository bootstrap, the Epic 0 application foundation, session state/persistence, and the bounded Codex rollout reader are merged. The Codex catalog (PR #7), rounded-square tile renderer (PR #8), and unsigned helper packaging (PR #9) are implementation-complete on open branches awaiting review and merge. Native integration, live provider wiring, and later release gates remain pending.
+**Document status:** Implementation in progress; repository bootstrap, the Epic 0 application foundation, session state/persistence, the bounded Codex rollout reader, and the Codex catalog (PR #7) are merged. The rounded-square tile renderer (PR #8) and unsigned helper packaging (PR #9) are implementation-complete on open branches awaiting review and merge. Native integration, live provider wiring, and later release gates remain pending.
 **Repository:** [alxbra/agent-status-tiles](https://github.com/alxbra/agent-status-tiles)
 
 ## 1. Product and release target
@@ -470,14 +470,18 @@ remain pending, so the acceptance tasks below remain unchecked.
 **PRs:** `feat/codex-observation`, `feat/codex-hook-setup`.
 
 Implementation progress (not an acceptance checkoff): PR #6’s bounded rollout
-reader and synthetic/source-derived fixtures are merged; PR #7’s read-only
-catalog client is complete on its open branch with 79 unit tests, 3 Electron smoke tests, and
-passing [CI run 34981325184](https://github.com/alxbra/agent-status-tiles/actions/runs/34981325184).
-PR #7 review and merge are pending. The live catalog-to-reader qualifier,
-Desktop/CLI surface mapping, and provider wiring remain pending.
+reader and synthetic/source-derived fixtures are merged. PR #7’s read-only
+catalog client is merged into `staging` at `419322edcfd277730acd0fef669c26479352c443`
+from final feature head `57452a3`, with 83 unit tests, 3 Electron smoke tests,
+format/lint/type/build checks, and green [CI run 34986281698](https://github.com/alxbra/agent-status-tiles/actions/runs/34986281698).
+It completed one CodeRabbit pass with two valid findings fixed and two root QA
+passes; see the [audit comment](https://github.com/alxbra/agent-status-tiles/pull/7#issuecomment-5682690186).
+The live catalog-to-reader qualifier, Desktop/CLI surface mapping, and provider
+wiring remain pending.
 
 - [x] Implement the bounded incremental Codex rollout reader (merged PR #6).
-- [ ] Integrate the reader with the Codex catalog and qualify live Desktop/CLI sessions (PR #7 review/merge pending).
+- [x] Implement the bounded read-only Codex app-server catalog client (merged PR #7; formal QA1 and QA2 complete).
+- [ ] Integrate the reader with the Codex catalog and qualify live Desktop/CLI sessions (live wiring remains pending).
 - [x] Retain attribution and avoid coupling to its Stream Deck runtime (verified by merged PR #6).
 - [ ] Recognize both Desktop and CLI sessions.
 - [x] Extract only required metadata in the bounded rollout reader (merged PR #6); catalog qualification and live surface mapping remain pending.
@@ -582,8 +586,8 @@ Maintain this table in the plan:
 | [#4 `feat: add desktop shell and menu bar`](https://github.com/alxbra/agent-status-tiles/pull/4) | Epic 1 shell window, menu-bar lifecycle, default placement, and visibility scaffolding | 1 completed CLI pass; 1 invalid finding rejected | 2 | 23 unit tests, 3 Electron E2E tests, format/lint/type/build checks; [CI run 34978000636](https://github.com/alxbra/agent-status-tiles/actions/runs/34978000636) | `a454bf22a8c9521eeefb9db87845fd438d44e7c9` |
 | [#5 `feat: add atomic session persistence`](https://github.com/alxbra/agent-status-tiles/pull/5) | Atomic persisted session state and restart-safe status refresh | 1 completed CLI pass; 0 findings | 2 | 33 unit tests, 3 Electron E2E tests, format/lint/type/build checks; [CI run 34978274333](https://github.com/alxbra/agent-status-tiles/actions/runs/34978274333) | `5deb6aeb1f6dee9a5d0ab44e038102b3efb6c6fd` |
 | [#6 `feat: add bounded Codex rollout reader`](https://github.com/alxbra/agent-status-tiles/pull/6) | Codex rollout reader with bounded, causal event normalization, synthetic/source-derived fixtures, and a metadata-only installed-format check | 1 completed CLI pass; 1 valid finding fixed | 2 | 62 unit tests, 3 Electron E2E tests, format/lint/type/build checks; [CI run 34980907374](https://github.com/alxbra/agent-status-tiles/actions/runs/34980907374); [audit comment](https://github.com/alxbra/agent-status-tiles/pull/6#issuecomment-5681842281) | `3f7fa776065ca6aaf6942c1c06dd6c7e8894ab68` |
-| [#7 `feat/codex catalog`](https://github.com/alxbra/agent-status-tiles/pull/7) | Read-only Codex app-server catalog client with bounded metadata projection | Pending; no CodeRabbit pass claimed | Pending | Implementation complete; review/merge pending. 79 unit tests, 3 Electron smoke tests, format/lint/type/build checks; [CI run 34981325184](https://github.com/alxbra/agent-status-tiles/actions/runs/34981325184) | Open; no merge SHA |
-| [#8 `feat: add rounded-square status tile UI`](https://github.com/alxbra/agent-status-tiles/pull/8) | Isolated rounded-square tile renderer, magnification, overflow, keyboard interaction, and visual fixtures | Pending; no CodeRabbit pass claimed | Pending | Implementation complete; review/merge pending. 72 total unit tests, 3 Electron smoke tests, 17 browser fixture tests; [CI run 34981413118](https://github.com/alxbra/agent-status-tiles/actions/runs/34981413118) | Open; no merge SHA |
+| [#7 `feat/codex catalog`](https://github.com/alxbra/agent-status-tiles/pull/7) | Read-only Codex app-server catalog client with bounded metadata projection | 1 completed CLI pass; 2 valid findings fixed | 2 | 83 unit tests, 3 Electron smoke tests, format/lint/type/build checks; green [CI run 34986281698](https://github.com/alxbra/agent-status-tiles/actions/runs/34986281698); [audit comment](https://github.com/alxbra/agent-status-tiles/pull/7#issuecomment-5682690186) | `419322edcfd277730acd0fef669c26479352c443` |
+| [#8 `feat: add rounded-square status tile UI`](https://github.com/alxbra/agent-status-tiles/pull/8) | Isolated rounded-square tile renderer, magnification, overflow, keyboard interaction, and visual fixtures | 1 completed CLI pass; 1 valid finding fixed | Pending | 72 total unit tests, 3 Electron smoke tests, 17 browser fixture tests; [CI run 34981413118](https://github.com/alxbra/agent-status-tiles/actions/runs/34981413118) | Open; no merge SHA |
 | [#9 `build/helper packaging`](https://github.com/alxbra/agent-status-tiles/pull/9) | Unsigned arm64/x64 packaging for the existing native hook helper | Pending; no CodeRabbit pass claimed | Pending | Implementation complete; review/merge pending. 72 TypeScript unit tests, 11 native helper tests, 3 Electron smoke tests, format/lint/type checks, and unsigned packaging; [CI run 34982354667](https://github.com/alxbra/agent-status-tiles/actions/runs/34982354667), [native run 34982354694](https://github.com/alxbra/agent-status-tiles/actions/runs/34982354694), [package run 34982354691](https://github.com/alxbra/agent-status-tiles/actions/runs/34982354691) | Open; no merge SHA |
 
 Foundation review corrections included strict IPC sender/frame validation, same-host renderer navigation checks, supported Node engine ranges, formatter coverage, and recovery after a failed settings-window load. No signing or notarization was claimed; Apple Developer credentials remain a release dependency.

@@ -18,3 +18,8 @@ handling patterns from `src/codex/rollout-watcher.ts` in that project. The
 adapted work remains Apache-2.0 licensed; the root `LICENSE` contains the
 license text. Stream Deck integration, process execution, and legacy aliases
 were not copied.
+
+The Codex catalog adapter reuses protocol and process-lifecycle concepts from
+[`codex-status-actions`](https://github.com/alxbra/codex-status-actions), which
+is licensed under Apache-2.0. No Stream Deck runtime, UI code, or raw provider
+payload handling is copied into this repository.
