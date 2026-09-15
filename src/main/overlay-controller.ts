@@ -154,10 +154,10 @@ export function createOverlayController(): OverlayController {
   let hasQualifyingSessions = false;
   let hitRegions: readonly OverlayHitRegion[] = [];
   let ignoringMouseEvents = true;
-  let destroyed = false;
+  let isDestroyed = false;
 
   const createWindow = (): void => {
-    if (destroyed || overlayWindow) return;
+    if (isDestroyed || overlayWindow) return;
 
     readyToShow = false;
     ignoringMouseEvents = true;
@@ -165,7 +165,7 @@ export function createOverlayController(): OverlayController {
     const window = createOverlayWindow(screen.getPrimaryDisplay(), onClosed, onPointerInput);
     overlayWindow = window;
     window.once('ready-to-show', () => {
-      if (destroyed || overlayWindow !== window || window.isDestroyed()) return;
+      if (isDestroyed || overlayWindow !== window || window.isDestroyed()) return;
       readyToShow = true;
       syncVisibility();
     });
@@ -283,19 +283,22 @@ export function createOverlayController(): OverlayController {
       syncVisibility();
     },
     setHitRegions: (regions) => {
-      const bounds = overlayWindow?.getBounds();
-      const width = bounds?.width ?? overlayBounds(screen.getPrimaryDisplay().workArea).width;
-      const height = bounds?.height ?? overlayBounds(screen.getPrimaryDisplay().workArea).height;
+      if (isDestroyed || !overlayWindow || overlayWindow.isDestroyed()) {
+        hitRegions = [];
+        return false;
+      }
+
+      const bounds = overlayWindow.getBounds();
       const valid =
         regions.length <= MAX_OVERLAY_HIT_REGIONS &&
-        regions.every((region) => isValidOverlayHitRegion(region, width, height));
+        regions.every((region) => isValidOverlayHitRegion(region, bounds.width, bounds.height));
       hitRegions = valid ? regions.map((region) => ({ ...region })) : [];
       syncMouseMode();
       return valid;
     },
     destroy: () => {
-      if (destroyed) return;
-      destroyed = true;
+      if (isDestroyed) return;
+      isDestroyed = true;
       screen.off('display-metrics-changed', reposition);
       screen.off('display-added', reposition);
       screen.off('display-removed', reposition);

@@ -192,10 +192,22 @@ describe('overlay controller', () => {
 
     controller.setQualifyingSessionCount(1);
     expect(electronMocks.BrowserWindow).toHaveBeenCalledTimes(2);
+    failedWindow.readyListener?.();
+    expect(recoveredWindow.showInactive).not.toHaveBeenCalled();
     recoveredWindow.readyListener?.();
     expect(recoveredWindow.showInactive).toHaveBeenCalledOnce();
 
+    const resume = electronMocks.powerMonitor.on.mock.calls.find(
+      ([event]) => event === 'resume',
+    )?.[1] as (() => void) | undefined;
+    resume?.();
+    expect(recoveredWindow.setBounds).toHaveBeenCalledWith(
+      { x: 1352, y: 222, width: 88, height: 480 },
+      false,
+    );
+
     controller.destroy();
+    expect(electronMocks.powerMonitor.off).toHaveBeenCalledWith('resume', resume);
     controller.setVisible(true);
     controller.setQualifyingSessionCount(1);
     expect(electronMocks.BrowserWindow).toHaveBeenCalledTimes(2);
@@ -245,6 +257,7 @@ describe('overlay controller', () => {
     overlayWindow.pointerListener?.({ type: 'mouseMove', x: 10, y: 90 });
     expect(overlayWindow.setIgnoreMouseEvents).toHaveBeenLastCalledWith(true, { forward: true });
     controller.destroy();
+    expect(controller.setHitRegions([{ x: 10, y: 20, width: 24, height: 24 }])).toBe(false);
   });
 
   it('toggles native passthrough only for bounded hit regions', async () => {

@@ -96,9 +96,17 @@ test('creates a hidden nonactivating overlay in the primary work area', async ()
 
     const shell = await application.evaluate(({ BrowserWindow, app, screen }) => {
       const workArea = screen.getPrimaryDisplay().workArea;
+      const width = Math.max(1, Math.min(88, workArea.width));
+      const height = Math.max(1, Math.min(480, workArea.height));
       return {
         dockVisible: app.dock?.isVisible() ?? false,
         workArea,
+        expectedOverlayBounds: {
+          x: workArea.x + workArea.width - width,
+          y: workArea.y + Math.round((workArea.height - height) / 2),
+          width,
+          height,
+        },
         windows: BrowserWindow.getAllWindows().map((window) => ({
           title: window.getTitle(),
           visible: window.isVisible(),
@@ -120,12 +128,7 @@ test('creates a hidden nonactivating overlay in the primary work area', async ()
       focusable: false,
       alwaysOnTop: true,
       allWorkspaces: true,
-      bounds: {
-        x: shell.workArea.x + shell.workArea.width - 88,
-        y: shell.workArea.y + Math.round((shell.workArea.height - 480) / 2),
-        width: 88,
-        height: 480,
-      },
+      bounds: shell.expectedOverlayBounds,
     });
     expect(overlay?.url).toContain('/out/renderer/overlay.html');
     const overlayPage = application

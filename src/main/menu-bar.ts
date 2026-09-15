@@ -11,7 +11,6 @@ export interface MenuBarActions {
 }
 
 export interface MenuBarController {
-  getTray(): Tray;
   destroy(): void;
 }
 
@@ -38,7 +37,6 @@ export function createMenuBar(actions: MenuBarActions): MenuBarController {
   tray.setContextMenu(Menu.buildFromTemplate(menuTemplate));
 
   return {
-    getTray: () => tray,
     destroy: () => tray.destroy(),
   };
 }
