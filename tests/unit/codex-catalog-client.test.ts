@@ -187,17 +187,6 @@ function createClient(
   });
 }
 
-async function waitForDiagnostic(
-  diagnostics: readonly CodexCatalogDiagnosticCode[],
-  expected: CodexCatalogDiagnosticCode,
-  timeoutMs = 1_000,
-): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
-  while (!diagnostics.includes(expected) && Date.now() < deadline) {
-    await new Promise<void>((resolve) => setTimeout(resolve, 10));
-  }
-}
-
 afterEach(async () => {
   await Promise.all(
     temporaryDirectories
@@ -251,7 +240,7 @@ describe('Codex catalog client', () => {
     expect(diagnostics).toEqual([]);
 
     await client.stop();
-    expect(client.connected).toBe(false);
+    expect(client.isConnected).toBe(false);
   });
 
   it('requests every current bounded source kind for catalog discovery', async () => {
@@ -334,8 +323,7 @@ describe('Codex catalog client', () => {
     const stderrDiagnostics: CodexCatalogDiagnosticCode[] = [];
     const stderr = createClient(await createFakeBinary('stderr'), stderrDiagnostics);
     await stderr.start();
-    await waitForDiagnostic(stderrDiagnostics, 'server-stderr');
-    expect(stderrDiagnostics).toContain('server-stderr');
+    await expect.poll(() => stderrDiagnostics).toContain('server-stderr');
     expect(stderrDiagnostics).not.toContain('PRIVATE_SERVER_ERROR');
     await stderr.stop();
 
@@ -481,7 +469,7 @@ describe('Codex catalog client', () => {
     await expect(firstStart).rejects.toMatchObject({ code: 'stopped' });
     await expect(Promise.all([firstStop, latestStop])).resolves.toEqual([undefined, undefined]);
     await expect(queuedStart).rejects.toMatchObject({ code: 'stopped' });
-    expect(client.connected).toBe(false);
+    expect(client.isConnected).toBe(false);
     expect(
       (client as unknown as { ownedChildren: Set<ChildProcessWithoutNullStreams> }).ownedChildren
         .size,
@@ -490,7 +478,7 @@ describe('Codex catalog client', () => {
     const restart = client.start();
     const concurrentRestart = client.start();
     await Promise.all([restart, concurrentRestart]);
-    expect(client.connected).toBe(true);
+    expect(client.isConnected).toBe(true);
     await client.stop();
     expect(
       (client as unknown as { ownedChildren: Set<ChildProcessWithoutNullStreams> }).ownedChildren
@@ -504,7 +492,7 @@ describe('Codex catalog client', () => {
     const start = client.start();
     await client.stop();
     await expect(start).rejects.toMatchObject({ code: 'stopped' });
-    expect(client.connected).toBe(false);
+    expect(client.isConnected).toBe(false);
 
     const exitDiagnostics: CodexCatalogDiagnosticCode[] = [];
     const exiting = createClient(await createFakeBinary('exit'), exitDiagnostics, 1_000);
@@ -512,7 +500,7 @@ describe('Codex catalog client', () => {
     await expect(exiting.listThreads()).rejects.toMatchObject({ code: 'disconnected' });
     expect(exitDiagnostics).toContain('disconnected');
     await exiting.start();
-    expect(exiting.connected).toBe(true);
+    expect(exiting.isConnected).toBe(true);
     await exiting.stop();
   });
 
@@ -532,7 +520,7 @@ describe('Codex catalog client', () => {
     await client.start();
 
     expect(child.exitCode !== null || child.signalCode !== null).toBe(true);
-    expect(client.connected).toBe(true);
+    expect(client.isConnected).toBe(true);
     expect(diagnostics).toContain('disconnected');
     expect(JSON.stringify(diagnostics)).not.toContain('PRIVATE_');
     await client.stop();
@@ -548,7 +536,7 @@ describe('Codex catalog client', () => {
     await client.stop();
 
     expect(child.exitCode !== null || child.signalCode !== null).toBe(true);
-    expect(client.connected).toBe(false);
+    expect(client.isConnected).toBe(false);
     expect(diagnostics).not.toContain('termination-failed');
   });
 
@@ -563,7 +551,7 @@ describe('Codex catalog client', () => {
       code: 'invalid-options',
     });
     expect(diagnostics).toEqual(['invalid-options']);
-    expect(client.connected).toBe(false);
+    expect(client.isConnected).toBe(false);
     expect(
       (client as unknown as { ownedChildren: Set<ChildProcessWithoutNullStreams> }).ownedChildren
         .size,

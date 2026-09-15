@@ -359,12 +359,12 @@ export class CodexCatalogClient {
   private stopping: Promise<void> | undefined;
   private readonly ownedChildren = new Set<ChildProcessWithoutNullStreams>();
   private readonly terminations = new Map<ChildProcessWithoutNullStreams, Promise<void>>();
-  private stopped = true;
+  private isStopped = true;
   private stopGeneration = 0;
   private nextRequestId = 1;
   private readonly pending = new Map<number, PendingRequest>();
   private lineBuffer = Buffer.alloc(0);
-  private discardingOversizedLine = false;
+  private isDiscardingOversizedLine = false;
 
   constructor(private readonly options: CodexCatalogClientOptions) {
     if (!isAbsolute(options.binaryPath) || !safeString(options.binaryPath, MAX_PATH_BYTES)) {
@@ -384,13 +384,13 @@ export class CodexCatalogClient {
     }
   }
 
-  get connected(): boolean {
+  get isConnected(): boolean {
     return Boolean(
       this.child &&
       this.readyChild === this.child &&
       this.child.exitCode === null &&
       this.child.signalCode === null &&
-      !this.stopped,
+      !this.isStopped,
     );
   }
 
@@ -401,13 +401,13 @@ export class CodexCatalogClient {
     if (requestedStopGeneration !== this.stopGeneration) {
       throw new CodexCatalogError('stopped');
     }
-    if (this.connected) return;
+    if (this.isConnected) return;
     if (this.starting) return this.starting;
     if (this.ownedChildren.size > 0) {
       this.report('termination-failed');
       throw new CodexCatalogError('termination-failed');
     }
-    this.stopped = false;
+    this.isStopped = false;
     const starting = this.startProcess().finally(() => {
       if (this.starting === starting) this.starting = undefined;
     });
@@ -418,7 +418,7 @@ export class CodexCatalogClient {
   async stop(): Promise<void> {
     this.stopGeneration += 1;
     if (this.stopping) return this.stopping;
-    this.stopped = true;
+    this.isStopped = true;
     this.child = undefined;
     this.readyChild = undefined;
     this.rejectPending('stopped');
@@ -506,7 +506,7 @@ export class CodexCatalogClient {
 
   private async startProcess(): Promise<void> {
     this.lineBuffer = Buffer.alloc(0);
-    this.discardingOversizedLine = false;
+    this.isDiscardingOversizedLine = false;
     const env = {
       ...process.env,
       ...(this.options.codexHome === undefined ? {} : { CODEX_HOME: this.options.codexHome }),
@@ -522,7 +522,7 @@ export class CodexCatalogClient {
       throw new CodexCatalogError('spawn-failed');
     }
     this.ownedChildren.add(child);
-    if (this.stopped) {
+    if (this.isStopped) {
       await this.terminateOwned(child);
       throw new CodexCatalogError('stopped');
     }
@@ -573,14 +573,14 @@ export class CodexCatalogClient {
           optOutNotificationMethods: [],
         },
       });
-      if (this.stopped) throw new CodexCatalogError('stopped');
+      if (this.isStopped) throw new CodexCatalogError('stopped');
       if (this.child !== child) throw new CodexCatalogError('disconnected');
       if (!isRecord(initializeResult)) {
         this.report('protocol-malformed');
         throw new CodexCatalogError('protocol-malformed');
       }
       this.notify(child, 'initialized', {});
-      if (this.stopped) throw new CodexCatalogError('stopped');
+      if (this.isStopped) throw new CodexCatalogError('stopped');
       if (this.child !== child) throw new CodexCatalogError('disconnected');
       this.readyChild = child;
     } catch (error) {
@@ -599,7 +599,7 @@ export class CodexCatalogClient {
     method: string,
     params: unknown,
   ): Promise<unknown> {
-    if (this.stopped) {
+    if (this.isStopped) {
       return Promise.reject(new CodexCatalogError('stopped'));
     }
     if (this.child !== child) return Promise.reject(new CodexCatalogError('disconnected'));
@@ -640,7 +640,7 @@ export class CodexCatalogClient {
   }
 
   private notify(child: ChildProcessWithoutNullStreams, method: string, params: unknown): void {
-    if (this.child !== child || this.stopped) return;
+    if (this.child !== child || this.isStopped) return;
     const payload = `${JSON.stringify({ method, params })}\n`;
     if (Buffer.byteLength(payload, 'utf8') > MAX_PROTOCOL_LINE_BYTES) {
       this.report('protocol-oversized');
@@ -663,16 +663,16 @@ export class CodexCatalogClient {
       const newline = chunk.indexOf(0x0a, start);
       const end = newline === -1 ? chunk.length : newline;
       const segment = chunk.subarray(start, end);
-      if (this.discardingOversizedLine) {
+      if (this.isDiscardingOversizedLine) {
         if (newline === -1) return;
-        this.discardingOversizedLine = false;
+        this.isDiscardingOversizedLine = false;
         start = newline + 1;
         continue;
       }
       if (this.lineBuffer.length + segment.length > MAX_PROTOCOL_LINE_BYTES) {
         this.lineBuffer = Buffer.alloc(0);
         this.report('protocol-oversized');
-        if (newline === -1) this.discardingOversizedLine = true;
+        if (newline === -1) this.isDiscardingOversizedLine = true;
       } else {
         if (segment.length > 0) {
           this.lineBuffer = Buffer.concat([this.lineBuffer, segment]);
@@ -729,9 +729,9 @@ export class CodexCatalogClient {
     this.readyChild = undefined;
     this.rejectPending(code);
     this.report(code);
-    const neverSpawned =
+    const hasNeverSpawned =
       child.pid === undefined && child.exitCode === null && child.signalCode === null;
-    if (neverSpawned) {
+    if (hasNeverSpawned) {
       this.ownedChildren.delete(child);
       return;
     }
@@ -803,13 +803,13 @@ export class CodexCatalogClient {
     if (child.exitCode !== null || child.signalCode !== null) return Promise.resolve(true);
     if (timeoutMs === 0) return Promise.resolve(false);
     return new Promise((resolve) => {
-      let settled = false;
-      const finish = (exited: boolean) => {
-        if (settled) return;
-        settled = true;
+      let isSettled = false;
+      const finish = (hasExited: boolean) => {
+        if (isSettled) return;
+        isSettled = true;
         clearTimeout(timer);
         child.removeListener('exit', onExit);
-        resolve(exited || child.exitCode !== null || child.signalCode !== null);
+        resolve(hasExited || child.exitCode !== null || child.signalCode !== null);
       };
       const onExit = () => finish(true);
       const timer = setTimeout(() => finish(false), timeoutMs);
