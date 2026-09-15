@@ -202,7 +202,40 @@ describe('HookJournalReader', () => {
       expect(result.events).toEqual([]);
       expect(result.cursors).toEqual({});
       expect(result.diagnostics.map((diagnostic) => diagnostic.code)).toEqual(['source-unstable']);
-      expect(result.nextTargetIndex).toBe(0);
+      expect(result.nextTargetIndex).toBeUndefined();
+    } finally {
+      journalOpenHook.current = undefined;
+    }
+  });
+
+  it('retries when a previously missing archive appears during collection', async () => {
+    const root = await isolatedJournalRoot();
+    const journalTarget = target('missing-slot-rotation');
+    const active = activePath(root, journalTarget);
+    const archivedOne = archivePath(root, journalTarget, 1);
+    await writeFile(active, record({ event_name: 'SessionStart' }, 'missing-slot-rotation'));
+
+    let rotated = false;
+    journalOpenHook.current = async (path) => {
+      if (rotated || path !== active) return;
+      rotated = true;
+      await rename(active, archivedOne);
+      await writeFile(
+        active,
+        record(
+          { event_name: 'Notification', notification_type: 'idle_prompt' },
+          'missing-slot-rotation',
+        ),
+      );
+    };
+    try {
+      const result = await new HookJournalReader({ appDataPath: root }).read([journalTarget]);
+      expect(rotated).toBe(true);
+      expect(result.diagnostics).toEqual([]);
+      expect(result.events.map((event) => event.eventName)).toEqual([
+        'SessionStart',
+        'Notification',
+      ]);
     } finally {
       journalOpenHook.current = undefined;
     }
@@ -236,6 +269,54 @@ describe('HookJournalReader', () => {
     expect(completed.events).toHaveLength(1);
     expect(completed.events[0]?.eventName).toBe('Notification');
     expect(completed.events[0]?.notificationType).toBe('idle_prompt');
+  });
+
+  it('finishes partial and oversized targets so healthy later targets are covered', async () => {
+    const root = await isolatedJournalRoot();
+    const partialTarget = target('partial-first');
+    const oversizedTarget = target('oversized-second');
+    const healthyTarget = target('healthy-third');
+    const partialLine = record({ event_name: 'SessionStart' }, 'partial-first').trimEnd();
+    const oversizedLine = 'x'.repeat(MAX_RECORD_BYTES);
+    await writeFile(activePath(root, partialTarget), partialLine);
+    await writeFile(activePath(root, oversizedTarget), oversizedLine);
+    await writeFile(
+      activePath(root, healthyTarget),
+      record({ event_name: 'SessionStart' }, 'healthy-third'),
+    );
+
+    const reader = new HookJournalReader({ appDataPath: root });
+    const first = await reader.read([partialTarget, oversizedTarget, healthyTarget]);
+    expect(first.events).toHaveLength(1);
+    expect(first.events[0]?.sessionId).toBe('healthy-third');
+    expect(first.nextTargetIndex).toBeUndefined();
+    expect(cursorFor(partialTarget, first.cursors)?.offset).toBe(0);
+    expect(cursorFor(oversizedTarget, first.cursors)).toMatchObject({
+      offset: Buffer.byteLength(oversizedLine),
+      isDiscardingOversizedLine: true,
+    });
+
+    const restarted = await new HookJournalReader({ appDataPath: root }).read(
+      [partialTarget, oversizedTarget, healthyTarget],
+      first.cursors,
+    );
+    expect(restarted.events).toEqual([]);
+    expect(restarted.nextTargetIndex).toBeUndefined();
+
+    await appendFile(activePath(root, partialTarget), '\n');
+    await appendFile(
+      activePath(root, oversizedTarget),
+      `\n${record({ event_name: 'Stop' }, 'oversized-second')}`,
+    );
+    const completed = await new HookJournalReader({ appDataPath: root }).read(
+      [partialTarget, oversizedTarget, healthyTarget],
+      restarted.cursors,
+    );
+    expect(completed.events.map((event) => event.sessionId)).toEqual([
+      'partial-first',
+      'oversized-second',
+    ]);
+    expect(completed.nextTargetIndex).toBeUndefined();
   });
 
   it('carries shared cursor watermarks and oversized-line continuation state', async () => {

@@ -139,6 +139,16 @@ interface SourceSnapshot {
   handle: Awaited<ReturnType<typeof open>>;
 }
 
+type SnapshotSlotState = 'missing' | 'regular' | 'non-regular' | 'error';
+
+interface SnapshotSlotObservation {
+  path: string;
+  state: SnapshotSlotState;
+  errorCode?: string;
+  identity?: string;
+  snapshot?: SourceSnapshot;
+}
+
 interface MutableDiagnostics {
   values: HookJournalDiagnostic[];
   truncated: boolean;
@@ -151,6 +161,7 @@ interface ConsumedFile {
   byteLimitReached: boolean;
   recordLimitReached: boolean;
   hasMore: boolean;
+  hasPendingTail: boolean;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -478,6 +489,7 @@ export class HookJournalReader {
     let snapshots: SourceSnapshot[] = [];
     let stable = false;
     for (let attempt = 0; attempt < MAX_SNAPSHOT_ATTEMPTS; attempt += 1) {
+      const observations: SnapshotSlotObservation[] = [];
       const attemptSnapshots: SourceSnapshot[] = [];
       for (const suffix of JOURNAL_SUFFIXES) {
         const path = join(providerDirectory, `${target.baseName}${suffix}`);
@@ -485,10 +497,13 @@ export class HookJournalReader {
           addDiagnostic(diagnostics, 'unsafe-source', target);
           continue;
         }
+        const observation = await this.observeSnapshotPath(path);
         const snapshot = await this.openSnapshot(path, target, diagnostics);
+        observation.snapshot = snapshot;
+        observations.push(observation);
         if (snapshot !== undefined) attemptSnapshots.push(snapshot);
       }
-      if (attemptSnapshots.length === 0 || (await this.isStableSnapshotSet(attemptSnapshots))) {
+      if (await this.isStableSnapshotSet(observations)) {
         snapshots = attemptSnapshots;
         stable = true;
         break;
@@ -497,7 +512,7 @@ export class HookJournalReader {
     }
     if (!stable) {
       addDiagnostic(diagnostics, 'source-unstable', target);
-      return { events: [], bytesRead: 0, hasMore: true, bounded: false };
+      return { events: [], bytesRead: 0, hasMore: false, bounded: false };
     }
     if (snapshots.length === 0) {
       // A prior inode disappearing without any retained file may indicate
@@ -549,11 +564,15 @@ export class HookJournalReader {
         if (
           consumed.hasMore ||
           consumed.recordLimitReached ||
+          consumed.hasPendingTail ||
           bytesRead >= byteBudget ||
           index + 1 >= snapshots.length
         ) {
           bounded = consumed.byteLimitReached || consumed.recordLimitReached;
-          hasMore = consumed.hasMore || index + 1 < snapshots.length;
+          hasMore =
+            consumed.hasMore ||
+            (index + 1 < snapshots.length &&
+              (consumed.recordLimitReached || bytesRead >= byteBudget));
           break;
         }
       }
@@ -563,16 +582,42 @@ export class HookJournalReader {
     return { events, cursor, bytesRead, hasMore, bounded };
   }
 
-  private async isStableSnapshotSet(snapshots: readonly SourceSnapshot[]): Promise<boolean> {
-    for (const snapshot of snapshots) {
-      try {
-        const current = await lstat(snapshot.path, { bigint: true });
-        if (!current.isFile() || sourceIdentity(current) !== snapshot.identity) return false;
-      } catch {
+  private async isStableSnapshotSet(
+    observations: readonly SnapshotSlotObservation[],
+  ): Promise<boolean> {
+    for (const observation of observations) {
+      const current = await this.observeSnapshotPath(observation.path);
+      if (
+        current.state !== observation.state ||
+        current.errorCode !== observation.errorCode ||
+        current.identity !== observation.identity ||
+        (observation.snapshot !== undefined &&
+          observation.snapshot.identity !== observation.identity)
+      ) {
         return false;
       }
     }
     return true;
+  }
+
+  private async observeSnapshotPath(path: string): Promise<SnapshotSlotObservation> {
+    try {
+      const current = await lstat(path, { bigint: true });
+      return {
+        path,
+        state: current.isFile() && !current.isSymbolicLink() ? 'regular' : 'non-regular',
+        ...(current.isFile() && !current.isSymbolicLink()
+          ? { identity: sourceIdentity(current) }
+          : {}),
+      };
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      return {
+        path,
+        state: code === 'ENOENT' ? 'missing' : 'error',
+        ...(code === undefined ? {} : { errorCode: code }),
+      };
+    }
   }
 
   private async closeSnapshots(snapshots: readonly SourceSnapshot[]): Promise<void> {
@@ -766,7 +811,8 @@ export class HookJournalReader {
       bytesRead: bytes.length,
       byteLimitReached: readResult.byteLimitReached,
       recordLimitReached,
-      hasMore: hasUnconsumedTail || readResult.byteLimitReached,
+      hasMore: readResult.byteLimitReached,
+      hasPendingTail: hasUnconsumedTail,
       cursor: {
         identity: snapshot.identity,
         offset: cursorOffset,
