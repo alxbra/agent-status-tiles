@@ -24,6 +24,7 @@ import {
   OVERLAY_IPC_CHANNELS,
   type OverlayState,
 } from '../../src/shared/overlay-ipc';
+import { makeSessionId } from '../../src/shared/session';
 
 function session(index = 1): OverlayState['sessions'][number] {
   return {
@@ -64,6 +65,15 @@ describe('overlay IPC contract validators', () => {
         sessions: Array.from({ length: 257 }, (_, index) => session(index + 1)),
       }),
     ).toBe(false);
+    const longestCanonicalSessionId = makeSessionId('claude', 'a'.repeat(256));
+    expect(
+      isOverlayState({
+        ...state(),
+        sessions: [{ ...session(), id: longestCanonicalSessionId }],
+      }),
+    ).toBe(true);
+    expect(isOverlayOpenSessionRequest({ sessionId: longestCanonicalSessionId })).toBe(true);
+    expect(isOverlayDismissErrorRequest({ sessionId: longestCanonicalSessionId })).toBe(true);
     expect(
       isOverlayState({
         ...state(),

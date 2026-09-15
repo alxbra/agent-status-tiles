@@ -1,4 +1,10 @@
-import type { SessionSnapshot, SessionStatus } from './session';
+import {
+  MAX_ID_BYTES,
+  MAX_SESSION_ID_BYTES,
+  MAX_TITLE_BYTES,
+  type SessionSnapshot,
+  type SessionStatus,
+} from './session';
 
 export const OVERLAY_IPC_CHANNELS = {
   getState: 'overlay:get-state',
@@ -80,8 +86,6 @@ const OPEN_REQUEST_KEYS = ['sessionId'];
 const OPEN_REQUEST_KEYS_WITH_COMPLETION = ['sessionId', 'completionId'];
 const DISMISS_REQUEST_KEYS = ['sessionId'];
 const ACTION_RESULT_KEYS = ['handled', 'reason'];
-const MAX_ID_BYTES = 256;
-const MAX_TITLE_BYTES = 256;
 const CONTROL_CHARACTER_PATTERN = /\p{Cc}/u;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -115,7 +119,7 @@ function isSessionSnapshot(value: unknown): value is SessionSnapshot {
   }
 
   return (
-    isBoundedString(value.id, MAX_ID_BYTES) &&
+    isBoundedString(value.id, MAX_SESSION_ID_BYTES) &&
     PROVIDERS.has(value.provider as string) &&
     SURFACES.has(value.surface as string) &&
     isBoundedString(value.title, MAX_TITLE_BYTES) &&
@@ -175,7 +179,7 @@ export function isOverlayOpenSessionRequest(value: unknown): value is OverlayOpe
   const hasCompletionId = Object.hasOwn(value, 'completionId');
   return (
     hasExactKeys(value, hasCompletionId ? OPEN_REQUEST_KEYS_WITH_COMPLETION : OPEN_REQUEST_KEYS) &&
-    isBoundedString(value.sessionId, MAX_ID_BYTES) &&
+    isBoundedString(value.sessionId, MAX_SESSION_ID_BYTES) &&
     (!hasCompletionId || isBoundedString(value.completionId, MAX_ID_BYTES))
   );
 }
@@ -184,6 +188,6 @@ export function isOverlayDismissErrorRequest(value: unknown): value is OverlayDi
   return (
     isRecord(value) &&
     hasExactKeys(value, DISMISS_REQUEST_KEYS) &&
-    isBoundedString(value.sessionId, MAX_ID_BYTES)
+    isBoundedString(value.sessionId, MAX_SESSION_ID_BYTES)
   );
 }
