@@ -24,7 +24,7 @@ export const MAX_READ_BYTES = 8 * 1024 * 1024;
 export const MAX_EVENTS_PER_READ = 1024;
 export const MAX_SOURCES_PER_READ = 128;
 
-const MAX_STRING_BYTES = 512;
+const MAX_STRING_BYTES = 256;
 const MAX_DIAGNOSTICS = 128;
 const NOFOLLOW = constants.O_NOFOLLOW ?? 0;
 const NONBLOCK = constants.O_NONBLOCK ?? 0;
@@ -51,13 +51,13 @@ interface FileContext {
   turnKey?: TurnKey;
   pendingInputs: Map<string, PendingInput>;
   pendingOutputs: Map<string, PendingOutput>;
-  quarantined: boolean;
+  isQuarantined: boolean;
 }
 
 interface ReadBudget {
   bytesRead: number;
   eventsEmitted: number;
-  exhausted: boolean;
+  isExhausted: boolean;
 }
 
 interface FileReadResult {
@@ -66,22 +66,29 @@ interface FileReadResult {
   hasMore: boolean;
 }
 
+function clearTerminalContext(context: FileContext, turnId: string): void {
+  if (context.activeTurnId !== turnId) return;
+  context.pendingInputs.clear();
+  context.pendingOutputs.clear();
+  context.activeTurnId = undefined;
+}
+
 /**
  * Reads only rollout paths explicitly supplied by the catalog/discovery layer.
  * It does not scan the sessions directory and it does not start or resume a
  * Codex process. The caller owns cursor persistence and any future watcher.
  */
 export class CodexRolloutReader {
-  private stopped = false;
+  private isStopped = false;
 
   constructor(private readonly sessionsRoot: string) {}
 
   stop(): void {
-    this.stopped = true;
+    this.isStopped = true;
   }
 
   start(): void {
-    this.stopped = false;
+    this.isStopped = false;
   }
 
   async read(
@@ -98,7 +105,7 @@ export class CodexRolloutReader {
       const normalized = this.normalizeCursor(cursor);
       if (!path.isAbsolute(key) && normalized) cursors[key] = normalized;
     }
-    if (this.stopped) return { events, cursors, diagnostics };
+    if (this.isStopped) return { events, cursors, diagnostics };
 
     if (!path.isAbsolute(this.sessionsRoot)) {
       this.addDiagnostic(diagnostics, 'invalid-root', hashPath(path.resolve(this.sessionsRoot)));
@@ -116,14 +123,14 @@ export class CodexRolloutReader {
     }
 
     const seenPaths = new Set<string>();
-    const budget: ReadBudget = { bytesRead: 0, eventsEmitted: 0, exhausted: false };
+    const budget: ReadBudget = { bytesRead: 0, eventsEmitted: 0, isExhausted: false };
     const sourceStart = normalizeSourceStart(options.sourceStart);
     const sourceEnd = Math.min(sourceStart + MAX_SOURCES_PER_READ, sources.length);
     let nextSourceIndex: number | undefined =
       sourceStart < sources.length ? sourceStart : undefined;
     for (let sourceIndex = sourceStart; sourceIndex < sourceEnd; sourceIndex += 1) {
       const source = sources[sourceIndex];
-      if (this.stopped || budget.exhausted) break;
+      if (this.isStopped || budget.isExhausted) break;
       const rolloutPath = source?.path;
       if (typeof rolloutPath !== 'string') {
         this.addDiagnostic(diagnostics, 'invalid-path', hashPath('<invalid>'));
@@ -288,7 +295,7 @@ export class CodexRolloutReader {
         ...(session.turnKey ? { turnKey: session.turnKey } : {}),
         pendingInputs: seedPendingInputs(session.inputRequests),
         pendingOutputs: new Map(),
-        quarantined: false,
+        isQuarantined: false,
       };
 
       const baselineUntilOffset =
@@ -306,10 +313,10 @@ export class CodexRolloutReader {
       let unprocessedCompleteLine = false;
       const fileEvents: CodexRolloutEvent[] = [];
       const eventsBeforeFile = budget.eventsEmitted;
-      while (position < metadata.size && !this.stopped && !budget.exhausted) {
+      while (position < metadata.size && !this.isStopped && !budget.isExhausted) {
         const remainingBudget = MAX_READ_BYTES - budget.bytesRead;
         if (remainingBudget <= 0) {
-          budget.exhausted = true;
+          budget.isExhausted = true;
           break;
         }
         const length = Math.min(READ_CHUNK_BYTES, metadata.size - position, remainingBudget);
@@ -321,7 +328,7 @@ export class CodexRolloutReader {
         position += bytesRead;
         const chunk = buffer.subarray(0, bytesRead);
         let start = 0;
-        while (start < chunk.length && !budget.exhausted) {
+        while (start < chunk.length && !budget.isExhausted) {
           const newline = chunk.indexOf(0x0a, start);
           const end = newline >= 0 ? newline : chunk.length;
           const segment = chunk.subarray(start, end);
@@ -344,7 +351,7 @@ export class CodexRolloutReader {
             const line = Buffer.concat(parts, lineLength).toString('utf8');
             const estimatedEvents = canResolveInputOnLine(line, context) ? 2 : 1;
             if (budget.eventsEmitted + estimatedEvents > MAX_EVENTS_PER_READ) {
-              budget.exhausted = true;
+              budget.isExhausted = true;
               unprocessedCompleteLine = true;
               break;
             }
@@ -366,7 +373,8 @@ export class CodexRolloutReader {
           discarding = false;
           start = newline + 1;
         }
-        if (budget.bytesRead >= MAX_READ_BYTES && position < metadata.size) budget.exhausted = true;
+        if (budget.bytesRead >= MAX_READ_BYTES && position < metadata.size)
+          budget.isExhausted = true;
       }
       if (discarding) {
         this.addDiagnostic(diagnostics, 'oversized-line', pathKey, lineStart);
@@ -383,7 +391,7 @@ export class CodexRolloutReader {
       } else {
         delete cursor.baselineUntilOffset;
       }
-      if (context.quarantined) {
+      if (context.isQuarantined) {
         // A contradictory session_meta must never attribute events to the
         // qualified session. Retain the file identity but replay from its
         // beginning so a later catalog refresh revalidates the metadata.
@@ -400,7 +408,7 @@ export class CodexRolloutReader {
       events.push(...fileEvents);
       return {
         cursor,
-        hasMore: !this.stopped && (unprocessedCompleteLine || position < metadata.size),
+        hasMore: !this.isStopped && (unprocessedCompleteLine || position < metadata.size),
       };
     } catch {
       this.addDiagnostic(diagnostics, 'read-failed', pathKey);
@@ -418,7 +426,7 @@ export class CodexRolloutReader {
     events: CodexRolloutEvent[],
     diagnostics: CodexDiagnostic[],
   ): void {
-    if (context.quarantined || !line.trim()) return;
+    if (context.isQuarantined || !line.trim()) return;
     let record: unknown;
     try {
       record = JSON.parse(line);
@@ -464,27 +472,29 @@ export class CodexRolloutReader {
   ): void {
     const payload = asRecord(record.payload);
     if (!payload) {
-      this.addDiagnostic(diagnostics, 'unsupported-item', context.pathKey, lineOffset);
+      this.addDiagnostic(diagnostics, 'missing-session-id', context.pathKey, lineOffset);
+      context.isQuarantined = true;
       return;
     }
     // `id` is the protocol SessionMeta identity. Some current records also
     // contain `session_id`; the catalog owns that field's mapping and this
     // reader deliberately does not guess between the two.
     const sessionId = boundedString(payload.id);
-    if (payload.id !== undefined && !sessionId) {
+    if (!sessionId) {
       this.addDiagnostic(diagnostics, 'missing-session-id', context.pathKey, lineOffset);
-      context.quarantined = true;
+      context.isQuarantined = true;
+      return;
     }
     if (sessionId && sessionId !== context.nativeSessionId) {
       this.addDiagnostic(diagnostics, 'session-identity-mismatch', context.pathKey, lineOffset);
-      context.quarantined = true;
+      context.isQuarantined = true;
     }
     if (
       (isSubagentSource(payload.source) || isSubagentSource(payload.thread_source)) &&
       context.isTopLevel
     ) {
       this.addDiagnostic(diagnostics, 'qualification-mismatch', context.pathKey, lineOffset);
-      context.quarantined = true;
+      context.isQuarantined = true;
     }
   }
 
@@ -544,11 +554,7 @@ export class CodexRolloutReader {
           baseline,
           events,
         );
-        if (context.activeTurnId === turnId) {
-          context.pendingInputs.clear();
-          context.pendingOutputs.clear();
-        }
-        if (context.activeTurnId === turnId) context.activeTurnId = undefined;
+        clearTerminalContext(context, turnId);
       } else this.missingTurn(context, diagnostics, lineOffset);
       return;
     }
@@ -560,11 +566,7 @@ export class CodexRolloutReader {
           baseline,
           events,
         );
-        if (context.activeTurnId === turnId) {
-          context.pendingInputs.clear();
-          context.pendingOutputs.clear();
-        }
-        if (context.activeTurnId === turnId) context.activeTurnId = undefined;
+        clearTerminalContext(context, turnId);
       } else this.missingTurn(context, diagnostics, lineOffset);
       return;
     }
@@ -657,6 +659,12 @@ export class CodexRolloutReader {
       }
       return;
     }
+    if (type === 'function_call') {
+      // Ordinary tool calls are activity only. Their names and arguments may
+      // contain private command or prompt data, so do not retain either.
+      this.emitActivity(context, timestamp, turnId, baseline, events);
+      return;
+    }
     if (KNOWN_RESPONSE_ITEMS.has(type))
       this.emitActivity(context, timestamp, turnId, baseline, events);
     else this.addDiagnostic(diagnostics, 'unsupported-item', context.pathKey, lineOffset);
@@ -742,7 +750,7 @@ export class CodexRolloutReader {
     baseline: boolean,
     events: CodexRolloutEvent[],
   ): void {
-    if (!context.nativeSessionId || this.stopped) return;
+    if (!context.nativeSessionId || this.isStopped) return;
     events.push({
       event,
       baseline,
@@ -844,13 +852,12 @@ function boundedString(value: unknown): string | undefined {
   if (
     typeof value !== 'string' ||
     value.length === 0 ||
+    value.trim().length === 0 ||
     Buffer.byteLength(value, 'utf8') > MAX_STRING_BYTES
   ) {
     return undefined;
   }
-  for (let index = 0; index < value.length; index += 1) {
-    if (value.charCodeAt(index) < 0x20 || value.charCodeAt(index) === 0x7f) return undefined;
-  }
+  if (/\p{Cc}/u.test(value)) return undefined;
   return value;
 }
 

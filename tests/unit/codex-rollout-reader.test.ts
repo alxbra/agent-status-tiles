@@ -21,7 +21,7 @@ import {
   cursorKeyForPath,
 } from '../../src/main/providers/codex';
 import { reduceSessionState, selectSession } from '../../src/main/sessions/reducer';
-import { createInitialSessionState } from '../../src/shared/session';
+import { createInitialSessionState, isSessionEvent } from '../../src/shared/session';
 import type { FileCursor } from '../../src/shared/cursor';
 import type {
   CodexRolloutEvent,
@@ -117,6 +117,7 @@ describe('CodexRolloutReader', () => {
     const result = await reader.read([sourceFor(file)], {}, { firstInstallBaseline: true });
     expect(eventTypes(result.events)).toEqual([
       'turn-started',
+      'activity',
       'input-requested',
       'input-resolved',
       'activity',
@@ -124,6 +125,7 @@ describe('CodexRolloutReader', () => {
       'turn-completed',
     ]);
     expect(result.events.every(({ baseline }) => baseline)).toBe(true);
+    expect(result.events.every(({ event: emitted }) => isSessionEvent(emitted))).toBe(true);
     expect(result.events[0]).toMatchObject({
       nativeSessionId: SESSION_ID,
       surface: 'cli',
@@ -140,6 +142,7 @@ describe('CodexRolloutReader', () => {
     expect(result.cursors[key].offset).toBe((await readFile(file)).byteLength);
 
     const serialized = JSON.stringify(result.events);
+    expect(serialized).not.toContain('PRIVATE_TOOL_ARGUMENTS_SHOULD_NOT_LEAK');
     expect(serialized).not.toContain('PRIVATE_PROMPT_SHOULD_NOT_LEAK');
     expect(serialized).not.toContain('PRIVATE_ANSWER_SHOULD_NOT_LEAK');
     expect(serialized).not.toContain('PRIVATE_ERROR_BODY_SHOULD_NOT_LEAK');
@@ -154,6 +157,40 @@ describe('CodexRolloutReader', () => {
     const result = await new CodexRolloutReader(root).read([sourceFor(file)]);
     expect(eventTypes(result.events)).toEqual(['turn-started', 'turn-completed']);
     expect(result.diagnostics).toEqual([]);
+  });
+
+  it('discards invalid identifiers instead of emitting reducer-invalid events', async () => {
+    const root = await testRoot();
+    const file = path.join(root, `rollout-${SESSION_ID}.jsonl`);
+    await writeLines(file, [
+      sessionMeta(),
+      event('task_started', '   '),
+      event('task_started', 'x'.repeat(257)),
+      event('task_started', '\u0080'),
+    ]);
+    const result = await new CodexRolloutReader(root).read([sourceFor(file)]);
+
+    expect(result.events).toEqual([]);
+    expect(result.events.every(({ event: emitted }) => isSessionEvent(emitted))).toBe(true);
+    expect(result.diagnostics.map(({ code }) => code)).toEqual([
+      'missing-turn-id',
+      'missing-turn-id',
+      'missing-turn-id',
+    ]);
+  });
+
+  it('quarantines records when session metadata is missing or has no identity', async () => {
+    const root = await testRoot();
+    const file = path.join(root, `rollout-${SESSION_ID}.jsonl`);
+    await writeLines(file, [
+      event('task_started', 'before-missing-meta'),
+      record('session_meta', { source: 'cli' }),
+      event('task_started', 'after-missing-meta'),
+    ]);
+    const result = await new CodexRolloutReader(root).read([sourceFor(file)]);
+
+    expect(result.events).toEqual([]);
+    expect(result.diagnostics.map(({ code }) => code)).toContain('missing-session-id');
   });
 
   it('replays a partial line, then advances exactly once when completed', async () => {
@@ -441,6 +478,12 @@ describe('CodexRolloutReader', () => {
       canOpen: true,
       updatedAt: 0,
     });
+    state = reduceSessionState(state, {
+      type: 'provider-health',
+      provider: 'codex',
+      status: 'available',
+      timestamp: 1,
+    });
     for (const { event: emitted } of result.events) {
       state = reduceSessionState(state, emitted);
     }
@@ -453,7 +496,7 @@ describe('CodexRolloutReader', () => {
         },
       },
     });
-    expect(selectSession(state, `codex:${SESSION_ID}`)?.status).not.toBe('needs-input');
+    expect(selectSession(state, `codex:${SESSION_ID}`)?.status).toBe('working');
   });
 
   it('seeds unresolved input correlation from the qualified session record', async () => {
