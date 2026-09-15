@@ -29,6 +29,7 @@ export interface OverlayController {
   getWindow(): BrowserWindow | null;
   enterKeyboardMode(): void;
   exitKeyboardMode(): void;
+  setRendererReady(): void;
   setPreferredDisplayId(displayId: string): void;
   setQualifyingSessionCount(count: number): void;
   setVisible(visible: boolean): void;
@@ -154,7 +155,7 @@ function createOverlayWindow(
 
 export interface OverlayControllerOptions {
   preferredDisplayId?: string;
-  onKeyboardEntry?: () => void;
+  onKeyboardEntry?: () => boolean;
 }
 
 export function createOverlayController(options: OverlayControllerOptions = {}): OverlayController {
@@ -164,6 +165,7 @@ export function createOverlayController(options: OverlayControllerOptions = {}):
   let hasQualifyingSessions = false;
   let keyboardMode = false;
   let keyboardEntryNotified = false;
+  let rendererReady = false;
   let preferredDisplayId = options.preferredDisplayId ?? PRIMARY_DISPLAY_ID;
   let hitRegions: readonly OverlayHitRegion[] = [];
   let ignoringMouseEvents = true;
@@ -173,6 +175,7 @@ export function createOverlayController(options: OverlayControllerOptions = {}):
     if (isDestroyed || overlayWindow) return;
 
     readyToShow = false;
+    rendererReady = false;
     ignoringMouseEvents = true;
     hitRegions = [];
     const window = createOverlayWindow(
@@ -221,8 +224,9 @@ export function createOverlayController(options: OverlayControllerOptions = {}):
           app.focus({ steal: true });
           overlayWindow.focus();
           overlayWindow.webContents.focus();
-          options.onKeyboardEntry?.();
-          keyboardEntryNotified = true;
+          if (rendererReady) {
+            keyboardEntryNotified = options.onKeyboardEntry?.() ?? false;
+          }
         } else if (!overlayWindow.isVisible()) {
           overlayWindow.show();
         }
@@ -329,6 +333,7 @@ export function createOverlayController(options: OverlayControllerOptions = {}):
       syncVisibility();
     },
     exitKeyboardMode: () => {
+      const wasInKeyboardMode = keyboardMode;
       keyboardMode = false;
       keyboardEntryNotified = false;
       if (overlayWindow && !overlayWindow.isDestroyed()) {
@@ -337,6 +342,16 @@ export function createOverlayController(options: OverlayControllerOptions = {}):
       }
       syncVisibility();
       reapplyMousePassthrough();
+      if (wasInKeyboardMode && process.platform === 'darwin') {
+        app.hide();
+        app.show();
+        if (overlayWindow?.isVisible()) overlayWindow.showInactive();
+      }
+    },
+    setRendererReady: () => {
+      rendererReady = true;
+      keyboardEntryNotified = false;
+      syncVisibility();
     },
     setPreferredDisplayId: (displayId) => {
       preferredDisplayId = displayId;
@@ -397,6 +412,7 @@ export function createOverlayController(options: OverlayControllerOptions = {}):
       }
       overlayWindow = null;
       readyToShow = false;
+      rendererReady = false;
       keyboardEntryNotified = false;
       ignoringMouseEvents = true;
       hitRegions = [];

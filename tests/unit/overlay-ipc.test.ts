@@ -131,6 +131,7 @@ describe('overlay IPC handlers', () => {
     for (const channel of [
       OVERLAY_IPC_CHANNELS.getState,
       OVERLAY_IPC_CHANNELS.keyboardExit,
+      OVERLAY_IPC_CHANNELS.rendererReady,
       OVERLAY_IPC_CHANNELS.publishHitRegions,
       OVERLAY_IPC_CHANNELS.openSession,
       OVERLAY_IPC_CHANNELS.dismissError,
@@ -212,6 +213,26 @@ describe('overlay IPC handlers', () => {
     expect(onKeyboardExit).toHaveBeenCalledOnce();
   });
 
+  it('accepts only a no-payload renderer-ready handshake from the main frame', async () => {
+    const { registerOverlayIpcHandlers } = await import('../../src/main/overlay-ipc');
+    const window = overlayWindow();
+    const onRendererReady = vi.fn();
+    registerOverlayIpcHandlers({
+      getWindow: () => window as never,
+      getState: state,
+      setHitRegions: vi.fn(() => true),
+      onRendererReady,
+    });
+    const event = { sender: window.webContents, senderFrame: window.webContents.mainFrame };
+    const handler = electronMocks.handlers.get(OVERLAY_IPC_CHANNELS.rendererReady)!;
+
+    await expect(Promise.resolve().then(() => handler(event))).resolves.toBeUndefined();
+    expect(onRendererReady).toHaveBeenCalledOnce();
+    await expect(Promise.resolve().then(() => handler(event, null))).rejects.toThrow(
+      'Overlay renderer-ready request does not accept a payload',
+    );
+  });
+
   it('validates hit regions and publishes only a valid state projection', async () => {
     const { publishOverlayKeyboardEntry, publishOverlayState, registerOverlayIpcHandlers } =
       await import('../../src/main/overlay-ipc');
@@ -271,6 +292,7 @@ describe('overlay IPC handlers', () => {
     expect(electronMocks.ipcMain.removeHandler.mock.calls.map(([channel]) => channel)).toEqual([
       OVERLAY_IPC_CHANNELS.getState,
       OVERLAY_IPC_CHANNELS.keyboardExit,
+      OVERLAY_IPC_CHANNELS.rendererReady,
       OVERLAY_IPC_CHANNELS.publishHitRegions,
       OVERLAY_IPC_CHANNELS.openSession,
       OVERLAY_IPC_CHANNELS.dismissError,

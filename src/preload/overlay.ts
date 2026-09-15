@@ -41,6 +41,10 @@ const api: AgentStatusTilesOverlayApi = {
     ipcRenderer.invoke(OVERLAY_IPC_CHANNELS.keyboardExit).then((result: unknown) => {
       if (!isOverlayNoPayload(result)) throw new Error('Overlay keyboard-exit result is invalid');
     }),
+  rendererReady: (): Promise<void> =>
+    ipcRenderer.invoke(OVERLAY_IPC_CHANNELS.rendererReady).then((result: unknown) => {
+      if (!isOverlayNoPayload(result)) throw new Error('Overlay renderer-ready result is invalid');
+    }),
   publishHitRegions: (regions: readonly OverlayHitRegion[]): Promise<boolean> => {
     if (!isOverlayHitRegions(regions)) return Promise.resolve(false);
     return ipcRenderer

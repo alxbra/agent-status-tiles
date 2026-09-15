@@ -49,6 +49,21 @@ describe('overlay preload keyboard bridge', () => {
     );
   });
 
+  it('announces renderer readiness without a payload and validates the result', async () => {
+    await import('../../src/preload/overlay');
+    const api = electronMocks.contextBridge.exposeInMainWorld.mock.calls[0]?.[1] as {
+      rendererReady: () => Promise<void>;
+    };
+
+    await expect(api.rendererReady()).resolves.toBeUndefined();
+    expect(electronMocks.ipcRenderer.invoke).toHaveBeenCalledWith(
+      OVERLAY_IPC_CHANNELS.rendererReady,
+    );
+
+    electronMocks.ipcRenderer.invoke.mockResolvedValue({ unexpected: true } as never);
+    await expect(api.rendererReady()).rejects.toThrow('Overlay renderer-ready result is invalid');
+  });
+
   it('filters payload-bearing entry events and cleans up the subscription', async () => {
     await import('../../src/preload/overlay');
     const api = electronMocks.contextBridge.exposeInMainWorld.mock.calls[0]?.[1] as {

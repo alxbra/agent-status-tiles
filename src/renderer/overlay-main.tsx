@@ -116,6 +116,7 @@ export function OverlayApp(): ReactElement {
     const unsubscribeKeyboardEntry = overlayApi.subscribeKeyboardEntry(() => {
       setKeyboardEntryRevision((revision) => revision + 1);
     });
+    void overlayApi.rendererReady().catch(() => undefined);
 
     return () => {
       mounted = false;

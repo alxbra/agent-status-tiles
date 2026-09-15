@@ -163,6 +163,7 @@ if (!hasSingleInstanceLock) {
       getState: () => overlayState,
       setHitRegions: (regions) => overlayController?.setHitRegions(regions) ?? false,
       onKeyboardExit: () => overlayController?.exitKeyboardMode(),
+      onRendererReady: () => overlayController?.setRendererReady(),
     });
     menuBar = createMenuBar({
       showOverlay: () => overlayController?.enterKeyboardMode(),

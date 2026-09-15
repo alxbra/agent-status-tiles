@@ -41,9 +41,14 @@ test('enters and exits native keyboard mode without hiding the overlay', async (
 
   try {
     application = await launch(userDataDir, 1, true);
-    const settings = await settingsWindow(application);
-    const overlay = await overlayWindow(application);
-    await closePage(settings);
+    await expect
+      .poll(() =>
+        application!.evaluate(
+          () =>
+            typeof Reflect.get(globalThis, Symbol.for('agent-status-tiles.test.keyboard-entry')),
+        ),
+      )
+      .toBe('function');
     await application.evaluate(() => {
       const entry = Reflect.get(
         globalThis,
@@ -52,6 +57,9 @@ test('enters and exits native keyboard mode without hiding the overlay', async (
       if (typeof entry !== 'function') throw new Error('Keyboard-entry test hook is unavailable');
       entry();
     });
+    const settings = await settingsWindow(application);
+    const overlay = await overlayWindow(application);
+    await closePage(settings);
 
     await expect(overlay.locator('.status-tiles__tile').first()).toBeFocused();
     await expect

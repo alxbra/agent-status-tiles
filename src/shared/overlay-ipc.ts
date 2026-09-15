@@ -11,6 +11,7 @@ export const OVERLAY_IPC_CHANNELS = {
   stateChanged: 'overlay:state-changed',
   keyboardEntry: 'overlay:keyboard-entry',
   keyboardExit: 'overlay:keyboard-exit',
+  rendererReady: 'overlay:renderer-ready',
   publishHitRegions: 'overlay:publish-hit-regions',
   openSession: 'overlay:open-session',
   dismissError: 'overlay:dismiss-error',
@@ -57,6 +58,7 @@ export interface AgentStatusTilesOverlayApi {
   subscribe(listener: (state: OverlayState) => void): () => void;
   subscribeKeyboardEntry(listener: () => void): () => void;
   requestKeyboardExit(): Promise<void>;
+  rendererReady(): Promise<void>;
   publishHitRegions(regions: readonly OverlayHitRegion[]): Promise<boolean>;
   openSession(request: OverlayOpenSessionRequest): Promise<OverlayActionResult>;
   dismissError(request: OverlayDismissErrorRequest): Promise<OverlayActionResult>;

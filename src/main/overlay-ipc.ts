@@ -18,6 +18,7 @@ export interface OverlayIpcOptions {
   getState: () => OverlayState;
   setHitRegions: (regions: readonly OverlayHitRegion[]) => boolean;
   onKeyboardExit?: () => void;
+  onRendererReady?: () => void;
 }
 
 function assertOverlaySender(
@@ -56,6 +57,12 @@ export function registerOverlayIpcHandlers(options: OverlayIpcOptions): () => vo
     assertSender(event);
     assertNoPayload(payload, 'Overlay keyboard-exit request');
     options.onKeyboardExit?.();
+  });
+
+  ipcMain.handle(OVERLAY_IPC_CHANNELS.rendererReady, (event, payload?: unknown): void => {
+    assertSender(event);
+    assertNoPayload(payload, 'Overlay renderer-ready request');
+    options.onRendererReady?.();
   });
 
   ipcMain.handle(OVERLAY_IPC_CHANNELS.publishHitRegions, (event, payload: unknown) => {
