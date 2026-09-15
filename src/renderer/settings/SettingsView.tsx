@@ -65,7 +65,7 @@ function ProviderAction({
   onDisconnect: (provider: Provider) => void | Promise<void>;
 }): ReactElement {
   const label = PROVIDER_LABEL[provider];
-  const disconnectPending = isPending(`disconnect:${provider}`);
+  const providerPending = isPending(`provider:${provider}`);
   if (state.status === 'connected') {
     return (
       <div className="flex items-center gap-2">
@@ -83,10 +83,10 @@ function ProviderAction({
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end">
             <DropdownMenuItem
-              disabled={!state.canDisconnect || disconnectPending}
+              disabled={!state.canDisconnect || providerPending}
               onSelect={() => void onDisconnect(provider)}
             >
-              {disconnectPending ? 'Disconnecting…' : 'Disconnect'}
+              {providerPending ? 'Working…' : 'Disconnect'}
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
@@ -94,7 +94,7 @@ function ProviderAction({
     );
   }
 
-  const pending = state.status === 'connecting' || isPending(`connect:${provider}`);
+  const pending = state.status === 'connecting' || providerPending;
   return (
     <Button
       disabled={pending || !state.canConnect}
@@ -131,12 +131,7 @@ function SettingRow({
   );
 }
 
-type SettingsAction =
-  | `connect:${Provider}`
-  | `disconnect:${Provider}`
-  | 'display'
-  | 'launch-at-login'
-  | 'reduce-motion';
+type SettingsAction = `provider:${Provider}` | 'display' | 'launch-at-login' | 'reduce-motion';
 
 type SettingsActionRunner = (
   action: SettingsAction,
@@ -186,7 +181,7 @@ export function SettingsView({
   const connect = useCallback<SettingsViewProps['onConnect']>(
     (provider) =>
       runAction(
-        `connect:${provider}`,
+        `provider:${provider}`,
         `Could not connect to ${PROVIDER_LABEL[provider]}. Try again.`,
         () => onConnect(provider),
       ),
@@ -196,7 +191,7 @@ export function SettingsView({
   const disconnect = useCallback<SettingsViewProps['onDisconnect']>(
     (provider) =>
       runAction(
-        `disconnect:${provider}`,
+        `provider:${provider}`,
         `Could not disconnect ${PROVIDER_LABEL[provider]}. Try again.`,
         () => onDisconnect(provider),
       ),

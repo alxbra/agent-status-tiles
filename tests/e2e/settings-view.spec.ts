@@ -85,6 +85,94 @@ test('keeps failed async changes visible without optimistic state', async ({ pag
   await expect(reduceMotion).not.toBeChecked();
 });
 
+test('serializes connect and disconnect operations for one provider', async ({ page }) => {
+  await openFixture(page);
+
+  await page.evaluate(() => {
+    (
+      window as Window & {
+        __settingsFixture?: { deferNextAction: () => void };
+      }
+    ).__settingsFixture?.deferNextAction();
+  });
+
+  const codex = page.locator('[data-provider="codex"]');
+  const codexConnect = codex.getByRole('button', { name: 'Connect' });
+  await codexConnect.click();
+  await expect(codex.getByRole('button', { name: 'Connecting…' })).toBeDisabled();
+  await codex.getByRole('button', { name: 'Connecting…' }).click({ force: true });
+  expect(
+    await page.evaluate(() =>
+      (
+        window as Window & {
+          __settingsFixture?: { getProviderActionCalls: (provider: 'codex' | 'claude') => number };
+        }
+      ).__settingsFixture?.getProviderActionCalls('codex'),
+    ),
+  ).toBe(1);
+  await expect(
+    page.locator('[data-provider="claude"]').getByRole('button', { name: 'Connect' }),
+  ).toBeEnabled();
+
+  await page.evaluate(() => {
+    (
+      window as Window & {
+        __settingsFixture?: { markProviderConnected: (provider: 'codex' | 'claude') => void };
+      }
+    ).__settingsFixture?.markProviderConnected('codex');
+  });
+
+  await codex.getByRole('button', { name: 'Actions for Codex' }).click();
+  const disconnect = page.getByRole('menuitem');
+  await expect(disconnect).toBeDisabled();
+
+  await page.evaluate(() => {
+    (
+      window as Window & {
+        __settingsFixture?: { resolveDeferredAction: () => void };
+      }
+    ).__settingsFixture?.resolveDeferredAction();
+  });
+  await expect(disconnect).toHaveText('Disconnect');
+  await expect(disconnect).toBeEnabled();
+  await disconnect.click();
+  await expect(codex.getByRole('button', { name: 'Connect' })).toBeVisible();
+});
+
+for (const viewport of [
+  { width: 420, height: 320 },
+  { width: 320, height: 240 },
+] as const) {
+  test(`fits controls and reaches Advanced at ${viewport.width}x${viewport.height}`, async ({
+    page,
+  }) => {
+    await page.setViewportSize(viewport);
+    await openFixture(page);
+
+    await page.getByRole('combobox', { name: 'Display' }).click();
+    await expect(page.getByRole('option', { name: 'Built-in Display' })).toBeVisible();
+    await page.keyboard.press('Escape');
+
+    expect(
+      await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
+    ).toBe(true);
+
+    const advanced = page.getByRole('button', { name: 'Open Advanced settings' });
+    await advanced.scrollIntoViewIfNeeded();
+    await advanced.focus();
+    await page.keyboard.press('Enter');
+    await expect(page.getByTestId('advanced-opened')).toBeVisible();
+
+    const screenshot = await page.screenshot({
+      animations: 'disabled',
+      caret: 'hide',
+      fullPage: true,
+      path: `test-results/settings-view/settings-${viewport.width}x${viewport.height}.png`,
+    });
+    expect(screenshot.byteLength).toBeGreaterThan(0);
+  });
+}
+
 for (const theme of ['light', 'dark'] as const) {
   test(`captures ${theme} settings presentation`, async ({ page }) => {
     await openFixture(page, theme);

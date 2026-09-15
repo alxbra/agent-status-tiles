@@ -33,18 +33,25 @@ const initialState: FixtureState = {
 
 type FixtureWindow = Window & {
   __settingsFixture?: {
+    deferNextAction: () => void;
+    getProviderActionCalls: (provider: Provider) => number;
+    markProviderConnected: (provider: Provider) => void;
     rejectNextAction: () => void;
+    resolveDeferredAction: () => void;
   };
 };
 
 function SettingsFixture(): ReactElement {
   const [state, setState] = useState(initialState);
   const [advancedOpen, setAdvancedOpen] = useState(false);
+  const deferNext = useRef(false);
+  const deferredAction = useRef<(() => void) | undefined>(undefined);
+  const providerActionCalls = useRef<Record<Provider, number>>({ codex: 0, claude: 0 });
   const rejectNext = useRef(false);
 
   const update = (change: (current: FixtureState) => FixtureState): Promise<void> =>
     new Promise((resolve, reject) => {
-      window.setTimeout(() => {
+      const complete = (): void => {
         if (rejectNext.current) {
           rejectNext.current = false;
           reject(new Error('fixture action failed'));
@@ -52,12 +59,43 @@ function SettingsFixture(): ReactElement {
         }
         setState(change);
         resolve();
-      }, 20);
+      };
+
+      if (deferNext.current) {
+        deferNext.current = false;
+        deferredAction.current = complete;
+      } else {
+        window.setTimeout(complete, 20);
+      }
     });
 
+  const setProviderStatus = (provider: Provider, status: SettingsProviderState['status']): void => {
+    setState((current) => ({
+      ...current,
+      providers: {
+        ...current.providers,
+        [provider]: {
+          status,
+          canConnect: status !== 'connected',
+          canDisconnect: status === 'connected',
+        },
+      },
+    }));
+  };
+
   (window as FixtureWindow).__settingsFixture = {
+    deferNextAction: () => {
+      deferNext.current = true;
+    },
+    getProviderActionCalls: (provider) => providerActionCalls.current[provider],
+    markProviderConnected: (provider) => setProviderStatus(provider, 'connected'),
     rejectNextAction: () => {
       rejectNext.current = true;
+    },
+    resolveDeferredAction: () => {
+      const complete = deferredAction.current;
+      deferredAction.current = undefined;
+      complete?.();
     },
   };
 
@@ -67,24 +105,28 @@ function SettingsFixture(): ReactElement {
         displays={displays}
         launchAtLogin={state.launchAtLogin}
         onConnect={(provider) =>
-          update((current) => {
-            return {
+          (() => {
+            providerActionCalls.current[provider] += 1;
+            return update((current) => ({
               ...current,
               providers: {
                 ...current.providers,
                 [provider]: { status: 'connected', canConnect: false, canDisconnect: true },
               },
-            };
-          })
+            }));
+          })()
         }
         onDisconnect={(provider) =>
-          update((current) => ({
-            ...current,
-            providers: {
-              ...current.providers,
-              [provider]: { status: 'disconnected', canConnect: true, canDisconnect: false },
-            },
-          }))
+          (() => {
+            providerActionCalls.current[provider] += 1;
+            return update((current) => ({
+              ...current,
+              providers: {
+                ...current.providers,
+                [provider]: { status: 'disconnected', canConnect: true, canDisconnect: false },
+              },
+            }));
+          })()
         }
         onDisplayChange={(selectedDisplayId) =>
           update((current) => ({ ...current, selectedDisplayId }))
