@@ -43,7 +43,7 @@ const MAX_RECORD_BYTES = 4 * 1024;
 const MAX_FILE_BYTES = 256 * 1024;
 const temporaryDirectories: string[] = [];
 
-function target(nativeSessionId = 'session-1'): HookJournalTarget {
+function createTarget(nativeSessionId = 'session-1'): HookJournalTarget {
   return {
     provider: 'claude',
     nativeSessionId,
@@ -51,15 +51,15 @@ function target(nativeSessionId = 'session-1'): HookJournalTarget {
   };
 }
 
-function activePath(root: string, journalTarget: HookJournalTarget): string {
+function getActivePath(root: string, journalTarget: HookJournalTarget): string {
   return join(root, 'journals', journalTarget.provider, `${journalTarget.baseName}.jsonl`);
 }
 
-function archivePath(root: string, journalTarget: HookJournalTarget, index: number): string {
+function getArchivePath(root: string, journalTarget: HookJournalTarget, index: number): string {
   return join(root, 'journals', journalTarget.provider, `${journalTarget.baseName}.jsonl.${index}`);
 }
 
-function record(overrides: Record<string, unknown> = {}, sessionId = 'session-1'): string {
+function serializeRecord(overrides: Record<string, unknown> = {}, sessionId = 'session-1'): string {
   return `${JSON.stringify({
     schema_version: 1,
     provider: 'claude',
@@ -70,14 +70,14 @@ function record(overrides: Record<string, unknown> = {}, sessionId = 'session-1'
   })}\n`;
 }
 
-async function isolatedJournalRoot(): Promise<string> {
+async function createIsolatedJournalRoot(): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), 'agent-status-tiles-hook-journal-'));
   temporaryDirectories.push(root);
   await mkdir(join(root, 'journals', 'claude'), { mode: 0o700, recursive: true });
   return root;
 }
 
-function cursorFor(
+function getCursorFor(
   journalTarget: HookJournalTarget,
   cursors: FileCursorMap,
 ): FileCursorMap[string] | undefined {
@@ -94,15 +94,15 @@ afterEach(async () => {
 
 describe('HookJournalReader', () => {
   it('replays reduced events and follows an active inode across rotation', async () => {
-    const root = await isolatedJournalRoot();
-    const journalTarget = target();
-    const active = activePath(root, journalTarget);
-    const firstLine = record({ event_name: 'UserPromptSubmit', turn_id: 'turn-1' });
+    const root = await createIsolatedJournalRoot();
+    const journalTarget = createTarget();
+    const active = getActivePath(root, journalTarget);
+    const firstLine = serializeRecord({ event_name: 'UserPromptSubmit', turn_id: 'turn-1' });
     await writeFile(active, firstLine);
 
     const reader = new HookJournalReader({ appDataPath: root });
     const first = await reader.read([journalTarget]);
-    const firstCursor = cursorFor(journalTarget, first.cursors);
+    const firstCursor = getCursorFor(journalTarget, first.cursors);
     expect(first.events).toHaveLength(1);
     expect(first.events[0]).toMatchObject({
       eventName: 'UserPromptSubmit',
@@ -112,8 +112,12 @@ describe('HookJournalReader', () => {
     expect(first.events[0]?.eventIdentity).toContain(':');
     expect(firstCursor?.offset).toBe(Buffer.byteLength(firstLine));
 
-    await rename(active, archivePath(root, journalTarget, 1));
-    const secondLine = record({ event_name: 'Stop', turn_id: 'turn-1', stop_hook_active: true });
+    await rename(active, getArchivePath(root, journalTarget, 1));
+    const secondLine = serializeRecord({
+      event_name: 'Stop',
+      turn_id: 'turn-1',
+      stop_hook_active: true,
+    });
     await writeFile(active, secondLine);
     const second = await reader.read([journalTarget], first.cursors);
 
@@ -123,33 +127,42 @@ describe('HookJournalReader', () => {
       stopHookActive: true,
     });
     expect(second.events[0]?.eventIdentity).not.toBe(first.events[0]?.eventIdentity);
-    expect(cursorFor(journalTarget, second.cursors)?.offset).toBe(Buffer.byteLength(secondLine));
+    expect(getCursorFor(journalTarget, second.cursors)?.offset).toBe(Buffer.byteLength(secondLine));
     expect(second.diagnostics).toEqual([]);
   });
 
   it('retries when rotation changes a path after its inode was opened', async () => {
-    const root = await isolatedJournalRoot();
-    const journalTarget = target('unstable-rotation');
-    const active = activePath(root, journalTarget);
-    const archivedThree = archivePath(root, journalTarget, 3);
-    const archivedTwo = archivePath(root, journalTarget, 2);
-    const archivedOne = archivePath(root, journalTarget, 1);
-    await writeFile(archivedThree, record({ event_name: 'UserPromptSubmit' }, 'unstable-rotation'));
-    await writeFile(archivedTwo, record({ event_name: 'SessionStart' }, 'unstable-rotation'));
-    await writeFile(archivedOne, record({ event_name: 'SessionEnd' }, 'unstable-rotation'));
-    await writeFile(active, record({ event_name: 'Stop' }, 'unstable-rotation'));
+    const root = await createIsolatedJournalRoot();
+    const journalTarget = createTarget('unstable-rotation');
+    const active = getActivePath(root, journalTarget);
+    const archivedThree = getArchivePath(root, journalTarget, 3);
+    const archivedTwo = getArchivePath(root, journalTarget, 2);
+    const archivedOne = getArchivePath(root, journalTarget, 1);
+    await writeFile(
+      archivedThree,
+      serializeRecord({ event_name: 'UserPromptSubmit' }, 'unstable-rotation'),
+    );
+    await writeFile(
+      archivedTwo,
+      serializeRecord({ event_name: 'SessionStart' }, 'unstable-rotation'),
+    );
+    await writeFile(
+      archivedOne,
+      serializeRecord({ event_name: 'SessionEnd' }, 'unstable-rotation'),
+    );
+    await writeFile(active, serializeRecord({ event_name: 'Stop' }, 'unstable-rotation'));
 
-    let rotated = false;
+    let hasRotated = false;
     journalOpenHook.current = async (path) => {
-      if (!rotated && path === archivedThree) {
-        rotated = true;
+      if (!hasRotated && path === archivedThree) {
+        hasRotated = true;
         await rename(archivedThree, join(root, 'discarded.jsonl'));
         await rename(archivedTwo, archivedThree);
         await rename(archivedOne, archivedTwo);
         await rename(active, archivedOne);
         await writeFile(
           active,
-          record(
+          serializeRecord(
             { event_name: 'Notification', notification_type: 'idle_prompt' },
             'unstable-rotation',
           ),
@@ -158,7 +171,7 @@ describe('HookJournalReader', () => {
     };
     try {
       const result = await new HookJournalReader({ appDataPath: root }).read([journalTarget]);
-      expect(rotated).toBe(true);
+      expect(hasRotated).toBe(true);
       expect(result.diagnostics).toEqual([]);
       expect(result.events.map((event) => event.eventName)).toEqual([
         'SessionStart',
@@ -172,33 +185,45 @@ describe('HookJournalReader', () => {
   });
 
   it('reports persistent rotation instability without advancing a cursor', async () => {
-    const root = await isolatedJournalRoot();
-    const journalTarget = target('persistent-instability');
-    const active = activePath(root, journalTarget);
-    const archivedThree = archivePath(root, journalTarget, 3);
-    const archivedTwo = archivePath(root, journalTarget, 2);
-    const archivedOne = archivePath(root, journalTarget, 1);
+    const root = await createIsolatedJournalRoot();
+    const journalTarget = createTarget('persistent-instability');
+    const active = getActivePath(root, journalTarget);
+    const archivedThree = getArchivePath(root, journalTarget, 3);
+    const archivedTwo = getArchivePath(root, journalTarget, 2);
+    const archivedOne = getArchivePath(root, journalTarget, 1);
     await writeFile(
       archivedThree,
-      record({ event_name: 'SessionStart' }, 'persistent-instability'),
+      serializeRecord({ event_name: 'SessionStart' }, 'persistent-instability'),
     );
-    await writeFile(archivedTwo, record({ event_name: 'SessionStart' }, 'persistent-instability'));
-    await writeFile(archivedOne, record({ event_name: 'SessionStart' }, 'persistent-instability'));
-    await writeFile(active, record({ event_name: 'SessionStart' }, 'persistent-instability'));
+    await writeFile(
+      archivedTwo,
+      serializeRecord({ event_name: 'SessionStart' }, 'persistent-instability'),
+    );
+    await writeFile(
+      archivedOne,
+      serializeRecord({ event_name: 'SessionStart' }, 'persistent-instability'),
+    );
+    await writeFile(
+      active,
+      serializeRecord({ event_name: 'SessionStart' }, 'persistent-instability'),
+    );
 
-    let rotations = 0;
+    let rotationCount = 0;
     journalOpenHook.current = async (path) => {
       if (path !== archivedThree) return;
-      rotations += 1;
-      await rename(archivedThree, join(root, `discarded-${rotations}.jsonl`));
+      rotationCount += 1;
+      await rename(archivedThree, join(root, `discarded-${rotationCount}.jsonl`));
       await rename(archivedTwo, archivedThree);
       await rename(archivedOne, archivedTwo);
       await rename(active, archivedOne);
-      await writeFile(active, record({ event_name: 'SessionStart' }, 'persistent-instability'));
+      await writeFile(
+        active,
+        serializeRecord({ event_name: 'SessionStart' }, 'persistent-instability'),
+      );
     };
     try {
       const result = await new HookJournalReader({ appDataPath: root }).read([journalTarget]);
-      expect(rotations).toBe(3);
+      expect(rotationCount).toBe(3);
       expect(result.events).toEqual([]);
       expect(result.cursors).toEqual({});
       expect(result.diagnostics.map((diagnostic) => diagnostic.code)).toEqual(['source-unstable']);
@@ -209,20 +234,23 @@ describe('HookJournalReader', () => {
   });
 
   it('retries when a previously missing archive appears during collection', async () => {
-    const root = await isolatedJournalRoot();
-    const journalTarget = target('missing-slot-rotation');
-    const active = activePath(root, journalTarget);
-    const archivedOne = archivePath(root, journalTarget, 1);
-    await writeFile(active, record({ event_name: 'SessionStart' }, 'missing-slot-rotation'));
+    const root = await createIsolatedJournalRoot();
+    const journalTarget = createTarget('missing-slot-rotation');
+    const active = getActivePath(root, journalTarget);
+    const archivedOne = getArchivePath(root, journalTarget, 1);
+    await writeFile(
+      active,
+      serializeRecord({ event_name: 'SessionStart' }, 'missing-slot-rotation'),
+    );
 
-    let rotated = false;
+    let hasRotated = false;
     journalOpenHook.current = async (path) => {
-      if (rotated || path !== active) return;
-      rotated = true;
+      if (hasRotated || path !== active) return;
+      hasRotated = true;
       await rename(active, archivedOne);
       await writeFile(
         active,
-        record(
+        serializeRecord(
           { event_name: 'Notification', notification_type: 'idle_prompt' },
           'missing-slot-rotation',
         ),
@@ -230,7 +258,7 @@ describe('HookJournalReader', () => {
     };
     try {
       const result = await new HookJournalReader({ appDataPath: root }).read([journalTarget]);
-      expect(rotated).toBe(true);
+      expect(hasRotated).toBe(true);
       expect(result.diagnostics).toEqual([]);
       expect(result.events.map((event) => event.eventName)).toEqual([
         'SessionStart',
@@ -242,11 +270,11 @@ describe('HookJournalReader', () => {
   });
 
   it('replays only appended complete records after a reader restart', async () => {
-    const root = await isolatedJournalRoot();
-    const journalTarget = target();
-    const active = activePath(root, journalTarget);
-    const firstLine = record({ event_name: 'SessionStart' });
-    const partialLine = record({
+    const root = await createIsolatedJournalRoot();
+    const journalTarget = createTarget();
+    const active = getActivePath(root, journalTarget);
+    const firstLine = serializeRecord({ event_name: 'SessionStart' });
+    const partialLine = serializeRecord({
       event_name: 'Notification',
       notification_type: 'idle_prompt',
     }).trimEnd();
@@ -255,12 +283,12 @@ describe('HookJournalReader', () => {
     const firstReader = new HookJournalReader({ appDataPath: root });
     const first = await firstReader.read([journalTarget]);
     expect(first.events).toHaveLength(1);
-    expect(cursorFor(journalTarget, first.cursors)?.offset).toBe(Buffer.byteLength(firstLine));
+    expect(getCursorFor(journalTarget, first.cursors)?.offset).toBe(Buffer.byteLength(firstLine));
 
     const restarted = new HookJournalReader({ appDataPath: root });
     const noNewEvents = await restarted.read([journalTarget], first.cursors);
     expect(noNewEvents.events).toEqual([]);
-    expect(cursorFor(journalTarget, noNewEvents.cursors)?.offset).toBe(
+    expect(getCursorFor(journalTarget, noNewEvents.cursors)?.offset).toBe(
       Buffer.byteLength(firstLine),
     );
 
@@ -272,17 +300,17 @@ describe('HookJournalReader', () => {
   });
 
   it('finishes partial and oversized targets so healthy later targets are covered', async () => {
-    const root = await isolatedJournalRoot();
-    const partialTarget = target('partial-first');
-    const oversizedTarget = target('oversized-second');
-    const healthyTarget = target('healthy-third');
-    const partialLine = record({ event_name: 'SessionStart' }, 'partial-first').trimEnd();
+    const root = await createIsolatedJournalRoot();
+    const partialTarget = createTarget('partial-first');
+    const oversizedTarget = createTarget('oversized-second');
+    const healthyTarget = createTarget('healthy-third');
+    const partialLine = serializeRecord({ event_name: 'SessionStart' }, 'partial-first').trimEnd();
     const oversizedLine = 'x'.repeat(MAX_RECORD_BYTES);
-    await writeFile(activePath(root, partialTarget), partialLine);
-    await writeFile(activePath(root, oversizedTarget), oversizedLine);
+    await writeFile(getActivePath(root, partialTarget), partialLine);
+    await writeFile(getActivePath(root, oversizedTarget), oversizedLine);
     await writeFile(
-      activePath(root, healthyTarget),
-      record({ event_name: 'SessionStart' }, 'healthy-third'),
+      getActivePath(root, healthyTarget),
+      serializeRecord({ event_name: 'SessionStart' }, 'healthy-third'),
     );
 
     const reader = new HookJournalReader({ appDataPath: root });
@@ -290,8 +318,8 @@ describe('HookJournalReader', () => {
     expect(first.events).toHaveLength(1);
     expect(first.events[0]?.sessionId).toBe('healthy-third');
     expect(first.nextTargetIndex).toBeUndefined();
-    expect(cursorFor(partialTarget, first.cursors)?.offset).toBe(0);
-    expect(cursorFor(oversizedTarget, first.cursors)).toMatchObject({
+    expect(getCursorFor(partialTarget, first.cursors)?.offset).toBe(0);
+    expect(getCursorFor(oversizedTarget, first.cursors)).toMatchObject({
       offset: Buffer.byteLength(oversizedLine),
       isDiscardingOversizedLine: true,
     });
@@ -303,10 +331,10 @@ describe('HookJournalReader', () => {
     expect(restarted.events).toEqual([]);
     expect(restarted.nextTargetIndex).toBeUndefined();
 
-    await appendFile(activePath(root, partialTarget), '\n');
+    await appendFile(getActivePath(root, partialTarget), '\n');
     await appendFile(
-      activePath(root, oversizedTarget),
-      `\n${record({ event_name: 'Stop' }, 'oversized-second')}`,
+      getActivePath(root, oversizedTarget),
+      `\n${serializeRecord({ event_name: 'Stop' }, 'oversized-second')}`,
     );
     const completed = await new HookJournalReader({ appDataPath: root }).read(
       [partialTarget, oversizedTarget, healthyTarget],
@@ -320,15 +348,15 @@ describe('HookJournalReader', () => {
   });
 
   it('does not let unfinished archived tails starve newer journal files', async () => {
-    const partialRoot = await isolatedJournalRoot();
-    const partialTarget = target('archived-partial');
+    const partialRoot = await createIsolatedJournalRoot();
+    const partialTarget = createTarget('archived-partial');
     await writeFile(
-      archivePath(partialRoot, partialTarget, 1),
-      record({ event_name: 'SessionStart' }, 'archived-partial').trimEnd(),
+      getArchivePath(partialRoot, partialTarget, 1),
+      serializeRecord({ event_name: 'SessionStart' }, 'archived-partial').trimEnd(),
     );
     await writeFile(
-      activePath(partialRoot, partialTarget),
-      record({ event_name: 'Stop' }, 'archived-partial'),
+      getActivePath(partialRoot, partialTarget),
+      serializeRecord({ event_name: 'Stop' }, 'archived-partial'),
     );
 
     const partialResult = await new HookJournalReader({ appDataPath: partialRoot }).read([
@@ -340,12 +368,15 @@ describe('HookJournalReader', () => {
     );
     expect(partialResult.nextTargetIndex).toBeUndefined();
 
-    const oversizedRoot = await isolatedJournalRoot();
-    const oversizedTarget = target('archived-oversized');
-    await writeFile(archivePath(oversizedRoot, oversizedTarget, 1), 'x'.repeat(MAX_RECORD_BYTES));
+    const oversizedRoot = await createIsolatedJournalRoot();
+    const oversizedTarget = createTarget('archived-oversized');
     await writeFile(
-      activePath(oversizedRoot, oversizedTarget),
-      record({ event_name: 'Stop' }, 'archived-oversized'),
+      getArchivePath(oversizedRoot, oversizedTarget, 1),
+      'x'.repeat(MAX_RECORD_BYTES),
+    );
+    await writeFile(
+      getActivePath(oversizedRoot, oversizedTarget),
+      serializeRecord({ event_name: 'Stop' }, 'archived-oversized'),
     );
 
     const oversizedResult = await new HookJournalReader({ appDataPath: oversizedRoot }).read([
@@ -359,20 +390,20 @@ describe('HookJournalReader', () => {
   });
 
   it('preserves an archived record split by the total byte budget', async () => {
-    const root = await isolatedJournalRoot();
+    const root = await createIsolatedJournalRoot();
     const prefixTargets = Array.from({ length: 32 }, (_, index) =>
-      target(`budget-prefix-${index}`),
+      createTarget(`budget-prefix-${index}`),
     );
-    const budgetTarget = target('budget-target');
-    const archivedRecord = record({ event_name: 'SessionStart' }, 'budget-target');
-    const activeRecord = record({ event_name: 'Stop' }, 'budget-target');
+    const budgetTarget = createTarget('budget-target');
+    const archivedRecord = serializeRecord({ event_name: 'SessionStart' }, 'budget-target');
+    const activeRecord = serializeRecord({ event_name: 'Stop' }, 'budget-target');
 
     await Promise.all([
       ...prefixTargets.map((journalTarget) =>
-        writeFile(activePath(root, journalTarget), 'x'.repeat(MAX_FILE_BYTES - 1)),
+        writeFile(getActivePath(root, journalTarget), 'x'.repeat(MAX_FILE_BYTES - 1)),
       ),
-      writeFile(archivePath(root, budgetTarget, 1), archivedRecord),
-      writeFile(activePath(root, budgetTarget), activeRecord),
+      writeFile(getArchivePath(root, budgetTarget, 1), archivedRecord),
+      writeFile(getActivePath(root, budgetTarget), activeRecord),
     ]);
 
     const targets = [...prefixTargets, budgetTarget];
@@ -381,7 +412,7 @@ describe('HookJournalReader', () => {
     expect(first.events).toEqual([]);
     expect(first.diagnostics.map((diagnostic) => diagnostic.code)).toContain('read-limit');
     expect(first.nextTargetIndex).toBe(prefixTargets.length);
-    expect(cursorFor(budgetTarget, first.cursors)).toMatchObject({ offset: 0 });
+    expect(getCursorFor(budgetTarget, first.cursors)).toMatchObject({ offset: 0 });
 
     const second = await reader.read(targets, first.cursors, {
       startTargetIndex: first.nextTargetIndex,
@@ -395,16 +426,16 @@ describe('HookJournalReader', () => {
   });
 
   it('continues an oversized line after its active inode rotates to an archive', async () => {
-    const root = await isolatedJournalRoot();
-    const journalTarget = target('rotating-oversized');
-    const active = activePath(root, journalTarget);
-    const archived = archivePath(root, journalTarget, 1);
+    const root = await createIsolatedJournalRoot();
+    const journalTarget = createTarget('rotating-oversized');
+    const active = getActivePath(root, journalTarget);
+    const archived = getArchivePath(root, journalTarget, 1);
     await writeFile(active, 'x'.repeat(MAX_RECORD_BYTES));
 
     const reader = new HookJournalReader({ appDataPath: root });
     const first = await reader.read([journalTarget]);
     expect(first.events).toEqual([]);
-    expect(cursorFor(journalTarget, first.cursors)).toMatchObject({
+    expect(getCursorFor(journalTarget, first.cursors)).toMatchObject({
       offset: MAX_RECORD_BYTES,
       isDiscardingOversizedLine: true,
     });
@@ -412,7 +443,7 @@ describe('HookJournalReader', () => {
     await rename(active, archived);
     await appendFile(
       archived,
-      `${record({ event_name: 'SessionStart' }, 'rotating-oversized')}${record(
+      `${serializeRecord({ event_name: 'SessionStart' }, 'rotating-oversized')}${serializeRecord(
         { event_name: 'Stop' },
         'rotating-oversized',
       )}`,
@@ -421,16 +452,16 @@ describe('HookJournalReader', () => {
 
     expect(second.events.map((event) => event.eventName)).toEqual(['Stop']);
     expect(second.events[0]?.sessionId).toBe('rotating-oversized');
-    expect(cursorFor(journalTarget, second.cursors)).toMatchObject({
+    expect(getCursorFor(journalTarget, second.cursors)).toMatchObject({
       isDiscardingOversizedLine: false,
     });
     expect(second.nextTargetIndex).toBeUndefined();
   });
 
   it('carries shared cursor watermarks and oversized-line continuation state', async () => {
-    const root = await isolatedJournalRoot();
-    const journalTarget = target();
-    const active = activePath(root, journalTarget);
+    const root = await createIsolatedJournalRoot();
+    const journalTarget = createTarget();
+    const active = getActivePath(root, journalTarget);
     const oversizedPartial = JSON.stringify({
       schema_version: 1,
       provider: 'claude',
@@ -443,18 +474,21 @@ describe('HookJournalReader', () => {
 
     const reader = new HookJournalReader({ appDataPath: root });
     const first = await reader.read([journalTarget]);
-    const firstCursor = cursorFor(journalTarget, first.cursors);
+    const firstCursor = getCursorFor(journalTarget, first.cursors);
     expect(first.events).toEqual([]);
     expect(firstCursor).toMatchObject({
       offset: Buffer.byteLength(oversizedPartial),
       isDiscardingOversizedLine: true,
     });
 
-    await appendFile(active, `\n${record({ event_name: 'Stop', stop_hook_active: false })}`);
+    await appendFile(
+      active,
+      `\n${serializeRecord({ event_name: 'Stop', stop_hook_active: false })}`,
+    );
     const second = await reader.read([journalTarget], first.cursors);
     expect(second.events).toHaveLength(1);
     expect(second.events[0]).toMatchObject({ eventName: 'Stop', stopHookActive: false });
-    const secondCursor = cursorFor(journalTarget, second.cursors);
+    const secondCursor = getCursorFor(journalTarget, second.cursors);
     if (secondCursor === undefined) throw new Error('expected continuation cursor');
     expect(secondCursor.isDiscardingOversizedLine).toBe(false);
 
@@ -468,7 +502,7 @@ describe('HookJournalReader', () => {
       },
     };
     const third = await reader.read([journalTarget], withWatermark);
-    expect(cursorFor(journalTarget, third.cursors)).toMatchObject({
+    expect(getCursorFor(journalTarget, third.cursors)).toMatchObject({
       baselineUntilOffset: 999,
       isDiscardingOversizedLine: false,
     });
@@ -489,9 +523,9 @@ describe('HookJournalReader', () => {
   });
 
   it('keeps malformed and oversized records out of the event stream', async () => {
-    const root = await isolatedJournalRoot();
-    const journalTarget = target();
-    const active = activePath(root, journalTarget);
+    const root = await createIsolatedJournalRoot();
+    const journalTarget = createTarget();
+    const active = getActivePath(root, journalTarget);
     const oversized = JSON.stringify({
       schema_version: 1,
       provider: 'claude',
@@ -501,7 +535,7 @@ describe('HookJournalReader', () => {
       notification_type: 'idle_prompt',
       prompt: 'PRIVATE_PROMPT_SENTINEL'.repeat(400),
     });
-    const valid = record({
+    const valid = serializeRecord({
       event_name: 'Notification',
       notification_type: 'permission_prompt',
       prompt: 'PRIVATE_PROMPT_MUST_NOT_ESCAPE',
@@ -524,17 +558,19 @@ describe('HookJournalReader', () => {
   });
 
   it('validates provider/session ownership and preserves no unknown fields', async () => {
-    const root = await isolatedJournalRoot();
-    const journalTarget = target();
-    const active = activePath(root, journalTarget);
+    const root = await createIsolatedJournalRoot();
+    const journalTarget = createTarget();
+    const active = getActivePath(root, journalTarget);
     await writeFile(
       active,
-      `${record({ provider: 'codex' })}${record({ session_id: 'other-session' })}${record({
-        event_name: 'PreToolUse',
-        tool_name: 'AskUserQuestion',
-        tool_call_id: 'call-1',
-        answer: 'PRIVATE_ANSWER_MUST_NOT_ESCAPE',
-      })}`,
+      `${serializeRecord({ provider: 'codex' })}${serializeRecord({ session_id: 'other-session' })}${serializeRecord(
+        {
+          event_name: 'PreToolUse',
+          tool_name: 'AskUserQuestion',
+          tool_call_id: 'call-1',
+          answer: 'PRIVATE_ANSWER_MUST_NOT_ESCAPE',
+        },
+      )}`,
     );
 
     const result = await new HookJournalReader({ appDataPath: root }).read([journalTarget]);
@@ -553,10 +589,10 @@ describe('HookJournalReader', () => {
   });
 
   it('reports retention gaps and cursor truncation without claiming completion', async () => {
-    const root = await isolatedJournalRoot();
-    const journalTarget = target();
-    const active = activePath(root, journalTarget);
-    await writeFile(active, record({ event_name: 'SessionStart' }));
+    const root = await createIsolatedJournalRoot();
+    const journalTarget = createTarget();
+    const active = getActivePath(root, journalTarget);
+    await writeFile(active, serializeRecord({ event_name: 'SessionStart' }));
     const reader = new HookJournalReader({ appDataPath: root });
     const first = await reader.read([journalTarget]);
 
@@ -568,7 +604,7 @@ describe('HookJournalReader', () => {
     );
 
     await rename(active, join(root, 'lost-journal.jsonl'));
-    await writeFile(active, record({ event_name: 'SessionEnd' }));
+    await writeFile(active, serializeRecord({ event_name: 'SessionEnd' }));
     const gap = await reader.read([journalTarget], first.cursors);
     expect(gap.events).toHaveLength(1);
     expect(gap.events[0]?.eventName).toBe('SessionEnd');
@@ -585,11 +621,11 @@ describe('HookJournalReader', () => {
   });
 
   it('rejects symlinks and unsafe or unqualified targets', async () => {
-    const root = await isolatedJournalRoot();
-    const journalTarget = target();
+    const root = await createIsolatedJournalRoot();
+    const journalTarget = createTarget();
     const outside = join(root, 'outside.jsonl');
-    await writeFile(outside, record());
-    await symlink(outside, activePath(root, journalTarget));
+    await writeFile(outside, serializeRecord());
+    await symlink(outside, getActivePath(root, journalTarget));
 
     const symlinkResult = await new HookJournalReader({ appDataPath: root }).read([journalTarget]);
     expect(symlinkResult.events).toEqual([]);
@@ -606,24 +642,27 @@ describe('HookJournalReader', () => {
   });
 
   it('ignores missing archives and does not scan unlisted sessions', async () => {
-    const root = await isolatedJournalRoot();
-    const journalTarget = target();
-    const unlistedTarget = target('unlisted-session');
-    await writeFile(activePath(root, journalTarget), record({ event_name: 'SessionStart' }));
-    await writeFile(activePath(root, unlistedTarget), record({}, 'unlisted-session'));
+    const root = await createIsolatedJournalRoot();
+    const journalTarget = createTarget();
+    const unlistedTarget = createTarget('unlisted-session');
+    await writeFile(
+      getActivePath(root, journalTarget),
+      serializeRecord({ event_name: 'SessionStart' }),
+    );
+    await writeFile(getActivePath(root, unlistedTarget), serializeRecord({}, 'unlisted-session'));
 
     const result = await new HookJournalReader({ appDataPath: root }).read([journalTarget]);
 
     expect(result.events).toHaveLength(1);
     expect(result.events[0]?.sessionId).toBe('session-1');
     expect(result.diagnostics).toEqual([]);
-    expect(await readFile(archivePath(root, journalTarget, 1), 'utf8').catch(() => '')).toBe('');
+    expect(await readFile(getArchivePath(root, journalTarget, 1), 'utf8').catch(() => '')).toBe('');
   });
 
   it('bounds source size and target count before unbounded work', async () => {
-    const root = await isolatedJournalRoot();
-    const journalTarget = target();
-    await writeFile(activePath(root, journalTarget), Buffer.alloc(MAX_FILE_BYTES + 1, 0x78));
+    const root = await createIsolatedJournalRoot();
+    const journalTarget = createTarget();
+    await writeFile(getActivePath(root, journalTarget), Buffer.alloc(MAX_FILE_BYTES + 1, 0x78));
 
     const oversized = await new HookJournalReader({ appDataPath: root }).read([journalTarget]);
     expect(oversized.events).toEqual([]);
@@ -631,7 +670,9 @@ describe('HookJournalReader', () => {
       'source-oversized',
     );
 
-    const tooManyTargets = Array.from({ length: 129 }, (_, index) => target(`session-${index}`));
+    const tooManyTargets = Array.from({ length: 129 }, (_, index) =>
+      createTarget(`session-${index}`),
+    );
     await expect(
       new HookJournalReader({ appDataPath: root }).read(tooManyTargets),
     ).rejects.toMatchObject({
@@ -640,12 +681,12 @@ describe('HookJournalReader', () => {
   });
 
   it('bounds total bytes, projected records, and diagnostics', async () => {
-    const bytesRoot = await isolatedJournalRoot();
-    const byteTargets = Array.from({ length: 33 }, (_, index) => target(`bytes-${index}`));
+    const bytesRoot = await createIsolatedJournalRoot();
+    const byteTargets = Array.from({ length: 33 }, (_, index) => createTarget(`bytes-${index}`));
     const boundedBytes = Buffer.concat([Buffer.alloc(MAX_FILE_BYTES - 1, 0x78), Buffer.from('\n')]);
     await Promise.all(
       byteTargets.map((journalTarget) =>
-        writeFile(activePath(bytesRoot, journalTarget), boundedBytes),
+        writeFile(getActivePath(bytesRoot, journalTarget), boundedBytes),
       ),
     );
     const byteResult = await new HookJournalReader({ appDataPath: bytesRoot }).read(byteTargets);
@@ -661,14 +702,14 @@ describe('HookJournalReader', () => {
     expect(Object.keys(byteResume.cursors)).toHaveLength(33);
     expect(byteResume.nextTargetIndex).toBeUndefined();
 
-    const recordRoot = await isolatedJournalRoot();
-    const recordTarget = target('record-limit');
-    const boundedRecords = record({}, 'record-limit').repeat(2048);
+    const recordRoot = await createIsolatedJournalRoot();
+    const recordTarget = createTarget('record-limit');
+    const boundedRecords = serializeRecord({}, 'record-limit').repeat(2048);
     await Promise.all([
-      writeFile(archivePath(recordRoot, recordTarget, 3), boundedRecords),
-      writeFile(archivePath(recordRoot, recordTarget, 2), boundedRecords),
-      writeFile(archivePath(recordRoot, recordTarget, 1), boundedRecords),
-      writeFile(activePath(recordRoot, recordTarget), boundedRecords),
+      writeFile(getArchivePath(recordRoot, recordTarget, 3), boundedRecords),
+      writeFile(getArchivePath(recordRoot, recordTarget, 2), boundedRecords),
+      writeFile(getArchivePath(recordRoot, recordTarget, 1), boundedRecords),
+      writeFile(getActivePath(recordRoot, recordTarget), boundedRecords),
     ]);
     const recordResult = await new HookJournalReader({ appDataPath: recordRoot }).read([
       recordTarget,
@@ -688,19 +729,19 @@ describe('HookJournalReader', () => {
     ).toBe(8192);
     expect(recordResume.nextTargetIndex).toBeUndefined();
 
-    const recordTailRoot = await isolatedJournalRoot();
-    const recordTailTarget = target('record-limit-tail');
-    const archiveRecords = record({}, 'record-limit-tail').repeat(1365);
+    const recordTailRoot = await createIsolatedJournalRoot();
+    const recordTailTarget = createTarget('record-limit-tail');
+    const archiveRecords = serializeRecord({}, 'record-limit-tail').repeat(1365);
     const activeTail = [
-      record({ turn_id: 'active-1' }, 'record-limit-tail'),
-      record({ turn_id: 'active-2' }, 'record-limit-tail'),
-      record({ turn_id: 'active-3' }, 'record-limit-tail'),
+      serializeRecord({ turn_id: 'active-1' }, 'record-limit-tail'),
+      serializeRecord({ turn_id: 'active-2' }, 'record-limit-tail'),
+      serializeRecord({ turn_id: 'active-3' }, 'record-limit-tail'),
     ].join('');
     await Promise.all([
-      writeFile(archivePath(recordTailRoot, recordTailTarget, 3), archiveRecords),
-      writeFile(archivePath(recordTailRoot, recordTailTarget, 2), archiveRecords),
-      writeFile(archivePath(recordTailRoot, recordTailTarget, 1), archiveRecords),
-      writeFile(activePath(recordTailRoot, recordTailTarget), activeTail),
+      writeFile(getArchivePath(recordTailRoot, recordTailTarget, 3), archiveRecords),
+      writeFile(getArchivePath(recordTailRoot, recordTailTarget, 2), archiveRecords),
+      writeFile(getArchivePath(recordTailRoot, recordTailTarget, 1), archiveRecords),
+      writeFile(getActivePath(recordTailRoot, recordTailTarget), activeTail),
     ]);
     const recordTailReader = new HookJournalReader({ appDataPath: recordTailRoot });
     const recordTailFirst = await recordTailReader.read([recordTailTarget]);
@@ -721,9 +762,9 @@ describe('HookJournalReader', () => {
     );
     expect(recordTailThird.events).toEqual([]);
 
-    const diagnosticRoot = await isolatedJournalRoot();
-    const diagnosticTarget = target('diagnostic-limit');
-    await writeFile(activePath(diagnosticRoot, diagnosticTarget), 'not-json\n'.repeat(200));
+    const diagnosticRoot = await createIsolatedJournalRoot();
+    const diagnosticTarget = createTarget('diagnostic-limit');
+    await writeFile(getActivePath(diagnosticRoot, diagnosticTarget), 'not-json\n'.repeat(200));
     const diagnosticResult = await new HookJournalReader({ appDataPath: diagnosticRoot }).read([
       diagnosticTarget,
     ]);
@@ -733,9 +774,9 @@ describe('HookJournalReader', () => {
   });
 
   it('preserves mixed-provider empty-identity cursors and refuses to overfill the map', async () => {
-    const root = await isolatedJournalRoot();
-    const journalTarget = target('cursor-cap');
-    await writeFile(activePath(root, journalTarget), record({}, 'cursor-cap'));
+    const root = await createIsolatedJournalRoot();
+    const journalTarget = createTarget('cursor-cap');
+    await writeFile(getActivePath(root, journalTarget), serializeRecord({}, 'cursor-cap'));
     const codexCursorKey = makeCursorKey('codex', 'rollout.jsonl');
     const mixedCursors: FileCursorMap = {
       [codexCursorKey]: { identity: '', offset: 0 },

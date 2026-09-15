@@ -155,15 +155,15 @@ interface SnapshotSlotObservation {
 
 interface MutableDiagnostics {
   values: HookJournalDiagnostic[];
-  truncated: boolean;
+  isTruncated: boolean;
 }
 
 interface ConsumedFile {
   events: HookJournalEvent[];
   cursor: FileCursor;
   bytesRead: number;
-  byteLimitReached: boolean;
-  recordLimitReached: boolean;
+  isByteLimitReached: boolean;
+  isRecordLimitReached: boolean;
   hasMore: boolean;
   hasPendingTail: boolean;
 }
@@ -172,11 +172,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
 
-function hasOwn(value: object, key: string): boolean {
-  return Object.prototype.hasOwnProperty.call(value, key);
-}
-
-function utf8Bytes(value: string): number {
+function getUtf8ByteLength(value: string): number {
   return new TextEncoder().encode(value).byteLength;
 }
 
@@ -184,30 +180,30 @@ function hasControlCharacters(value: string): boolean {
   return /\p{Cc}/u.test(value);
 }
 
-function safeString(value: unknown, maxBytes: number): value is string {
+function isSafeString(value: unknown, maxBytes: number): value is string {
   return (
     typeof value === 'string' &&
     value.length > 0 &&
     value === value.trim() &&
     !hasControlCharacters(value) &&
-    utf8Bytes(value) <= maxBytes
+    getUtf8ByteLength(value) <= maxBytes
   );
 }
 
-function optionalString(
+function getOptionalString(
   value: Record<string, unknown>,
   key: string,
   maxBytes: number,
 ): string | undefined {
-  if (!hasOwn(value, key)) return undefined;
-  return safeString(value[key], maxBytes) ? value[key] : undefined;
+  if (!Object.hasOwn(value, key)) return undefined;
+  return isSafeString(value[key], maxBytes) ? value[key] : undefined;
 }
 
-function validTimestamp(value: unknown): value is number {
+function isValidTimestamp(value: unknown): value is number {
   return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
 }
 
-function validCursor(value: unknown): value is FileCursor {
+function isValidCursor(value: unknown): value is FileCursor {
   return (
     isRecord(value) &&
     Object.keys(value).every(
@@ -217,29 +213,29 @@ function validCursor(value: unknown): value is FileCursor {
         key === 'baselineUntilOffset' ||
         key === 'isDiscardingOversizedLine',
     ) &&
-    (value.identity === '' || safeString(value.identity, MAX_CURSOR_IDENTITY_BYTES)) &&
-    validTimestamp(value.offset) &&
-    (value.baselineUntilOffset === undefined || validTimestamp(value.baselineUntilOffset)) &&
+    (value.identity === '' || isSafeString(value.identity, MAX_CURSOR_IDENTITY_BYTES)) &&
+    isValidTimestamp(value.offset) &&
+    (value.baselineUntilOffset === undefined || isValidTimestamp(value.baselineUntilOffset)) &&
     (value.isDiscardingOversizedLine === undefined ||
       typeof value.isDiscardingOversizedLine === 'boolean')
   );
 }
 
-function validCursorKey(value: string): boolean {
+function isValidCursorKey(value: string): boolean {
   const separator = value.indexOf(':');
   if (separator <= 0 || separator === value.length - 1) return false;
   const provider = value.slice(0, separator);
   const sourceId = value.slice(separator + 1);
   return (
     isProvider(provider) &&
-    safeString(sourceId, MAX_ID_BYTES) &&
+    isSafeString(sourceId, MAX_ID_BYTES) &&
     !isAbsolute(sourceId) &&
     !sourceId.includes('\\') &&
     !sourceId.split('/').includes('..')
   );
 }
 
-function sourceIdentity(stats: { dev: bigint; ino: bigint }): string {
+function getSourceIdentity(stats: { dev: bigint; ino: bigint }): string {
   return `dev:${stats.dev.toString()}:ino:${stats.ino.toString()}`;
 }
 
@@ -262,8 +258,8 @@ function addDiagnostic(
     diagnostics.values.push({ code, provider: target.provider, sourceId: target.baseName });
     return;
   }
-  if (!diagnostics.truncated) {
-    diagnostics.truncated = true;
+  if (!diagnostics.isTruncated) {
+    diagnostics.isTruncated = true;
     diagnostics.values[MAX_DIAGNOSTICS - 1] = {
       code: 'diagnostics-truncated',
       provider: target.provider,
@@ -272,7 +268,7 @@ function addDiagnostic(
   }
 }
 
-function eventFromRecord(
+function createEventFromRecord(
   value: unknown,
   target: HookJournalTarget,
   eventIdentity: string,
@@ -280,45 +276,46 @@ function eventFromRecord(
   if (!isRecord(value) || value.schema_version !== 1) return undefined;
   if (value.provider !== target.provider) return undefined;
   if (value.session_id !== target.nativeSessionId) return undefined;
-  if (!safeString(value.event_name, 64) || !EVENT_NAMES.has(value.event_name)) return undefined;
+  if (!isSafeString(value.event_name, 64) || !EVENT_NAMES.has(value.event_name)) return undefined;
   const eventName = value.event_name as HookJournalEventName;
-  if (!validTimestamp(value.timestamp)) return undefined;
+  if (!isValidTimestamp(value.timestamp)) return undefined;
 
-  const turnId = optionalString(value, 'turn_id', MAX_ID_BYTES);
-  if (hasOwn(value, 'turn_id') && turnId === undefined) return undefined;
-  const promptId = optionalString(value, 'prompt_id', MAX_ID_BYTES);
-  if (hasOwn(value, 'prompt_id') && promptId === undefined) return undefined;
-  const toolCallId = optionalString(value, 'tool_call_id', MAX_ID_BYTES);
-  if (hasOwn(value, 'tool_call_id') && toolCallId === undefined) return undefined;
-  const projectName = optionalString(value, 'project_name', MAX_LABEL_BYTES);
-  if (hasOwn(value, 'project_name') && projectName === undefined) return undefined;
-  const projectId = optionalString(value, 'project_id', MAX_ID_BYTES);
+  const turnId = getOptionalString(value, 'turn_id', MAX_ID_BYTES);
+  if (Object.hasOwn(value, 'turn_id') && turnId === undefined) return undefined;
+  const promptId = getOptionalString(value, 'prompt_id', MAX_ID_BYTES);
+  if (Object.hasOwn(value, 'prompt_id') && promptId === undefined) return undefined;
+  const toolCallId = getOptionalString(value, 'tool_call_id', MAX_ID_BYTES);
+  if (Object.hasOwn(value, 'tool_call_id') && toolCallId === undefined) return undefined;
+  const projectName = getOptionalString(value, 'project_name', MAX_LABEL_BYTES);
+  if (Object.hasOwn(value, 'project_name') && projectName === undefined) return undefined;
+  const projectId = getOptionalString(value, 'project_id', MAX_ID_BYTES);
   if (
-    hasOwn(value, 'project_id') &&
+    Object.hasOwn(value, 'project_id') &&
     (projectId === undefined || !/^[a-f0-9]{64}$/u.test(projectId))
   ) {
     return undefined;
   }
   const stopHookActive = value.stop_hook_active;
-  if (hasOwn(value, 'stop_hook_active') && typeof stopHookActive !== 'boolean') return undefined;
+  if (Object.hasOwn(value, 'stop_hook_active') && typeof stopHookActive !== 'boolean')
+    return undefined;
 
-  const elicitationId = optionalString(value, 'elicitation_id', MAX_ID_BYTES);
+  const elicitationId = getOptionalString(value, 'elicitation_id', MAX_ID_BYTES);
   if (
-    hasOwn(value, 'elicitation_id') &&
+    Object.hasOwn(value, 'elicitation_id') &&
     (elicitationId === undefined ||
       !['Elicitation', 'ElicitationResult'].includes(value.event_name))
   ) {
     return undefined;
   }
 
-  const toolName = optionalString(value, 'tool_name', 64);
-  if (hasOwn(value, 'tool_name') && (toolName === undefined || !TOOL_NAMES.has(toolName))) {
+  const toolName = getOptionalString(value, 'tool_name', 64);
+  if (Object.hasOwn(value, 'tool_name') && (toolName === undefined || !TOOL_NAMES.has(toolName))) {
     return undefined;
   }
 
-  const notificationType = optionalString(value, 'notification_type', MAX_LABEL_BYTES);
+  const notificationType = getOptionalString(value, 'notification_type', MAX_LABEL_BYTES);
   if (
-    hasOwn(value, 'notification_type') &&
+    Object.hasOwn(value, 'notification_type') &&
     (notificationType === undefined ||
       value.event_name !== 'Notification' ||
       !NOTIFICATION_TYPES.has(notificationType))
@@ -359,7 +356,7 @@ export class HookJournalReader {
   private readonly appDataPath: string;
 
   constructor(options: { appDataPath: string }) {
-    if (!isAbsolute(options.appDataPath) || !safeString(options.appDataPath, MAX_PATH_BYTES)) {
+    if (!isAbsolute(options.appDataPath) || !isSafeString(options.appDataPath, MAX_PATH_BYTES)) {
       throw new HookJournalReaderError('invalid-options');
     }
     this.appDataPath = resolve(options.appDataPath);
@@ -381,7 +378,7 @@ export class HookJournalReader {
       throw new HookJournalReaderError('invalid-options');
     }
 
-    const diagnostics: MutableDiagnostics = { values: [], truncated: false };
+    const diagnostics: MutableDiagnostics = { values: [], isTruncated: false };
     const events: HookJournalEvent[] = [];
     const updatedCursors: Record<string, FileCursor> = { ...cursors };
     let totalBytes = 0;
@@ -391,9 +388,9 @@ export class HookJournalReader {
     for (let targetIndex = startTargetIndex; targetIndex < targets.length; targetIndex += 1) {
       const target = targets[targetIndex];
       const key = makeCursorKey(target.provider, target.baseName);
-      const previous = hasOwn(cursors, key) ? cursors[key] : undefined;
+      const previous = Object.hasOwn(cursors, key) ? cursors[key] : undefined;
       if (
-        !hasOwn(updatedCursors, key) &&
+        !Object.hasOwn(updatedCursors, key) &&
         Object.keys(updatedCursors).length >= MAX_CURSOR_ENTRIES
       ) {
         addDiagnostic(diagnostics, 'cursor-limit', target);
@@ -411,10 +408,10 @@ export class HookJournalReader {
       totalRecords += result.events.length;
       events.push(...result.events);
       if (result.cursor !== undefined) updatedCursors[key] = result.cursor;
-      const bounded =
-        result.bounded || totalBytes >= MAX_TOTAL_BYTES || totalRecords >= MAX_RECORDS;
-      if (bounded) addDiagnostic(diagnostics, 'read-limit', target);
-      if (result.hasMore || bounded) {
+      const isBounded =
+        result.isBounded || totalBytes >= MAX_TOTAL_BYTES || totalRecords >= MAX_RECORDS;
+      if (isBounded) addDiagnostic(diagnostics, 'read-limit', target);
+      if (result.hasMore || isBounded) {
         nextTargetIndex = result.hasMore ? targetIndex : targetIndex + 1;
         break;
       }
@@ -440,8 +437,8 @@ export class HookJournalReader {
       if (
         !isRecord(target) ||
         !isProvider(target.provider) ||
-        !safeString(target.nativeSessionId, MAX_ID_BYTES) ||
-        !safeString(target.baseName, MAX_ID_BYTES) ||
+        !isSafeString(target.nativeSessionId, MAX_ID_BYTES) ||
+        !isSafeString(target.baseName, MAX_ID_BYTES) ||
         !/^[a-f0-9]{64}$/u.test(target.baseName) ||
         makeHookJournalBaseName(target.provider, target.nativeSessionId) !== target.baseName
       ) {
@@ -458,7 +455,7 @@ export class HookJournalReader {
       throw new HookJournalReaderError('invalid-cursor');
     }
     for (const [key, value] of Object.entries(cursors)) {
-      if (!validCursorKey(key) || !validCursor(value)) {
+      if (!isValidCursorKey(key) || !isValidCursor(value)) {
         throw new HookJournalReaderError('invalid-cursor');
       }
     }
@@ -475,23 +472,23 @@ export class HookJournalReader {
     cursor?: FileCursor;
     bytesRead: number;
     hasMore: boolean;
-    bounded: boolean;
+    isBounded: boolean;
   }> {
     const providerDirectory = join(this.appDataPath, 'journals', target.provider);
     if (!isContained(resolve(this.appDataPath, 'journals'), providerDirectory)) {
       addDiagnostic(diagnostics, 'unsafe-source', target);
-      return { events: [], bytesRead: 0, hasMore: false, bounded: false };
+      return { events: [], bytesRead: 0, hasMore: false, isBounded: false };
     }
 
-    const directoryReady = await this.isSafeProviderDirectory(
+    const isDirectoryReady = await this.isSafeProviderDirectory(
       providerDirectory,
       target,
       diagnostics,
     );
-    if (!directoryReady) return { events: [], bytesRead: 0, hasMore: false, bounded: false };
+    if (!isDirectoryReady) return { events: [], bytesRead: 0, hasMore: false, isBounded: false };
 
     let snapshots: SourceSnapshot[] = [];
-    let stable = false;
+    let isStable = false;
     for (let attempt = 0; attempt < MAX_SNAPSHOT_ATTEMPTS; attempt += 1) {
       const observations: SnapshotSlotObservation[] = [];
       const attemptSnapshots: SourceSnapshot[] = [];
@@ -509,14 +506,14 @@ export class HookJournalReader {
       }
       if (await this.isStableSnapshotSet(observations)) {
         snapshots = attemptSnapshots;
-        stable = true;
+        isStable = true;
         break;
       }
       await this.closeSnapshots(attemptSnapshots);
     }
-    if (!stable) {
+    if (!isStable) {
       addDiagnostic(diagnostics, 'source-unstable', target);
-      return { events: [], bytesRead: 0, hasMore: false, bounded: false };
+      return { events: [], bytesRead: 0, hasMore: false, isBounded: false };
     }
     if (snapshots.length === 0) {
       // A prior inode disappearing without any retained file may indicate
@@ -524,7 +521,7 @@ export class HookJournalReader {
       if (previous !== undefined && previous.identity !== '') {
         addDiagnostic(diagnostics, 'possible-retention-gap', target);
       }
-      return { events: [], bytesRead: 0, hasMore: false, bounded: false };
+      return { events: [], bytesRead: 0, hasMore: false, isBounded: false };
     }
 
     const hasTrustedPrevious = previous !== undefined && previous.identity !== '';
@@ -537,19 +534,19 @@ export class HookJournalReader {
 
     const events: HookJournalEvent[] = [];
     let cursor: FileCursor | undefined;
-    let started = !hasTrustedPrevious || cursorIndex < 0;
+    let hasStarted = !hasTrustedPrevious || cursorIndex < 0;
     const seenIdentities = new Set<string>();
     let bytesRead = 0;
     let hasMore = false;
-    let bounded = false;
+    let isBounded = false;
     try {
       for (let index = 0; index < snapshots.length; index += 1) {
         const snapshot = snapshots[index];
         if (seenIdentities.has(snapshot.identity)) continue;
         seenIdentities.add(snapshot.identity);
-        if (!started) {
+        if (!hasStarted) {
           if (snapshot.identity !== previous?.identity) continue;
-          started = true;
+          hasStarted = true;
         }
         const initialOffset =
           hasTrustedPrevious && snapshot.identity === previous?.identity ? previous.offset : 0;
@@ -567,24 +564,24 @@ export class HookJournalReader {
         cursor = consumed.cursor;
         if (
           consumed.hasMore ||
-          consumed.recordLimitReached ||
+          consumed.isRecordLimitReached ||
           consumed.hasPendingTail ||
           bytesRead >= byteBudget ||
           index + 1 >= snapshots.length
         ) {
-          bounded = consumed.byteLimitReached || consumed.recordLimitReached;
+          isBounded = consumed.isByteLimitReached || consumed.isRecordLimitReached;
           hasMore =
             consumed.hasMore ||
-            (consumed.recordLimitReached && consumed.hasPendingTail) ||
+            (consumed.isRecordLimitReached && consumed.hasPendingTail) ||
             (index + 1 < snapshots.length &&
-              (consumed.recordLimitReached || bytesRead >= byteBudget));
+              (consumed.isRecordLimitReached || bytesRead >= byteBudget));
           break;
         }
       }
     } finally {
       await this.closeSnapshots(snapshots);
     }
-    return { events, cursor, bytesRead, hasMore, bounded };
+    return { events, cursor, bytesRead, hasMore, isBounded };
   }
 
   private async isStableSnapshotSet(
@@ -612,7 +609,7 @@ export class HookJournalReader {
         path,
         state: current.isFile() && !current.isSymbolicLink() ? 'regular' : 'non-regular',
         ...(current.isFile() && !current.isSymbolicLink()
-          ? { identity: sourceIdentity(current) }
+          ? { identity: getSourceIdentity(current) }
           : {}),
       };
     } catch (error) {
@@ -654,14 +651,14 @@ export class HookJournalReader {
     }
     // A missing directory is normal for an uninitialized provider; existing
     // non-directory/symlink components are an unsafe source installation.
-    const directoryReady =
+    const isDirectoryReady =
       root.isDirectory() &&
       !root.isSymbolicLink() &&
       journals.isDirectory() &&
       !journals.isSymbolicLink() &&
       provider.isDirectory() &&
       !provider.isSymbolicLink();
-    if (!directoryReady) {
+    if (!isDirectoryReady) {
       addDiagnostic(diagnostics, 'unsafe-source', target);
       return false;
     }
@@ -711,7 +708,7 @@ export class HookJournalReader {
       const size = Number(stats.size);
       return {
         path,
-        identity: sourceIdentity(stats),
+        identity: getSourceIdentity(stats),
         size,
         handle,
       };
@@ -739,11 +736,11 @@ export class HookJournalReader {
   ): Promise<ConsumedFile> {
     let offset = requestedOffset;
     const isActive = isActiveSnapshot(snapshot);
-    let discarding = previous?.isDiscardingOversizedLine ?? false;
+    let isDiscarding = previous?.isDiscardingOversizedLine ?? false;
     if (offset > snapshot.size) {
       addDiagnostic(diagnostics, 'cursor-truncated', target);
       offset = 0;
-      discarding = false;
+      isDiscarding = false;
     }
     const readResult = await this.readSnapshotBytes(
       snapshot,
@@ -753,36 +750,36 @@ export class HookJournalReader {
       diagnostics,
     );
     const bytes = readResult.bytes;
-    const reachedSnapshotEof =
-      !readResult.byteLimitReached && offset + bytes.length === snapshot.size;
-    if (!isActive && reachedSnapshotEof && bytes.length === 0) discarding = false;
+    const hasReachedSnapshotEof =
+      !readResult.isByteLimitReached && offset + bytes.length === snapshot.size;
+    if (!isActive && hasReachedSnapshotEof && bytes.length === 0) isDiscarding = false;
     const events: HookJournalEvent[] = [];
     let cursorOffset = offset;
     let lineStart = offset;
     let index = 0;
-    let recordLimitReached = false;
+    let isRecordLimitReached = false;
     while (index < bytes.length) {
       if (events.length >= recordsRemaining) {
-        recordLimitReached = true;
+        isRecordLimitReached = true;
         cursorOffset = offset + index;
         break;
       }
       const newline = bytes.indexOf(0x0a, index);
       if (newline < 0) {
         const partialLength = bytes.length - index;
-        if (!isActive && reachedSnapshotEof) {
+        if (!isActive && hasReachedSnapshotEof) {
           addDiagnostic(
             diagnostics,
-            discarding || partialLength + 1 > MAX_RECORD_BYTES
+            isDiscarding || partialLength + 1 > MAX_RECORD_BYTES
               ? 'record-oversized'
               : 'record-malformed',
             target,
           );
-          discarding = false;
+          isDiscarding = false;
           cursorOffset = offset + bytes.length;
-        } else if (discarding || partialLength + 1 > MAX_RECORD_BYTES) {
-          if (!discarding) addDiagnostic(diagnostics, 'record-oversized', target);
-          discarding = true;
+        } else if (isDiscarding || partialLength + 1 > MAX_RECORD_BYTES) {
+          if (!isDiscarding) addDiagnostic(diagnostics, 'record-oversized', target);
+          isDiscarding = true;
           cursorOffset = offset + bytes.length;
         } else {
           cursorOffset = lineStart;
@@ -791,8 +788,8 @@ export class HookJournalReader {
       }
       const line = bytes.subarray(index, newline);
       const recordEnd = offset + newline + 1;
-      if (discarding) {
-        discarding = false;
+      if (isDiscarding) {
+        isDiscarding = false;
         cursorOffset = recordEnd;
       } else if (line.byteLength + 1 > MAX_RECORD_BYTES) {
         addDiagnostic(diagnostics, 'record-oversized', target);
@@ -806,7 +803,7 @@ export class HookJournalReader {
           raw = undefined;
         }
         if (raw !== undefined) {
-          const event = eventFromRecord(raw, target, `${snapshot.identity}:${lineStart}`);
+          const event = createEventFromRecord(raw, target, `${snapshot.identity}:${lineStart}`);
           if (event === undefined) addDiagnostic(diagnostics, 'record-malformed', target);
           else events.push(event);
         }
@@ -815,22 +812,22 @@ export class HookJournalReader {
       lineStart = recordEnd;
       index = newline + 1;
       if (events.length >= recordsRemaining) {
-        recordLimitReached = true;
+        isRecordLimitReached = true;
         break;
       }
     }
-    if (!recordLimitReached && index === bytes.length) {
+    if (!isRecordLimitReached && index === bytes.length) {
       cursorOffset = offset + bytes.length;
-      if (bytes.length === 0 && offset === snapshot.size) cursorOffset = snapshot.size;
-      if (discarding && bytes.length > 0 && bytes[bytes.length - 1] === 0x0a) discarding = false;
+      if (isDiscarding && bytes.length > 0 && bytes[bytes.length - 1] === 0x0a)
+        isDiscarding = false;
     }
-    const hasUnconsumedTail = discarding || cursorOffset < snapshot.size;
+    const hasUnconsumedTail = isDiscarding || cursorOffset < snapshot.size;
     return {
       events,
       bytesRead: bytes.length,
-      byteLimitReached: readResult.byteLimitReached,
-      recordLimitReached,
-      hasMore: readResult.byteLimitReached,
+      isByteLimitReached: readResult.isByteLimitReached,
+      isRecordLimitReached,
+      hasMore: readResult.isByteLimitReached,
       hasPendingTail: hasUnconsumedTail,
       cursor: {
         identity: snapshot.identity,
@@ -839,10 +836,10 @@ export class HookJournalReader {
           ? {}
           : { baselineUntilOffset: previous.baselineUntilOffset }),
         ...(previous?.isDiscardingOversizedLine === undefined
-          ? discarding
+          ? isDiscarding
             ? { isDiscardingOversizedLine: true }
             : {}
-          : { isDiscardingOversizedLine: discarding }),
+          : { isDiscardingOversizedLine: isDiscarding }),
       },
     };
   }
@@ -853,9 +850,9 @@ export class HookJournalReader {
     byteBudget: number,
     target: HookJournalTarget,
     diagnostics: MutableDiagnostics,
-  ): Promise<{ bytes: Buffer; byteLimitReached: boolean }> {
+  ): Promise<{ bytes: Buffer; isByteLimitReached: boolean }> {
     const remaining = snapshot.size - offset;
-    if (remaining <= 0) return { bytes: Buffer.alloc(0), byteLimitReached: false };
+    if (remaining <= 0) return { bytes: Buffer.alloc(0), isByteLimitReached: false };
     const readLimit = Math.min(remaining, Math.max(0, byteBudget));
     const bytes = Buffer.allocUnsafe(readLimit);
     let total = 0;
@@ -875,7 +872,7 @@ export class HookJournalReader {
     }
     return {
       bytes: bytes.subarray(0, total),
-      byteLimitReached: readLimit < remaining,
+      isByteLimitReached: readLimit < remaining,
     };
   }
 }
