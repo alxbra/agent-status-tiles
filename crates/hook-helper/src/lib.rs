@@ -2,7 +2,7 @@ use serde::Serialize;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::fs::{self, File, Metadata, OpenOptions};
-use std::io::{self, Read, Write};
+use std::io::{self, Read, Seek, SeekFrom, Write};
 #[cfg(unix)]
 use std::os::fd::AsRawFd;
 use std::path::{Component, Path, PathBuf};
@@ -294,6 +294,7 @@ fn append_event(data_dir: &Path, event: &ReducedEvent) -> io::Result<()> {
     if !safe_journal_set(&journal)? {
         return Ok(());
     }
+    repair_unterminated_tail(&journal)?;
     let current_size = fs::symlink_metadata(&journal)
         .map(|metadata| metadata.len())
         .unwrap_or(0);
@@ -306,8 +307,46 @@ fn append_event(data_dir: &Path, event: &ReducedEvent) -> io::Result<()> {
     add_no_follow(&mut options);
     let mut file = options.open(&journal)?;
     set_private_file_permissions(&file)?;
-    file.write_all(&line)?;
-    file.write_all(b"\n")?;
+    let mut record = line;
+    record.push(b'\n');
+    file.write_all(&record)?;
+    file.sync_data()
+}
+
+fn repair_unterminated_tail(journal: &Path) -> io::Result<()> {
+    let metadata = match fs::symlink_metadata(journal) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error),
+    };
+    if !metadata.is_file() {
+        return Err(io::Error::other("unsafe journal path"));
+    }
+    let mut options = OpenOptions::new();
+    options.read(true).write(true);
+    add_no_follow(&mut options);
+    let mut file = options.open(journal)?;
+    let length = file.metadata()?.len();
+    if length > MAX_JOURNAL_BYTES {
+        return Err(io::Error::other("journal exceeds bound"));
+    }
+    let mut position = length;
+    let mut chunk = vec![0_u8; 4 * 1024];
+    while position > 0 {
+        let start = position.saturating_sub(chunk.len() as u64);
+        file.seek(SeekFrom::Start(start))?;
+        let amount = file.read(&mut chunk[..(position - start) as usize])?;
+        if let Some(offset) = chunk[..amount].iter().rposition(|byte| *byte == b'\n') {
+            let end = start + offset as u64 + 1;
+            if end < length {
+                file.set_len(end)?;
+                file.sync_data()?;
+            }
+            return Ok(());
+        }
+        position = start;
+    }
+    file.set_len(0)?;
     file.sync_data()
 }
 
@@ -413,6 +452,9 @@ impl JournalLock {
         options.read(true).write(true).create(true);
         add_no_follow(&mut options);
         let file = options.open(path)?;
+        if !file.metadata()?.is_file() {
+            return Err(io::Error::other("unsafe lock path"));
+        }
         set_private_file_permissions(&file)?;
         for _ in 0..LOCK_RETRIES {
             #[cfg(unix)]

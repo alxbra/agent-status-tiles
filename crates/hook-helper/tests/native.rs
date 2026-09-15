@@ -230,3 +230,56 @@ fn symlinked_journal_is_not_followed() {
     fs::remove_dir_all(data_dir).unwrap();
     fs::remove_dir_all(external_dir).unwrap();
 }
+
+#[test]
+fn native_helper_repairs_an_unterminated_tail_before_replay() {
+    let data_dir = temp_dir("partial-tail");
+    invoke(
+        &data_dir,
+        r#"{"event_name":"SessionStart","session_id":"partial"}"#,
+    );
+    let journal = journal_files(&data_dir).pop().unwrap();
+    let mut file = fs::OpenOptions::new().append(true).open(&journal).unwrap();
+    file.write_all(br#"{"event_name":"Stop","session_id":"partial""#)
+        .unwrap();
+    drop(file);
+    invoke(
+        &data_dir,
+        r#"{"event_name":"SessionEnd","session_id":"partial"}"#,
+    );
+    let contents = fs::read_to_string(journal).unwrap();
+    let lines: Vec<_> = contents.lines().collect();
+    assert_eq!(lines.len(), 2);
+    for line in lines {
+        let _: Value = serde_json::from_str(line).unwrap();
+    }
+    fs::remove_dir_all(data_dir).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn native_helper_does_not_open_or_mutate_a_fifo_journal() {
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
+    use std::os::unix::fs::FileTypeExt;
+
+    let data_dir = temp_dir("fifo");
+    invoke(
+        &data_dir,
+        r#"{"event_name":"SessionStart","session_id":"fifo"}"#,
+    );
+    let journal = journal_files(&data_dir).pop().unwrap();
+    fs::remove_file(&journal).unwrap();
+    let path = CString::new(journal.as_os_str().as_bytes()).unwrap();
+    assert_eq!(unsafe { libc::mkfifo(path.as_ptr(), 0o600) }, 0);
+    invoke(
+        &data_dir,
+        r#"{"event_name":"SessionEnd","session_id":"fifo"}"#,
+    );
+    assert!(fs::symlink_metadata(&journal)
+        .unwrap()
+        .file_type()
+        .is_fifo());
+    fs::remove_file(journal).unwrap();
+    fs::remove_dir_all(data_dir).unwrap();
+}
