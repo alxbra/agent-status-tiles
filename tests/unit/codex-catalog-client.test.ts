@@ -107,6 +107,7 @@ process.stdin.on('data', (chunk) => {
     if (request.method !== 'thread/list') continue;
     if (mode === 'slow-start' && !initializeResponseSent) process.exit(3);
     if (mode === 'require-source-kinds' && JSON.stringify(request.params.sourceKinds) !== JSON.stringify(expectedSourceKinds)) process.exit(4);
+    if (mode === 'require-default-page-size' && request.params.limit !== 20) process.exit(5);
     if (mode === 'delay') continue;
     if (mode === 'oversized') {
       process.stdout.write('x'.repeat(1024 * 1024 + 1) + '\\n');
@@ -231,6 +232,17 @@ describe('Codex catalog client', () => {
   it('requests every current bounded source kind for catalog discovery', async () => {
     const diagnostics: CodexCatalogDiagnosticCode[] = [];
     const client = createClient(await createFakeBinary('require-source-kinds'), diagnostics);
+
+    const result = await client.listThreads({ maxPages: 1 });
+
+    expect(result.records).toHaveLength(2);
+    expect(diagnostics).toEqual([]);
+    await client.stop();
+  });
+
+  it('uses a conservative default page size for current protocol responses', async () => {
+    const diagnostics: CodexCatalogDiagnosticCode[] = [];
+    const client = createClient(await createFakeBinary('require-default-page-size'), diagnostics);
 
     const result = await client.listThreads({ maxPages: 1 });
 
