@@ -115,14 +115,6 @@ function packSurfaceCenters(
     const minimum = centers[index - 1] + Math.max(surfaceMinimum, hitMinimum);
     centers[index] = Math.max(centers[index], minimum);
   }
-  for (let index = centers.length - 2; index >= 0; index -= 1) {
-    const hitSize = Math.max(TILE_HIT_SIZE, sizes[index]);
-    const nextHitSize = Math.max(TILE_HIT_SIZE, sizes[index + 1]);
-    const surfaceMaximum = (sizes[index] + sizes[index + 1]) / 2 + MIN_SURFACE_GAP;
-    const hitMaximum = (hitSize + nextHitSize) / 2;
-    const maximum = centers[index + 1] - Math.max(surfaceMaximum, hitMaximum);
-    centers[index] = Math.min(centers[index], maximum);
-  }
   return centers;
 }
 

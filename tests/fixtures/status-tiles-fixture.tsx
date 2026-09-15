@@ -8,6 +8,7 @@ import './status-tiles-fixture.css';
 declare global {
   interface Window {
     __setFixtureSessions?: (sessions: readonly SessionSnapshot[]) => void;
+    __setFixtureCount?: (count: number) => void;
     __fixtureOpenTarget?: OpenSessionTarget;
     __fixtureDismissedSessionId?: string;
     __fixtureHitRegions?: unknown;
@@ -63,18 +64,22 @@ export function Fixture(): ReactElement {
   const theme = query.get('theme') === 'dark' ? 'dark' : 'light';
   const widthQuery = query.get('width');
   const width = widthQuery === null ? undefined : Number(widthQuery);
+  const heightQuery = query.get('height');
+  const height = heightQuery === null ? undefined : Number(heightQuery);
   document.body.dataset.fixtureTheme = theme;
   const [sessions, setSessions] = useState<readonly SessionSnapshot[]>(() =>
     makeSessions(count, forceError, visualStates),
   );
   window.__setFixtureSessions = setSessions;
+  window.__setFixtureCount = (nextCount) =>
+    setSessions(makeSessions(nextCount, forceError, visualStates));
 
   return (
     <StatusTiles
       sessions={sessions}
       reducedMotion={reducedMotion}
       backgroundTone={theme}
-      height={480}
+      height={height}
       width={width}
       onOpenSession={(target) => {
         window.__fixtureOpenTarget = target;

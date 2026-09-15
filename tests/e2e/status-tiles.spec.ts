@@ -4,6 +4,7 @@ import { createServer, type ViteDevServer } from 'vite';
 import { resolve } from 'node:path';
 import type { AddressInfo } from 'node:net';
 import type { SessionSnapshot } from '../../src/shared/session';
+import { visibleSlotCount } from '../../src/renderer/tiles/geometry';
 
 const projectRoot = process.cwd();
 let fixtureServer: ViteDevServer;
@@ -11,6 +12,7 @@ let fixtureServer: ViteDevServer;
 declare global {
   interface Window {
     __setFixtureSessions?: (sessions: readonly SessionSnapshot[]) => void;
+    __setFixtureCount?: (count: number) => void;
     __fixtureOpenTarget?: { sessionId: string; completionId?: string };
     __fixtureDismissedSessionId?: string;
     __fixtureHitRegions?: unknown;
@@ -106,6 +108,98 @@ for (const width of ['72', 'NaN', 'Infinity']) {
       .toBe(88);
   });
 }
+
+test('measures a strip after empty mount, resize, and repopulation', async ({ page }) => {
+  await page.setViewportSize({ width: 180, height: 480 });
+  await page.goto(fixtureUrl('count=0'));
+  await expect(page.locator('.status-tiles')).toHaveCount(0);
+
+  await page.evaluate(() =>
+    document.documentElement.style.setProperty('--fixture-height', '120px'),
+  );
+  await page.evaluate(() => window.__setFixtureCount?.(30));
+  const root = page.locator('.status-tiles');
+  await expect(root).toBeVisible();
+  await expect(root.locator('.status-tiles__tile')).toHaveCount(visibleSlotCount(120));
+  await expect.poll(async () => (await root.boundingBox())?.height).toBe(120);
+  const shortMetrics = await root.locator('.status-tiles__tile').evaluateAll((elements) => {
+    const rootBounds = document
+      .querySelector<HTMLElement>('.status-tiles')!
+      .getBoundingClientRect();
+    return elements.map((element) => {
+      const target = element.getBoundingClientRect();
+      const surface = element.querySelector<HTMLElement>('.status-tiles__tile-surface')!;
+      const surfaceBounds = surface.getBoundingClientRect();
+      return {
+        target: {
+          left: target.left - rootBounds.left,
+          right: target.right - rootBounds.left,
+          top: target.top - rootBounds.top,
+          bottom: target.bottom - rootBounds.top,
+        },
+        surface: {
+          left: surfaceBounds.left - rootBounds.left,
+          right: surfaceBounds.right - rootBounds.left,
+          top: surfaceBounds.top - rootBounds.top,
+          bottom: surfaceBounds.bottom - rootBounds.top,
+        },
+      };
+    });
+  });
+  for (const metric of shortMetrics) {
+    for (const bounds of [metric.target, metric.surface]) {
+      expect(bounds.left).toBeGreaterThanOrEqual(-0.01);
+      expect(bounds.right).toBeLessThanOrEqual(88.01);
+      expect(bounds.top).toBeGreaterThanOrEqual(-0.01);
+      expect(bounds.bottom).toBeLessThanOrEqual(120.01);
+    }
+  }
+
+  await page.evaluate(() => {
+    document.documentElement.style.setProperty('--fixture-height', '480px');
+  });
+  await expect.poll(async () => (await root.boundingBox())?.height).toBe(480);
+  await expect(root.locator('.status-tiles__tile')).toHaveCount(12);
+
+  await page.evaluate(() => window.__setFixtureCount?.(0));
+  await expect(root).toHaveCount(0);
+  await page.evaluate(() =>
+    document.documentElement.style.setProperty('--fixture-height', '120px'),
+  );
+  await page.evaluate(() => window.__setFixtureCount?.(30));
+  await expect(root).toBeVisible();
+  await expect(root.locator('.status-tiles__tile')).toHaveCount(visibleSlotCount(120));
+  await expect.poll(async () => (await root.boundingBox())?.height).toBe(120);
+  await page.evaluate(() =>
+    document.documentElement.style.setProperty('--fixture-height', '480px'),
+  );
+  await expect.poll(async () => (await root.boundingBox())?.height).toBe(480);
+  await expect(root.locator('.status-tiles__tile')).toHaveCount(12);
+});
+
+test('ignores horizontal-only and zero-delta wheel events after scrolling down', async ({
+  page,
+}) => {
+  await openFixture(page, 30);
+  const root = page.locator('.status-tiles');
+  const rootBox = await root.boundingBox();
+  if (rootBox === null) throw new Error('Status tile strip has no bounds');
+  await page.mouse.move(rootBox.x + 8, rootBox.y + rootBox.height / 2);
+  await root.dispatchEvent('wheel', { bubbles: true, cancelable: true, deltaX: 0, deltaY: 120 });
+  await expect
+    .poll(() => page.locator('.status-tiles__tile').first().getAttribute('data-session-id'))
+    .not.toBe('codex:fixture-0');
+  const firstAfterVertical = await page
+    .locator('.status-tiles__tile')
+    .first()
+    .getAttribute('data-session-id');
+
+  await root.dispatchEvent('wheel', { bubbles: true, cancelable: true, deltaX: 80, deltaY: 0 });
+  await root.dispatchEvent('wheel', { bubbles: true, cancelable: true, deltaX: 0, deltaY: 0 });
+  await expect
+    .poll(() => page.locator('.status-tiles__tile').first().getAttribute('data-session-id'))
+    .toBe(firstAfterVertical);
+});
 
 test('magnification survives a pointer sweep through transparent inter-tile gaps', async ({
   page,

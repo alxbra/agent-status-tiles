@@ -165,6 +165,7 @@ export function StatusTiles({
   const motionReduced = prefersReducedMotion || reducedMotion === true;
   const effectiveWidth = normalizeStripWidth(width);
   const visibleSessions = useMemo(() => visibleTileSessions(sessions), [sessions]);
+  const isStripMounted = displayedSessions.length > 0 || visibleSessions.length > 0;
   visibleSessionsRef.current = visibleSessions;
 
   useLayoutEffect(() => {
@@ -182,7 +183,7 @@ export function StatusTiles({
     const observer = new ResizeObserver(updateHeight);
     observer.observe(root);
     return () => observer.disconnect();
-  }, [height]);
+  }, [height, isStripMounted]);
 
   useEffect(() => {
     setDisplayedSessions((previous) => {
@@ -371,7 +372,7 @@ export function StatusTiles({
   }
 
   function handleWheel(event: WheelEvent<HTMLDivElement>): void {
-    if (layout.maxStart === 0) return;
+    if (layout.maxStart === 0 || !Number.isFinite(event.deltaY) || event.deltaY === 0) return;
     event.preventDefault();
     beginInteractionFromRef();
     const delta = Math.max(1, Math.round(Math.abs(event.deltaY) / 24));
@@ -387,7 +388,7 @@ export function StatusTiles({
     if (!focusWithinRef.current && !pointerInsideRef.current) leavePointerFromRef();
   }
 
-  if (displayedSessions.length === 0 && visibleSessions.length === 0) return null;
+  if (!isStripMounted) return null;
 
   const rootStyle = { width: `${effectiveWidth}px` } satisfies CSSProperties;
   const indicatorStyle = {

@@ -21,7 +21,7 @@ body[data-fixture-theme='dark'] {
 }
 
 #fixture-root > .status-tiles {
-  height: 480px;
+  height: var(--fixture-height, 480px);
   margin: 0;
   pointer-events: auto;
 }
