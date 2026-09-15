@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   chmod,
   lstat,
@@ -26,6 +26,28 @@ import {
   selectSession,
   selectSessionSnapshots,
 } from '../../src/main/sessions/reducer';
+
+const readProbe = vi.hoisted(() => ({ capped: false, calls: 0 }));
+
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs/promises')>();
+  return {
+    ...actual,
+    open: (...args: Parameters<typeof actual.open>) =>
+      actual.open(...args).then((handle) => {
+        if (!readProbe.capped) return handle;
+        return new Proxy(handle, {
+          get(target, property, receiver) {
+            if (property !== 'read') return Reflect.get(target, property, receiver);
+            return async (buffer: Buffer, offset: number, length: number, position: number) => {
+              readProbe.calls += 1;
+              return target.read(buffer, offset, Math.min(length, 7), position);
+            };
+          },
+        });
+      }),
+  };
+});
 
 const sessionId = makeSessionId('codex', 'thread-1');
 const cursorMap: FileCursorMap = {
@@ -191,6 +213,35 @@ describe('session persistence', () => {
     expect(result.cursors).toEqual(newerCursors);
   });
 
+  it('continues a queued save after an earlier queued save is rejected', async () => {
+    const appDataPath = join(await isolatedDirectory(), 'app-data');
+    const state = stateWithSession();
+    const record = state.sessions[sessionId];
+    if (record === undefined) throw new Error('expected test session');
+    const invalid = {
+      ...state,
+      sessions: { ...state.sessions, [sessionId]: { ...record, activeTurnId: 'turn-1' } },
+    };
+    const expected = stateWithUnread();
+    const expectedCursors: FileCursorMap = {
+      [makeCursorKey('codex', 'events/thread-1.jsonl')]: {
+        identity: 'latest-file',
+        offset: 99,
+        baselineUntilOffset: 101,
+        isDiscardingOversizedLine: false,
+      },
+    };
+
+    const rejected = saveSessionState(appDataPath, invalid, cursorMap);
+    const succeeded = saveSessionState(appDataPath, expected, expectedCursors);
+    await expect(rejected).rejects.toMatchObject({ code: 'corrupt' });
+    await expect(succeeded).resolves.toBeUndefined();
+
+    const result = await loadSessionState(appDataPath);
+    expect(selectSession(result.state, sessionId)?.status).toBe('unread');
+    expect(result.cursors).toEqual(expectedCursors);
+  });
+
   it('preserves order and cursors as one atomic snapshot', async () => {
     const appDataPath = join(await isolatedDirectory(), 'app-data');
     const secondId = makeSessionId('claude', 'session-2');
@@ -228,6 +279,23 @@ describe('session persistence', () => {
       selectSessionSnapshots(state).map(({ id }) => id),
     );
     expect(result.cursors).toEqual(cursors);
+  });
+
+  it('reconstructs a valid state when reads return short chunks', async () => {
+    const appDataPath = join(await isolatedDirectory(), 'app-data');
+    await saveSessionState(appDataPath, stateWithUnread(), cursorMap);
+
+    readProbe.capped = true;
+    readProbe.calls = 0;
+    try {
+      const result = await loadSessionState(appDataPath);
+      expect(result.source).toBe('restored');
+      expect(selectSession(result.state, sessionId)?.status).toBe('unread');
+      expect(result.cursors).toEqual(cursorMap);
+    } finally {
+      readProbe.capped = false;
+    }
+    expect(readProbe.calls).toBeGreaterThan(1);
   });
 
   it('restores unread, acknowledged, error, and dismissed states across saves', async () => {
