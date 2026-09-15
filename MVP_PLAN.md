@@ -518,6 +518,7 @@ a signing/notarization claim.
 - [x] Build the native hook-helper executable (merged PR #2).
 - [x] Package the native helper as unsigned arm64/x64 application resources (merged PR #9; signing and notarization remain pending).
 - [x] Implement reduced local event journal writing, concurrency handling, bounded rotation, and silent malformed-input behavior in the merged native helper (PR #2).
+- [x] Implement the bounded standalone hook-journal reader (open PR #12; replay contract, privacy projection, inode rotation, and cursor continuation are verified; coordinator wiring remains pending).
 - [ ] Replay helper journals through companion app state; the app reader/replay path remains pending.
 - [ ] Install only owned hooks into shared user settings.
 - [ ] Detect local Desktop and terminal ownership.
@@ -611,6 +612,7 @@ Maintain this table in the plan:
 | [#8 `feat: add rounded-square status tile UI`](https://github.com/alxbra/agent-status-tiles/pull/8) | Isolated rounded-square tile renderer, magnification, overflow, keyboard interaction, and visual fixtures | 1 completed CLI pass; 1 valid finding fixed | 2 | 94 unit tests, 3 Electron smoke tests, 22 browser fixture tests; final head `febe543d76a4e8d052b85c8e044bf612f471a1d3`; [CI run 34987937805](https://github.com/alxbra/agent-status-tiles/actions/runs/34987937805); [audit comment](https://github.com/alxbra/agent-status-tiles/pull/8#issuecomment-5682973864) | `1f3c523465de0cff9eb2cbafb65a04cb347ce301` |
 | [#9 `build/helper packaging`](https://github.com/alxbra/agent-status-tiles/pull/9) | Unsigned arm64/x64 packaging for the existing native hook helper | 1 completed CLI pass; 1 valid documentation finding fixed | 2 | 104 TypeScript unit tests, 11 native helper tests, 25 E2E tests (3 Electron and 22 browser), format/lint/type/build checks, and unsigned arm64/x64 resource validation; [CI run 34991704461](https://github.com/alxbra/agent-status-tiles/actions/runs/34991704461), [native run 34991704642](https://github.com/alxbra/agent-status-tiles/actions/runs/34991704642), [package run 34991704417](https://github.com/alxbra/agent-status-tiles/actions/runs/34991704417); [audit comment](https://github.com/alxbra/agent-status-tiles/pull/9#issuecomment-5683519994) | `c9905833628a533f7aadaf93ff82dfd0d8c9c94f` |
 | [#10 `feat: add presentational settings view`](https://github.com/alxbra/agent-status-tiles/pull/10) | Renderer-only stock-shadcn Settings view, controlled provider/display/preferences presentation, and browser fixture | 1 completed CLI pass; 0 findings | 2 | Final local validation at `d07b3a3`: 104 unit tests, 3 Electron smoke tests, 29 browser fixture tests, format/lint/type/build checks; prior green [CI run 34991670989](https://github.com/alxbra/agent-status-tiles/actions/runs/34991670989) at `6fd75f1`; post-sync CI pending | Open; no merge SHA |
+| [#12 `feat/hook-journal-reader`](https://github.com/alxbra/agent-status-tiles/pull/12) | Provider-neutral bounded hook-journal replay reader with privacy projection, inode-aware rotation, cursor continuation, and fixed diagnostics | 1 completed CLI pass; 2 findings (1 documentation fixed, 1 Windows-test-skip request rejected for the macOS-first target) | 2 | Final local validation at `f555e4b`: 122 unit tests, 3 Electron smoke tests, 29 browser fixture tests, format/lint/type/build checks; final PR #11 synchronization and CI pending | Open; no merge SHA |
 
 Foundation review corrections included strict IPC sender/frame validation, same-host renderer navigation checks, supported Node engine ranges, formatter coverage, and recovery after a failed settings-window load. No signing or notarization was claimed; Apple Developer credentials remain a release dependency.
 
@@ -655,6 +657,18 @@ simplification, and QA2 found no further issues. Final post-sync local
 validation has 104 unit tests, 3 Electron smoke tests, 29 browser fixture tests,
 format/lint/type/build checks, and no live provider or native settings wiring.
 Merge remains pending.
+
+Hook-journal-reader PR #12 is implementation-complete on its open branch at
+`f555e4b`. It completed exactly one CodeRabbit pass with two findings: one
+documentation wrapping finding was fixed, and a Windows-test-skip request was
+rejected because this is a macOS-first target with no Windows support claim and
+the existing security test must remain active. Two root QA passes are complete;
+QA1 made only internal naming, `Object.hasOwn`, and redundant-assignment cleanup
+and QA2 found no further issues. Final local validation has 122 unit tests, 32
+E2E tests (3 Electron and 29 browser), format/lint/type/build checks, and no
+live journal coordinator, lifecycle reduction, first-run baseline, provider
+wiring, or surface acceptance. PR #11 remains pending before final PR #12
+sync/merge; no PR #12 merge SHA is recorded yet.
 
 Record corrections made after review and the commit used for final validation.
 
