@@ -105,6 +105,7 @@ function createOverlayWindow(
   onClosed: (window: BrowserWindow) => void,
   onRendererInvalidated: (window: BrowserWindow) => void,
   onRendererLoadFailed: (window: BrowserWindow) => void,
+  onRendererGone: (window: BrowserWindow) => void,
   onPointerInput: (inputEvent: InputEvent) => void,
 ): BrowserWindow {
   const allowedUrl = rendererUrl();
@@ -140,6 +141,7 @@ function createOverlayWindow(
 
   protectWebContents(window, allowedUrl);
   window.webContents.on('did-start-loading', () => onRendererInvalidated(window));
+  window.webContents.on('render-process-gone', () => onRendererGone(window));
   window.webContents.on('input-event', (_event, inputEvent) => onPointerInput(inputEvent));
   window.on('closed', () => onClosed(window));
 
@@ -193,7 +195,6 @@ export function createOverlayController(options: OverlayControllerOptions = {}):
     if (isDestroyed || overlayWindow) return;
 
     const nextGeneration = generation + 1;
-    const requiresRendererReady = generation > 0;
     generation = nextGeneration;
     overlayGeneration = nextGeneration;
     resetRendererState();
@@ -202,6 +203,7 @@ export function createOverlayController(options: OverlayControllerOptions = {}):
       (closedWindow) => onClosed(closedWindow, nextGeneration),
       (invalidatedWindow) => onRendererInvalidated(invalidatedWindow, nextGeneration),
       (failedWindow) => onRendererLoadFailed(failedWindow, nextGeneration),
+      (goneWindow) => onRendererGone(goneWindow, nextGeneration),
       (inputEvent) => onPointerInput(inputEvent, nextGeneration),
     );
     overlayWindow = window;
@@ -216,12 +218,6 @@ export function createOverlayController(options: OverlayControllerOptions = {}):
       readyToShow = true;
       syncVisibility();
     });
-
-    // A replacement stays hidden until the renderer has completed its preload
-    // handshake. The first window keeps the historical ready-to-show policy.
-    if (requiresRendererReady) {
-      rendererReady = false;
-    }
   };
 
   const reposition = (): void => {
@@ -248,11 +244,7 @@ export function createOverlayController(options: OverlayControllerOptions = {}):
       return;
     }
 
-    const shouldShow =
-      requestedVisible &&
-      hasQualifyingSessions &&
-      readyToShow &&
-      (generation === 1 || rendererReady);
+    const shouldShow = requestedVisible && hasQualifyingSessions && readyToShow && rendererReady;
     if (shouldShow) {
       if (keyboardMode) {
         overlayWindow.setFocusable(true);
@@ -424,10 +416,30 @@ export function createOverlayController(options: OverlayControllerOptions = {}):
     reapplyMousePassthrough();
   };
 
+  const onRendererGone = (window: BrowserWindow, callbackGeneration?: number): void => {
+    if (
+      isDestroyed ||
+      overlayWindow !== window ||
+      (callbackGeneration !== undefined &&
+        (callbackGeneration !== overlayGeneration || callbackGeneration !== generation))
+    )
+      return;
+    rendererReady = false;
+    keyboardEntryNotified = false;
+    hitRegions = [];
+    reapplyMousePassthrough();
+    if (!window.isDestroyed()) window.destroy();
+    onClosed(window, callbackGeneration);
+  };
+
   const recoverOverlay = (repositionExisting = true): void => {
     if (isDestroyed) return;
     if (overlayWindow?.isDestroyed()) {
       onClosed(overlayWindow, overlayGeneration);
+      return;
+    }
+    if (overlayWindow?.webContents.isCrashed()) {
+      onRendererGone(overlayWindow, overlayGeneration);
       return;
     }
     if (overlayWindow && !overlayWindow.isDestroyed()) {

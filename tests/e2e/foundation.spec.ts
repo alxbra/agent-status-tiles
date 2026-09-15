@@ -94,6 +94,17 @@ test('enters and exits native keyboard mode without hiding the overlay', async (
         }),
       )
       .toEqual({ focusable: false, focused: false, visible: true });
+    await overlay.waitForTimeout(300);
+    expect(
+      application.windows().filter((window) => window.url().includes('/renderer/index.html')),
+    ).toHaveLength(0);
+    await application.evaluate(({ app }) => {
+      app.emit('activate');
+    });
+    await settingsWindow(application);
+    expect(
+      application.windows().filter((window) => window.url().includes('/renderer/index.html')),
+    ).toHaveLength(1);
   } finally {
     await closeApplication(application);
     await rm(userDataDir, { recursive: true, force: true });
@@ -303,6 +314,13 @@ test('recreates one native overlay after an unexpected close', async () => {
     const initialOverlayState = await initialOverlayPage.evaluate(() =>
       window.agentStatusTilesOverlay.getState(),
     );
+    const initialBounds = await application.evaluate(({ BrowserWindow }) => {
+      const window = BrowserWindow.getAllWindows().find((candidate) =>
+        candidate.webContents.getURL().includes('/renderer/overlay.html'),
+      );
+      if (window === undefined) throw new Error('Overlay window is unavailable');
+      return window.getBounds();
+    });
     const initialOverlayId = await application.evaluate(({ BrowserWindow }) => {
       const window = BrowserWindow.getAllWindows().find((candidate) =>
         candidate.webContents.getURL().includes('/renderer/overlay.html'),
@@ -362,6 +380,89 @@ test('recreates one native overlay after an unexpected close', async () => {
     expect(await replacement.evaluate(() => window.agentStatusTilesOverlay.getState())).toEqual(
       initialOverlayState,
     );
+    await application.evaluate(({ BrowserWindow, powerMonitor }) => {
+      const window = BrowserWindow.getAllWindows().find((candidate) =>
+        candidate.webContents.getURL().includes('/renderer/overlay.html'),
+      );
+      if (window === undefined) throw new Error('Replacement overlay window is unavailable');
+      window.setBounds({ x: 0, y: 0, width: 100, height: 100 });
+      powerMonitor.emit('resume');
+    });
+    await expect
+      .poll(() =>
+        application!.evaluate(({ BrowserWindow }) => {
+          const window = BrowserWindow.getAllWindows().find((candidate) =>
+            candidate.webContents.getURL().includes('/renderer/overlay.html'),
+          );
+          return window?.getBounds() ?? null;
+        }),
+      )
+      .toEqual(initialBounds);
+  } finally {
+    await closeApplication(application);
+    await rm(userDataDir, { recursive: true, force: true });
+  }
+});
+
+test('recreates the native overlay after a renderer crash', async () => {
+  test.skip(process.platform !== 'darwin', 'the desktop shell targets macOS');
+  const userDataDir = await mkdtemp(join(tmpdir(), 'agent-status-tiles-crash-e2e-'));
+  let application: ElectronApplication | undefined;
+
+  try {
+    application = await launch(userDataDir, 1);
+    await settingsWindow(application);
+    const initialOverlay = await overlayWindow(application);
+    const initialState = await initialOverlay.evaluate(() =>
+      window.agentStatusTilesOverlay.getState(),
+    );
+    const initialId = await application.evaluate(({ BrowserWindow }) => {
+      const window = BrowserWindow.getAllWindows().find((candidate) =>
+        candidate.webContents.getURL().includes('/renderer/overlay.html'),
+      );
+      if (window === undefined) throw new Error('Overlay window is unavailable');
+      return window.webContents.id;
+    });
+    const crashed = initialOverlay.waitForEvent('crash').catch(() => undefined);
+    await application.evaluate(({ BrowserWindow }) => {
+      const window = BrowserWindow.getAllWindows().find((candidate) =>
+        candidate.webContents.getURL().includes('/renderer/overlay.html'),
+      );
+      if (window === undefined) throw new Error('Overlay window is unavailable');
+      window.webContents.forcefullyCrashRenderer();
+    });
+    await crashed;
+
+    await expect
+      .poll(() =>
+        application!.evaluate(({ BrowserWindow }) => {
+          const window = BrowserWindow.getAllWindows().find((candidate) =>
+            candidate.webContents.getURL().includes('/renderer/overlay.html'),
+          );
+          return window === undefined
+            ? null
+            : {
+                id: window.webContents.id,
+                crashed: window.webContents.isCrashed(),
+                visible: window.isVisible(),
+                focusable: window.isFocusable(),
+              };
+        }),
+      )
+      .toMatchObject({ crashed: false, visible: true, focusable: false });
+    const replacement = await overlayWindow(application);
+    const replacementId = await application.evaluate(({ BrowserWindow }) => {
+      const window = BrowserWindow.getAllWindows().find((candidate) =>
+        candidate.webContents.getURL().includes('/renderer/overlay.html'),
+      );
+      if (window === undefined) throw new Error('Replacement overlay window is unavailable');
+      return window.webContents.id;
+    });
+    expect(replacementId).not.toBe(initialId);
+    expect(await replacement.evaluate(() => window.agentStatusTilesOverlay.getState())).toEqual(
+      initialState,
+    );
+    await expect(replacement.locator('.status-tiles__tile')).toHaveCount(1);
   } finally {
     await closeApplication(application);
     await rm(userDataDir, { recursive: true, force: true });

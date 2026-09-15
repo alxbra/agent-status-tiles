@@ -34,10 +34,12 @@ type OverlayWindowMock = {
   readyListener?: () => void;
   closedListener?: () => void;
   loadingListener?: () => void;
+  rendererGoneListener?: () => void;
   pointerListener?: (inputEvent: PointerEvent) => void;
   markDestroyed: () => void;
   webContents: {
     focus: ReturnType<typeof vi.fn>;
+    isCrashed: ReturnType<typeof vi.fn>;
     on: ReturnType<typeof vi.fn>;
     setWindowOpenHandler: ReturnType<typeof vi.fn>;
   };
@@ -97,6 +99,7 @@ function createOverlayWindowMock(
     }),
     webContents: {
       focus: vi.fn(),
+      isCrashed: vi.fn(() => false),
       on: vi.fn((event: string, callback: unknown) => {
         if (event === 'did-start-loading') {
           mock.loadingListener = callback as () => void;
@@ -104,6 +107,9 @@ function createOverlayWindowMock(
         if (event === 'input-event') {
           const inputCallback = callback as (event: unknown, inputEvent: PointerEvent) => void;
           mock.pointerListener = (inputEvent) => inputCallback(undefined, inputEvent);
+        }
+        if (event === 'render-process-gone') {
+          mock.rendererGoneListener = callback as () => void;
         }
       }),
       setWindowOpenHandler: vi.fn(),
@@ -198,6 +204,7 @@ describe('overlay controller', () => {
     expect(overlayWindow.setIgnoreMouseEvents).toHaveBeenCalledWith(true, { forward: true });
     expect(overlayWindow.showInactive).not.toHaveBeenCalled();
 
+    controller.setRendererReady();
     overlayWindow.readyListener?.();
     controller.setQualifyingSessionCount(1);
     expect(overlayWindow.showInactive).toHaveBeenCalledOnce();
@@ -239,6 +246,9 @@ describe('overlay controller', () => {
     expect(onKeyboardEntry).toHaveBeenCalledTimes(2);
 
     overlayWindow.loadingListener?.();
+    controller.enterKeyboardMode();
+    expect(overlayWindow.focus).toHaveBeenCalledTimes(2);
+    expect(onKeyboardEntry).toHaveBeenCalledTimes(2);
     controller.setRendererReady();
     expect(overlayWindow.focus).toHaveBeenCalledTimes(3);
     expect(onKeyboardEntry).toHaveBeenCalledTimes(3);
@@ -265,11 +275,13 @@ describe('overlay controller', () => {
     expect(onKeyboardEntry).not.toHaveBeenCalled();
 
     overlayWindow.readyListener?.();
-    expect(overlayWindow.show).toHaveBeenCalledOnce();
-    expect(overlayWindow.focus).toHaveBeenCalledOnce();
+    expect(overlayWindow.show).not.toHaveBeenCalled();
+    expect(overlayWindow.focus).not.toHaveBeenCalled();
     expect(onKeyboardEntry).not.toHaveBeenCalled();
 
     controller.setRendererReady();
+    expect(overlayWindow.show).toHaveBeenCalledOnce();
+    expect(overlayWindow.focus).toHaveBeenCalledOnce();
     expect(onKeyboardEntry).toHaveBeenCalledOnce();
 
     controller.setQualifyingSessionCount(0);
@@ -278,7 +290,8 @@ describe('overlay controller', () => {
     expect(electronMocks.app.hide).toHaveBeenCalledOnce();
     expect(electronMocks.app.show).toHaveBeenCalledOnce();
     controller.setQualifyingSessionCount(1);
-    expect(overlayWindow.focus).toHaveBeenCalledTimes(2);
+    expect(overlayWindow.focus).toHaveBeenCalledOnce();
+    expect(overlayWindow.showInactive).toHaveBeenCalledOnce();
     controller.destroy();
   });
 
@@ -289,6 +302,7 @@ describe('overlay controller', () => {
     const { createOverlayController } = await import('../../src/main/overlay-controller');
 
     const controller = createOverlayController({ onKeyboardEntry });
+    controller.setRendererReady();
     overlayWindow.readyListener?.();
     controller.enterKeyboardMode();
     controller.setQualifyingSessionCount(1);
@@ -306,6 +320,7 @@ describe('overlay controller', () => {
     const { createOverlayController } = await import('../../src/main/overlay-controller');
 
     const controller = createOverlayController();
+    controller.setRendererReady();
     overlayWindow.readyListener?.();
     controller.setQualifyingSessionCount(1);
     controller.enterKeyboardMode();
@@ -459,6 +474,7 @@ describe('overlay controller', () => {
     expect(isValidOverlayHitRegion({ x: 10, y: 90, width: 24, height: 10 }, 88, 100)).toBe(true);
     expect(isValidOverlayHitRegion({ x: 10, y: 90, width: 24, height: 11 }, 88, 100)).toBe(false);
 
+    controller.setRendererReady();
     overlayWindow.readyListener?.();
     controller.setQualifyingSessionCount(1);
     expect(controller.setHitRegions([{ x: 10, y: 90, width: 24, height: 10 }])).toBe(true);
@@ -516,6 +532,7 @@ describe('overlay controller', () => {
         })),
       ),
     ).toBe(false);
+    controller.setRendererReady();
     overlayWindow.readyListener?.();
     controller.setQualifyingSessionCount(1);
     electronMocks.screen.getCursorScreenPoint.mockReturnValue({ x: 1092, y: 244 });
@@ -565,6 +582,45 @@ describe('overlay controller', () => {
     expect(electronMocks.BrowserWindow).toHaveBeenCalledTimes(2);
     expect(secondWindow.showInactive).not.toHaveBeenCalled();
 
+    secondWindow.readyListener?.();
+    expect(secondWindow.showInactive).not.toHaveBeenCalled();
+    controller.setRendererReady();
+    expect(secondWindow.showInactive).toHaveBeenCalledOnce();
+    controller.destroy();
+  });
+
+  it('replaces a crashed renderer and ignores its stale callbacks', async () => {
+    const firstWindow = createOverlayWindowMock();
+    const secondWindow = createOverlayWindowMock();
+    electronMocks.BrowserWindow.mockImplementationOnce(
+      class BrowserWindowMock {
+        constructor() {
+          return firstWindow;
+        }
+      } as unknown as typeof electronMocks.BrowserWindow,
+    ).mockImplementationOnce(
+      class BrowserWindowMock {
+        constructor() {
+          return secondWindow;
+        }
+      } as unknown as typeof electronMocks.BrowserWindow,
+    );
+    const { createOverlayController } = await import('../../src/main/overlay-controller');
+    const controller = createOverlayController();
+    controller.setQualifyingSessionCount(1);
+    controller.setRendererReady();
+    firstWindow.readyListener?.();
+    expect(controller.setHitRegions([{ x: 10, y: 20, width: 24, height: 24 }])).toBe(true);
+
+    firstWindow.rendererGoneListener?.();
+
+    expect(firstWindow.setIgnoreMouseEvents).toHaveBeenLastCalledWith(true, { forward: true });
+    expect(firstWindow.destroy).toHaveBeenCalledOnce();
+    expect(controller.getWindow()).toBe(secondWindow);
+    expect(electronMocks.BrowserWindow).toHaveBeenCalledTimes(2);
+    firstWindow.rendererGoneListener?.();
+    firstWindow.closedListener?.();
+    expect(electronMocks.BrowserWindow).toHaveBeenCalledTimes(2);
     secondWindow.readyListener?.();
     expect(secondWindow.showInactive).not.toHaveBeenCalled();
     controller.setRendererReady();
@@ -644,6 +700,7 @@ describe('overlay controller', () => {
     mockOverlayWindow(overlayWindow);
     const { createOverlayController } = await import('../../src/main/overlay-controller');
     const controller = createOverlayController();
+    controller.setRendererReady();
     overlayWindow.readyListener?.();
     controller.setQualifyingSessionCount(1);
     expect(controller.setHitRegions([{ x: 10, y: 20, width: 24, height: 24 }])).toBe(true);
