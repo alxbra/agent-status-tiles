@@ -11,7 +11,7 @@ import {
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-import { isAllowedRendererNavigation } from './security';
+import { protectWebContents } from './security';
 
 export const OVERLAY_WINDOW_WIDTH = 88;
 export const OVERLAY_WINDOW_HEIGHT = 480;
@@ -33,18 +33,27 @@ export interface OverlayController {
 }
 
 export function overlayBounds(workArea: Rectangle): Rectangle {
+  const width = Math.max(1, Math.min(OVERLAY_WINDOW_WIDTH, workArea.width));
   const height = Math.max(1, Math.min(OVERLAY_WINDOW_HEIGHT, workArea.height));
 
   return {
-    x: Math.round(workArea.x + workArea.width - OVERLAY_WINDOW_WIDTH),
+    x: Math.round(workArea.x + workArea.width - width),
     y: Math.round(workArea.y + (workArea.height - height) / 2),
-    width: OVERLAY_WINDOW_WIDTH,
+    width,
     height,
   };
 }
 
-export function isValidOverlayHitRegion(region: OverlayHitRegion): boolean {
+export function isValidOverlayHitRegion(
+  region: OverlayHitRegion,
+  width = OVERLAY_WINDOW_WIDTH,
+  height = OVERLAY_WINDOW_HEIGHT,
+): boolean {
   return (
+    Number.isFinite(width) &&
+    Number.isFinite(height) &&
+    width > 0 &&
+    height > 0 &&
     Number.isFinite(region.x) &&
     Number.isFinite(region.y) &&
     Number.isFinite(region.width) &&
@@ -53,8 +62,8 @@ export function isValidOverlayHitRegion(region: OverlayHitRegion): boolean {
     region.y >= 0 &&
     region.width > 0 &&
     region.height > 0 &&
-    region.x + region.width <= OVERLAY_WINDOW_WIDTH &&
-    region.y + region.height <= OVERLAY_WINDOW_HEIGHT
+    region.x + region.width <= width &&
+    region.y + region.height <= height
   );
 }
 
@@ -83,23 +92,6 @@ function rendererUrl(): string {
   }
 
   return pathToFileURL(rendererFilePath()).href;
-}
-
-function protectWebContents(window: BrowserWindow, allowedUrl: string): void {
-  window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
-  window.webContents.on('will-navigate', (event, targetUrl) => {
-    if (!isAllowedRendererNavigation(targetUrl, allowedUrl)) {
-      event.preventDefault();
-    }
-  });
-  window.webContents.on('will-redirect', (event, targetUrl) => {
-    if (!isAllowedRendererNavigation(targetUrl, allowedUrl)) {
-      event.preventDefault();
-    }
-  });
-  window.webContents.on('will-attach-webview', (event) => {
-    event.preventDefault();
-  });
 }
 
 function createOverlayWindow(
@@ -149,6 +141,7 @@ function createOverlayWindow(
     if (!window.isDestroyed()) {
       window.destroy();
     }
+    onClosed(window);
   });
 
   return window;
@@ -161,13 +154,34 @@ export function createOverlayController(): OverlayController {
   let hasQualifyingSessions = false;
   let hitRegions: readonly OverlayHitRegion[] = [];
   let ignoringMouseEvents = true;
+  let destroyed = false;
+
+  const createWindow = (): void => {
+    if (destroyed || overlayWindow) return;
+
+    readyToShow = false;
+    ignoringMouseEvents = true;
+    hitRegions = [];
+    const window = createOverlayWindow(screen.getPrimaryDisplay(), onClosed, onPointerInput);
+    overlayWindow = window;
+    window.once('ready-to-show', () => {
+      if (destroyed || overlayWindow !== window || window.isDestroyed()) return;
+      readyToShow = true;
+      syncVisibility();
+    });
+  };
 
   const reposition = (): void => {
     if (!overlayWindow || overlayWindow.isDestroyed()) {
       return;
     }
 
-    overlayWindow.setBounds(overlayBounds(screen.getPrimaryDisplay().workArea), false);
+    const bounds = overlayBounds(screen.getPrimaryDisplay().workArea);
+    overlayWindow.setBounds(bounds, false);
+    const currentBounds = overlayWindow.getBounds();
+    hitRegions = hitRegions.filter((region) =>
+      isValidOverlayHitRegion(region, currentBounds.width, currentBounds.height),
+    );
     syncMouseMode();
   };
 
@@ -216,6 +230,11 @@ export function createOverlayController(): OverlayController {
       return;
     }
 
+    if (!overlayWindow.isVisible()) {
+      setMouseIgnoring(true);
+      return;
+    }
+
     if (inputEvent.type === 'mouseLeave') {
       setMouseIgnoring(true);
       return;
@@ -233,14 +252,12 @@ export function createOverlayController(): OverlayController {
     if (overlayWindow === window) {
       overlayWindow = null;
       readyToShow = false;
+      ignoringMouseEvents = true;
+      hitRegions = [];
     }
   };
 
-  overlayWindow = createOverlayWindow(screen.getPrimaryDisplay(), onClosed, onPointerInput);
-  overlayWindow.once('ready-to-show', () => {
-    readyToShow = true;
-    syncVisibility();
-  });
+  createWindow();
 
   screen.on('display-metrics-changed', reposition);
   screen.on('display-added', reposition);
@@ -250,28 +267,35 @@ export function createOverlayController(): OverlayController {
   return {
     getWindow: () => {
       if (overlayWindow?.isDestroyed()) {
-        overlayWindow = null;
-        readyToShow = false;
+        onClosed(overlayWindow);
       }
 
       return overlayWindow;
     },
     setQualifyingSessionCount: (count) => {
       hasQualifyingSessions = Number.isFinite(count) && count > 0;
+      if (hasQualifyingSessions) createWindow();
       syncVisibility();
     },
     setVisible: (visible) => {
       requestedVisible = visible;
+      if (requestedVisible) createWindow();
       syncVisibility();
     },
     setHitRegions: (regions) => {
+      const bounds = overlayWindow?.getBounds();
+      const width = bounds?.width ?? overlayBounds(screen.getPrimaryDisplay().workArea).width;
+      const height = bounds?.height ?? overlayBounds(screen.getPrimaryDisplay().workArea).height;
       const valid =
-        regions.length <= MAX_OVERLAY_HIT_REGIONS && regions.every(isValidOverlayHitRegion);
+        regions.length <= MAX_OVERLAY_HIT_REGIONS &&
+        regions.every((region) => isValidOverlayHitRegion(region, width, height));
       hitRegions = valid ? regions.map((region) => ({ ...region })) : [];
       syncMouseMode();
       return valid;
     },
     destroy: () => {
+      if (destroyed) return;
+      destroyed = true;
       screen.off('display-metrics-changed', reposition);
       screen.off('display-added', reposition);
       screen.off('display-removed', reposition);
@@ -280,6 +304,9 @@ export function createOverlayController(): OverlayController {
         overlayWindow.destroy();
       }
       overlayWindow = null;
+      readyToShow = false;
+      ignoringMouseEvents = true;
+      hitRegions = [];
     },
   };
 }
