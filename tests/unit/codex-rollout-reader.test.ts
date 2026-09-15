@@ -453,7 +453,11 @@ describe('CodexRolloutReader', () => {
         { type: 'task_started', turn_id: 'turn-reordered' },
         '2026-09-15T10:00:01Z',
       ),
-      response('function_call_output', { call_id: 'reordered-call', turn_id: 'turn-reordered' }),
+      record(
+        'response_item',
+        { type: 'function_call_output', call_id: 'reordered-call', turn_id: 'turn-reordered' },
+        '2026-09-15T10:00:01.500Z',
+      ),
       record(
         'response_item',
         {
@@ -495,6 +499,181 @@ describe('CodexRolloutReader', () => {
           resolvedAt: Date.parse('2026-09-15T10:00:02Z'),
         },
       },
+    });
+    expect(selectSession(state, `codex:${SESSION_ID}`)?.status).toBe('working');
+  });
+
+  it('clamps a normal request-then-output pair before reducer replay', async () => {
+    const root = await testRoot();
+    const file = path.join(root, `rollout-${SESSION_ID}.jsonl`);
+    await writeLines(file, [
+      sessionMeta(),
+      record('event_msg', { type: 'task_started', turn_id: 'turn-skewed' }, '2026-09-15T10:00:01Z'),
+      record(
+        'response_item',
+        {
+          type: 'function_call',
+          name: 'request_user_input',
+          call_id: 'skewed-call',
+          turn_id: 'turn-skewed',
+        },
+        '2026-09-15T10:00:03Z',
+      ),
+      record(
+        'response_item',
+        { type: 'function_call_output', call_id: 'skewed-call', turn_id: 'turn-skewed' },
+        '2026-09-15T10:00:02Z',
+      ),
+    ]);
+    const result = await new CodexRolloutReader(root).read([sourceFor(file)]);
+    let state = reduceSessionState(createInitialSessionState(), {
+      type: 'upsert',
+      provider: 'codex',
+      nativeSessionId: SESSION_ID,
+      surface: 'cli',
+      title: 'Qualified session',
+      isTopLevel: true,
+      isArchived: false,
+      canOpen: true,
+      updatedAt: 0,
+    });
+    for (const { event: emitted } of result.events) state = reduceSessionState(state, emitted);
+
+    expect(state.sessions[`codex:${SESSION_ID}`]).toMatchObject({
+      inputRequests: {
+        'skewed-call': {
+          requestedAt: Date.parse('2026-09-15T10:00:03Z'),
+          resolvedAt: Date.parse('2026-09-15T10:00:03Z'),
+        },
+      },
+    });
+    expect(selectSession(state, `codex:${SESSION_ID}`)?.status).toBe('working');
+  });
+
+  it('clamps a seeded unresolved request after a restart', async () => {
+    const root = await testRoot();
+    const file = path.join(root, `rollout-${SESSION_ID}.jsonl`);
+    const turnStartedAt = Date.parse('2026-09-15T10:00:01Z');
+    const requestedAt = Date.parse('2026-09-15T10:00:03Z');
+    await writeLines(file, [
+      sessionMeta(),
+      record(
+        'response_item',
+        { type: 'function_call_output', call_id: 'restart-skewed', turn_id: 'turn-restart' },
+        '2026-09-15T10:00:02Z',
+      ),
+    ]);
+    const result = await new CodexRolloutReader(root).read([
+      sourceFor(file, SESSION_ID, {
+        activeTurnId: 'turn-restart',
+        turnKey: { turnId: 'turn-restart', timestamp: turnStartedAt },
+        inputRequests: {
+          'restart-skewed': { turnId: 'turn-restart', requestedAt },
+        },
+      }),
+    ]);
+    let state = reduceSessionState(createInitialSessionState(), {
+      type: 'upsert',
+      provider: 'codex',
+      nativeSessionId: SESSION_ID,
+      surface: 'cli',
+      title: 'Qualified session',
+      isTopLevel: true,
+      isArchived: false,
+      canOpen: true,
+      updatedAt: 0,
+    });
+    state = reduceSessionState(state, {
+      type: 'turn-started',
+      sessionId: `codex:${SESSION_ID}`,
+      turnId: 'turn-restart',
+      timestamp: turnStartedAt,
+    });
+    state = reduceSessionState(state, {
+      type: 'input-requested',
+      sessionId: `codex:${SESSION_ID}`,
+      turnId: 'turn-restart',
+      callId: 'restart-skewed',
+      timestamp: requestedAt,
+    });
+    for (const { event: emitted } of result.events) state = reduceSessionState(state, emitted);
+
+    expect(state.sessions[`codex:${SESSION_ID}`]).toMatchObject({
+      inputRequests: {
+        'restart-skewed': { requestedAt, resolvedAt: requestedAt },
+      },
+    });
+    expect(selectSession(state, `codex:${SESSION_ID}`)?.status).toBe('working');
+  });
+
+  it('ignores stale requests and pre-start terminals before resolving the current wait', async () => {
+    const root = await testRoot();
+    const file = path.join(root, `rollout-${SESSION_ID}.jsonl`);
+    const turnStartedAt = Date.parse('2026-09-15T10:00:01Z');
+    await writeLines(file, [
+      sessionMeta(),
+      record(
+        'event_msg',
+        { type: 'task_complete', turn_id: 'turn-current' },
+        '2026-09-15T10:00:00Z',
+      ),
+      record(
+        'response_item',
+        {
+          type: 'function_call',
+          name: 'request_user_input',
+          call_id: 'reused-call',
+          turn_id: 'turn-current',
+        },
+        '2026-09-15T10:00:02Z',
+      ),
+      record(
+        'response_item',
+        {
+          type: 'function_call',
+          name: 'request_user_input',
+          call_id: 'reused-call',
+          turn_id: 'turn-old',
+        },
+        '2026-09-15T10:00:03Z',
+      ),
+      record(
+        'response_item',
+        { type: 'function_call_output', call_id: 'reused-call', turn_id: 'turn-current' },
+        '2026-09-15T10:00:04Z',
+      ),
+    ]);
+    const result = await new CodexRolloutReader(root).read([
+      sourceFor(file, SESSION_ID, {
+        activeTurnId: 'turn-current',
+        turnKey: { turnId: 'turn-current', timestamp: turnStartedAt },
+      }),
+    ]);
+
+    expect(eventTypes(result.events)).toEqual(['input-requested', 'input-resolved']);
+    expect(result.diagnostics).toEqual([]);
+    let state = reduceSessionState(createInitialSessionState(), {
+      type: 'upsert',
+      provider: 'codex',
+      nativeSessionId: SESSION_ID,
+      surface: 'cli',
+      title: 'Qualified session',
+      isTopLevel: true,
+      isArchived: false,
+      canOpen: true,
+      updatedAt: 0,
+    });
+    state = reduceSessionState(state, {
+      type: 'turn-started',
+      sessionId: `codex:${SESSION_ID}`,
+      turnId: 'turn-current',
+      timestamp: turnStartedAt,
+    });
+    for (const { event: emitted } of result.events) state = reduceSessionState(state, emitted);
+
+    expect(state.sessions[`codex:${SESSION_ID}`]).toMatchObject({
+      activeTurnId: 'turn-current',
+      inputRequests: { 'reused-call': { resolvedAt: Date.parse('2026-09-15T10:00:04Z') } },
     });
     expect(selectSession(state, `codex:${SESSION_ID}`)?.status).toBe('working');
   });
@@ -672,13 +851,8 @@ describe('CodexRolloutReader', () => {
       sourceFor(file, SESSION_ID, { activeTurnId: 'turn-current' }),
     ]);
     const projected = result.events.map(({ event: emitted }) => emitted);
-    expect(projected.map(({ type }) => type)).toEqual([
-      'turn-completed',
-      'activity',
-      'turn-completed',
-    ]);
-    expect(projected[0]).toMatchObject({ turnId: 'turn-old' });
-    expect(projected[2]).toMatchObject({ turnId: 'turn-current' });
+    expect(projected.map(({ type }) => type)).toEqual(['activity', 'turn-completed']);
+    expect(projected[1]).toMatchObject({ turnId: 'turn-current' });
   });
 
   it('returns source progress so explicit source lists larger than the cap are not starved', async () => {

@@ -2,7 +2,7 @@ import { constants } from 'node:fs';
 import { lstat, open, realpath } from 'node:fs/promises';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
-import { isNewerTurn } from '../../sessions/reducer';
+import { isCurrentTurn, isNewerTurn } from '../../sessions/reducer';
 import type { InputRequest } from '../../../shared/session';
 import type { TurnKey } from '../../../shared/session';
 import { makeCursorKey } from '../../../shared/cursor';
@@ -35,6 +35,7 @@ interface JsonRecord {
 
 interface PendingInput {
   turnId: string;
+  requestedAt: number;
 }
 
 interface PendingOutput {
@@ -71,6 +72,35 @@ function clearTerminalContext(context: FileContext, turnId: string): void {
   context.pendingInputs.clear();
   context.pendingOutputs.clear();
   context.activeTurnId = undefined;
+}
+
+function isCurrentContextTurn(
+  context: FileContext,
+  turnId: string | undefined,
+  timestamp: number,
+): turnId is string {
+  return (
+    turnId !== undefined &&
+    isCurrentTurn(
+      {
+        activeTurnId: context.activeTurnId,
+        lastTurnStartedAt: context.turnKey?.timestamp ?? 0,
+      },
+      turnId,
+      timestamp,
+    )
+  );
+}
+
+function canUseTurnContext(
+  context: FileContext,
+  turnId: string | undefined,
+  timestamp: number,
+): turnId is string {
+  return (
+    turnId !== undefined &&
+    (context.activeTurnId === undefined || isCurrentContextTurn(context, turnId, timestamp))
+  );
 }
 
 /**
@@ -541,7 +571,7 @@ export class CodexRolloutReader {
     }
     const turnId = payloadTurnId ?? context.activeTurnId;
     if (type === 'task_complete') {
-      if (turnId) {
+      if (canUseTurnContext(context, turnId, timestamp)) {
         this.emit(
           {
             type: 'turn-completed',
@@ -555,11 +585,11 @@ export class CodexRolloutReader {
           events,
         );
         clearTerminalContext(context, turnId);
-      } else this.missingTurn(context, diagnostics, lineOffset);
+      } else if (!turnId) this.missingTurn(context, diagnostics, lineOffset);
       return;
     }
     if (type === 'turn_aborted' || type === 'error') {
-      if (turnId) {
+      if (canUseTurnContext(context, turnId, timestamp)) {
         this.emit(
           { type: 'turn-failed', sessionId: this.sessionId(context), turnId, timestamp },
           context,
@@ -567,7 +597,7 @@ export class CodexRolloutReader {
           events,
         );
         clearTerminalContext(context, turnId);
-      } else this.missingTurn(context, diagnostics, lineOffset);
+      } else if (!turnId) this.missingTurn(context, diagnostics, lineOffset);
       return;
     }
     if (type === 'request_user_input') {
@@ -639,6 +669,7 @@ export class CodexRolloutReader {
         this.addDiagnostic(diagnostics, 'missing-call-id', context.pathKey, lineOffset);
         return;
       }
+      if (!canUseTurnContext(context, turnId, timestamp)) return;
       const pending = context.pendingInputs.get(callId);
       if (pending && (!turnId || pending.turnId === turnId)) {
         context.pendingInputs.delete(callId);
@@ -648,13 +679,13 @@ export class CodexRolloutReader {
             sessionId: this.sessionId(context),
             turnId: pending.turnId,
             callId,
-            timestamp,
+            timestamp: Math.max(timestamp, pending.requestedAt),
           },
           context,
           baseline,
           events,
         );
-      } else if (turnId) {
+      } else {
         context.pendingOutputs.set(callId, { turnId, timestamp });
       }
       return;
@@ -689,7 +720,8 @@ export class CodexRolloutReader {
       this.missingTurn(context, diagnostics, lineOffset);
       return;
     }
-    context.pendingInputs.set(callId, { turnId });
+    if (!canUseTurnContext(context, turnId, timestamp)) return;
+    context.pendingInputs.set(callId, { turnId, requestedAt: timestamp });
     this.emit(
       {
         type: 'input-requested',
@@ -954,7 +986,9 @@ function seedPendingInputs(
 ): Map<string, PendingInput> {
   const pending = new Map<string, PendingInput>();
   for (const [callId, request] of Object.entries(inputRequests)) {
-    if (request.resolvedAt === undefined) pending.set(callId, { turnId: request.turnId });
+    if (request.resolvedAt === undefined) {
+      pending.set(callId, { turnId: request.turnId, requestedAt: request.requestedAt });
+    }
   }
   return pending;
 }
