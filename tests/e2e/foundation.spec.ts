@@ -104,6 +104,65 @@ test('launches the built Settings window with the typed bridge', async () => {
   }
 });
 
+test('wires production settings through preload, overlay state, and restart persistence', async () => {
+  const userDataDir = await mkdtemp(join(tmpdir(), 'agent-status-tiles-settings-e2e-'));
+  let application: ElectronApplication | undefined;
+
+  try {
+    application = await launch(userDataDir, 1);
+    const page = await settingsWindow(application);
+    const overlay = await overlayWindow(application);
+
+    await expect(page.getByRole('combobox', { name: 'Display' })).toContainText('Primary');
+    await expect(page.getByRole('button', { name: 'Connect' })).toHaveCount(2);
+    await expect(page.getByRole('button', { name: 'Connect' }).first()).toBeDisabled();
+    await expect(page.getByRole('button', { name: 'Open Advanced settings' })).toBeDisabled();
+    await expect(page.getByRole('switch', { name: 'Reduce motion' })).not.toBeChecked();
+    const settings = await page.evaluate(() => window.agentStatusTiles.getSettings());
+    expect(Object.keys(settings).sort()).toEqual([
+      'displays',
+      'launchAtLogin',
+      'providers',
+      'reduceMotion',
+      'selectedDisplayId',
+    ]);
+    expect(settings.selectedDisplayId).toBe('primary');
+    expect(JSON.stringify(settings)).not.toMatch(/prompt|transcript|credential|filesystem|path/u);
+
+    const physicalDisplay = settings.displays.find((display) => display.id !== 'primary');
+    if (physicalDisplay === undefined) throw new Error('Expected one physical display option');
+    await page.getByRole('combobox', { name: 'Display' }).click();
+    await page.getByRole('option', { name: physicalDisplay.label }).click();
+    await expect(page.getByRole('combobox', { name: 'Display' })).toContainText(
+      physicalDisplay.label,
+    );
+
+    await page.getByRole('switch', { name: 'Reduce motion' }).click();
+    await expect(page.getByRole('switch', { name: 'Reduce motion' })).toBeChecked();
+    await expect
+      .poll(() => overlay.evaluate(() => window.agentStatusTilesOverlay.getState()))
+      .toMatchObject({
+        reducedMotion: true,
+      });
+
+    await closeApplication(application);
+    application = await launch(userDataDir, 1);
+    const restartedSettings = await settingsWindow(application);
+    await expect(restartedSettings.getByRole('switch', { name: 'Reduce motion' })).toBeChecked();
+    const restartedState = await restartedSettings.evaluate(() =>
+      window.agentStatusTiles.getSettings(),
+    );
+    expect(restartedState.reduceMotion).toBe(true);
+    expect(restartedState.selectedDisplayId).toBe(physicalDisplay.id);
+    await expect(restartedSettings.getByRole('combobox', { name: 'Display' })).toContainText(
+      physicalDisplay.label,
+    );
+  } finally {
+    await closeApplication(application);
+    await rm(userDataDir, { recursive: true, force: true });
+  }
+});
+
 test('creates a hidden nonactivating overlay in the primary work area', async () => {
   test.skip(process.platform !== 'darwin', 'the desktop shell targets macOS');
   const userDataDir = await mkdtemp(join(tmpdir(), 'agent-status-tiles-e2e-'));

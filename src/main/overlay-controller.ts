@@ -12,6 +12,8 @@ import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 import { protectWebContents } from './security';
+import { connectedDisplays, selectPreferredDisplay } from './display';
+import { PRIMARY_DISPLAY_ID } from '../shared/settings';
 import { MAX_OVERLAY_HIT_REGIONS, type OverlayHitRegion } from '../shared/overlay-ipc';
 
 export { MAX_OVERLAY_HIT_REGIONS } from '../shared/overlay-ipc';
@@ -25,6 +27,7 @@ export const OVERLAY_WINDOW_WIDTH = 360;
 export const OVERLAY_WINDOW_HEIGHT = 480;
 export interface OverlayController {
   getWindow(): BrowserWindow | null;
+  setPreferredDisplayId(displayId: string): void;
   setQualifyingSessionCount(count: number): void;
   setVisible(visible: boolean): void;
   setHitRegions(regions: readonly OverlayHitRegion[]): boolean;
@@ -147,11 +150,16 @@ function createOverlayWindow(
   return window;
 }
 
-export function createOverlayController(): OverlayController {
+export interface OverlayControllerOptions {
+  preferredDisplayId?: string;
+}
+
+export function createOverlayController(options: OverlayControllerOptions = {}): OverlayController {
   let overlayWindow: BrowserWindow | null = null;
   let readyToShow = false;
   let requestedVisible = true;
   let hasQualifyingSessions = false;
+  let preferredDisplayId = options.preferredDisplayId ?? PRIMARY_DISPLAY_ID;
   let hitRegions: readonly OverlayHitRegion[] = [];
   let ignoringMouseEvents = true;
   let isDestroyed = false;
@@ -162,7 +170,11 @@ export function createOverlayController(): OverlayController {
     readyToShow = false;
     ignoringMouseEvents = true;
     hitRegions = [];
-    const window = createOverlayWindow(screen.getPrimaryDisplay(), onClosed, onPointerInput);
+    const window = createOverlayWindow(
+      selectPreferredDisplay(preferredDisplayId, connectedDisplays(), screen.getPrimaryDisplay()),
+      onClosed,
+      onPointerInput,
+    );
     overlayWindow = window;
     window.once('ready-to-show', () => {
       if (isDestroyed || overlayWindow !== window || window.isDestroyed()) return;
@@ -176,7 +188,12 @@ export function createOverlayController(): OverlayController {
       return;
     }
 
-    const bounds = overlayBounds(screen.getPrimaryDisplay().workArea);
+    const display = selectPreferredDisplay(
+      preferredDisplayId,
+      connectedDisplays(),
+      screen.getPrimaryDisplay(),
+    );
+    const bounds = overlayBounds(display.workArea);
     overlayWindow.setBounds(bounds, false);
     const currentBounds = overlayWindow.getBounds();
     hitRegions = hitRegions.filter((region) =>
@@ -271,6 +288,10 @@ export function createOverlayController(): OverlayController {
       }
 
       return overlayWindow;
+    },
+    setPreferredDisplayId: (displayId) => {
+      preferredDisplayId = displayId;
+      reposition();
     },
     setQualifyingSessionCount: (count) => {
       hasQualifyingSessions = Number.isFinite(count) && count > 0;

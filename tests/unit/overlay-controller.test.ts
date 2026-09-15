@@ -39,6 +39,7 @@ const electronMocks = vi.hoisted(() => ({
   app: { isPackaged: true },
   powerMonitor: { on: vi.fn(), off: vi.fn() },
   screen: {
+    getAllDisplays: vi.fn(() => [{ id: 1, workArea: { x: 0, y: 24, width: 1440, height: 876 } }]),
     getPrimaryDisplay: vi.fn(() => ({ workArea: { x: 0, y: 24, width: 1440, height: 876 } })),
     getCursorScreenPoint: vi.fn(() => ({ x: 0, y: 0 })),
     on: vi.fn(),
@@ -107,6 +108,10 @@ describe('overlay controller', () => {
   beforeEach(() => {
     vi.resetModules();
     electronMocks.BrowserWindow.mockReset();
+    electronMocks.screen.getAllDisplays.mockReset();
+    electronMocks.screen.getAllDisplays.mockReturnValue([
+      { id: 1, workArea: { x: 0, y: 24, width: 1440, height: 876 } },
+    ]);
     electronMocks.screen.getPrimaryDisplay.mockReset();
     electronMocks.screen.getPrimaryDisplay.mockReturnValue({
       workArea: { x: 0, y: 24, width: 1440, height: 876 },
@@ -212,6 +217,41 @@ describe('overlay controller', () => {
     controller.setQualifyingSessionCount(1);
     expect(electronMocks.BrowserWindow).toHaveBeenCalledTimes(2);
     consoleError.mockRestore();
+  });
+
+  it('uses the preferred connected display, falls back while absent, and restores on reconnect', async () => {
+    const primary = { id: 1, workArea: { x: 0, y: 24, width: 1440, height: 876 } };
+    const external = { id: 42, workArea: { x: -1200, y: -200, width: 1200, height: 900 } };
+    electronMocks.screen.getPrimaryDisplay.mockReturnValue(primary);
+    electronMocks.screen.getAllDisplays.mockReturnValue([primary]);
+    const overlayWindow = createOverlayWindowMock();
+    mockOverlayWindow(overlayWindow);
+    const { createOverlayController } = await import('../../src/main/overlay-controller');
+
+    const controller = createOverlayController({ preferredDisplayId: '42' });
+    expect(electronMocks.BrowserWindow.mock.calls[0]?.[0]).toMatchObject({
+      x: 1080,
+      y: 222,
+      width: 360,
+      height: 480,
+    });
+
+    electronMocks.screen.getAllDisplays.mockReturnValue([primary, external]);
+    const onAdded = electronMocks.screen.on.mock.calls.find(
+      ([event]) => event === 'display-added',
+    )?.[1] as (() => void) | undefined;
+    onAdded?.();
+    expect(overlayWindow.setBounds).toHaveBeenLastCalledWith(
+      { x: -360, y: 10, width: 360, height: 480 },
+      false,
+    );
+
+    controller.setPreferredDisplayId('primary');
+    expect(overlayWindow.setBounds).toHaveBeenLastCalledWith(
+      { x: 1080, y: 222, width: 360, height: 480 },
+      false,
+    );
+    controller.destroy();
   });
 
   it('validates against current bounds, drops stale regions after resize, and ignores hidden input', async () => {
