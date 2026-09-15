@@ -81,7 +81,7 @@ Electron APIs do not satisfy these physical checks.
 
 For each bounded PR targeting `staging`, run formatting, lint, types, unit
 tests, build, and relevant native/browser E2E. Run exactly one completed
-`coderabbit review --agent --base origin/staging --type committed`, triage every
+`coderabbit review --agent --base origin/staging --committed`, triage every
 finding, perform two separate root QA/refactor passes with fixes after each,
 process review comments, rerun final E2E, wait for green CI, squash-merge safely,
 delete only the feature branch, and update `MVP_PLAN.md` with exact evidence.
