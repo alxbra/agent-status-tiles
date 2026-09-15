@@ -15,8 +15,8 @@ function compareTurnKeys(left: TurnKey, right: TurnKey): number {
   return left.turnId.localeCompare(right.turnId);
 }
 
-function isNewerTurn(
-  record: SessionRecord,
+export function isNewerTurn(
+  record: Pick<SessionRecord, 'turnKey'>,
   event: Extract<SessionEvent, { type: 'turn-started' }>,
 ): boolean {
   if (record.turnKey?.turnId === event.turnId) return false;
@@ -42,7 +42,11 @@ function ownInputRequest(
     : undefined;
 }
 
-function hasCurrentTurn(record: SessionRecord, turnId: string, timestamp: number): boolean {
+export function isCurrentTurn(
+  record: Pick<SessionRecord, 'activeTurnId' | 'lastTurnStartedAt'>,
+  turnId: string,
+  timestamp: number,
+): boolean {
   return record.activeTurnId === turnId && timestamp >= record.lastTurnStartedAt;
 }
 
@@ -204,7 +208,7 @@ export function reduceSessionState(state: SessionState, event: SessionEvent): Se
       });
     }
     case 'input-requested': {
-      if (!hasCurrentTurn(previous, event.turnId, event.timestamp)) return state;
+      if (!isCurrentTurn(previous, event.turnId, event.timestamp)) return state;
       const previousRequest = ownInputRequest(previous.inputRequests, event.callId);
       if (previousRequest !== undefined) {
         // A resolved request is a tombstone: replaying the request must not
@@ -225,7 +229,7 @@ export function reduceSessionState(state: SessionState, event: SessionEvent): Se
       });
     }
     case 'input-resolved': {
-      if (!hasCurrentTurn(previous, event.turnId, event.timestamp)) return state;
+      if (!isCurrentTurn(previous, event.turnId, event.timestamp)) return state;
       const previousRequest = ownInputRequest(previous.inputRequests, event.callId);
       if (previousRequest !== undefined) {
         if (
@@ -251,7 +255,7 @@ export function reduceSessionState(state: SessionState, event: SessionEvent): Se
       });
     }
     case 'turn-completed': {
-      if (!hasCurrentTurn(previous, event.turnId, event.timestamp)) return state;
+      if (!isCurrentTurn(previous, event.turnId, event.timestamp)) return state;
       return replaceRecord(state, event.sessionId, {
         ...previous,
         ...withEventTime(previous, event.timestamp),
@@ -264,7 +268,7 @@ export function reduceSessionState(state: SessionState, event: SessionEvent): Se
       });
     }
     case 'turn-failed': {
-      if (!hasCurrentTurn(previous, event.turnId, event.timestamp)) return state;
+      if (!isCurrentTurn(previous, event.turnId, event.timestamp)) return state;
       return replaceRecord(state, event.sessionId, {
         ...previous,
         ...withEventTime(previous, event.timestamp),
