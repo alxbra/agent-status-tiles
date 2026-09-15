@@ -152,9 +152,9 @@ function isTimestamp(value: unknown): value is number {
   return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
 }
 
-const MAX_ID_BYTES = 256;
-const MAX_SESSION_ID_BYTES = MAX_ID_BYTES + 'claude:'.length;
-const MAX_TITLE_BYTES = 256;
+export const MAX_ID_BYTES = 256;
+export const MAX_SESSION_ID_BYTES = MAX_ID_BYTES + 'claude:'.length;
+export const MAX_TITLE_BYTES = 256;
 const CONTROL_CHARACTER_PATTERN = /\p{Cc}/u;
 
 function isBoundedString(value: unknown, maxBytes: number): value is string {

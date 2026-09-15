@@ -12,15 +12,34 @@ const electronExecutable = resolve(
   'node_modules/electron/dist/Electron.app/Contents/MacOS/Electron',
 );
 
-async function launch(userDataDir: string): Promise<ElectronApplication> {
+async function launch(
+  userDataDir: string,
+  testSessionCount?: number,
+): Promise<ElectronApplication> {
+  const args = [`--user-data-dir=${userDataDir}`, mainEntry];
+  if (testSessionCount !== undefined) {
+    args.push(`--agent-status-tiles-test-session-count=${String(testSessionCount)}`);
+  }
   return electron.launch({
-    args: [`--user-data-dir=${userDataDir}`, mainEntry],
+    args,
     cwd: projectRoot,
     env: {
       ...process.env,
       NODE_ENV: 'test',
     },
   });
+}
+
+async function overlayWindow(application: ElectronApplication): Promise<Page> {
+  const deadline = Date.now() + 10_000;
+  while (Date.now() < deadline) {
+    const existingOverlayWindow = application
+      .windows()
+      .find((window) => window.url().includes('/renderer/overlay.html'));
+    if (existingOverlayWindow) return existingOverlayWindow;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  throw new Error('Timed out waiting for the overlay window to load');
 }
 
 async function settingsWindow(application: ElectronApplication): Promise<Page> {
@@ -142,6 +161,63 @@ test('creates a hidden nonactivating overlay in the primary work area', async ()
     await rm(userDataDir, { recursive: true, force: true });
   }
 });
+
+for (const testSessionCount of [0, 1, 12, 30]) {
+  test(`projects ${String(testSessionCount)} bounded test sessions through the native overlay`, async () => {
+    test.skip(process.platform !== 'darwin', 'the desktop shell targets macOS');
+    const userDataDir = await mkdtemp(join(tmpdir(), 'agent-status-tiles-overlay-e2e-'));
+    let application: ElectronApplication | undefined;
+
+    try {
+      application = await launch(userDataDir, testSessionCount);
+      await settingsWindow(application);
+      const page = await overlayWindow(application);
+      const state = await page.evaluate(() => window.agentStatusTilesOverlay.getState());
+      expect(state.sessions).toHaveLength(testSessionCount);
+      expect(Object.keys(state)).toEqual(['sessions', 'reducedMotion']);
+      expect(JSON.stringify(state)).not.toMatch(/prompt|transcript|credential|filesystem/u);
+      expect(await page.evaluate(() => typeof window.agentStatusTiles)).toBe('undefined');
+      expect(await page.evaluate(() => typeof window.require)).toBe('undefined');
+
+      await expect
+        .poll(() =>
+          application!.evaluate(({ BrowserWindow }) => {
+            const overlay = BrowserWindow.getAllWindows().find((window) =>
+              window.webContents.getURL().includes('/renderer/overlay.html'),
+            );
+            return {
+              isLoadingMainFrame: overlay?.webContents.isLoadingMainFrame() ?? true,
+              isVisible: overlay?.isVisible() ?? false,
+            };
+          }),
+        )
+        .toEqual({
+          isLoadingMainFrame: false,
+          isVisible: testSessionCount > 0,
+        });
+
+      const tiles = page.locator('.status-tiles__tile');
+      await expect(tiles).toHaveCount(Math.min(testSessionCount, 12));
+      if (testSessionCount === 0) {
+        await expect(page.locator('.status-tiles')).toHaveCount(0);
+      } else {
+        await expect(page.getByRole('listbox', { name: 'Agent status sessions' })).toBeVisible();
+        await expect(page.getByRole('option').first()).toHaveAttribute(
+          'aria-label',
+          /Test session 1/u,
+        );
+        if (testSessionCount > 12) {
+          await expect(page.locator('.status-tiles__indicator--next')).toBeVisible();
+        } else {
+          await expect(page.locator('.status-tiles__indicator')).toHaveCount(0);
+        }
+      }
+    } finally {
+      await closeApplication(application);
+      await rm(userDataDir, { recursive: true, force: true });
+    }
+  });
+}
 
 test('keeps a single application instance for one user-data directory', async () => {
   const userDataDir = await mkdtemp(join(tmpdir(), 'agent-status-tiles-e2e-'));
