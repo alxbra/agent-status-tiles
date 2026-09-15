@@ -1,6 +1,14 @@
 import { spawnSync } from 'node:child_process';
 import { Console } from 'node:console';
-import { chmodSync, lstatSync, mkdirSync, readFileSync, rmSync, copyFileSync } from 'node:fs';
+import {
+  chmodSync,
+  copyFileSync,
+  lstatSync,
+  mkdirSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+} from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
@@ -152,9 +160,30 @@ export function validateBuiltHelper(arch) {
 
 function clearOutputRoot() {
   const outputRoot = defaultOutputRoot;
+  const outputParent = dirname(outputRoot);
+  let resolvedParent;
   try {
-    if (lstatSync(outputRoot).isSymbolicLink()) {
+    const parentMetadata = lstatSync(outputParent);
+    if (parentMetadata.isSymbolicLink() || !parentMetadata.isDirectory()) {
+      throw new Error(`Refusing unsafe helper output parent: ${outputParent}`);
+    }
+    resolvedParent = realpathSync(outputParent);
+  } catch (error) {
+    if (error.code !== 'ENOENT') throw error;
+    mkdirSync(outputParent, { mode: 0o755 });
+    resolvedParent = realpathSync(outputParent);
+  }
+  const resolvedRepositoryRoot = realpathSync(repositoryRoot);
+  if (resolvedParent !== join(resolvedRepositoryRoot, 'build')) {
+    throw new Error(`Refusing helper output outside repository: ${outputParent}`);
+  }
+  try {
+    const outputMetadata = lstatSync(outputRoot);
+    if (outputMetadata.isSymbolicLink()) {
       throw new Error(`Refusing to replace symlinked helper output: ${outputRoot}`);
+    }
+    if (!outputMetadata.isDirectory()) {
+      throw new Error(`Refusing non-directory helper output: ${outputRoot}`);
     }
   } catch (error) {
     if (error.code !== 'ENOENT') {
@@ -162,7 +191,7 @@ function clearOutputRoot() {
     }
   }
   rmSync(outputRoot, { force: true, recursive: true });
-  mkdirSync(outputRoot, { recursive: true, mode: 0o755 });
+  mkdirSync(outputRoot, { mode: 0o755 });
 }
 
 function checkCargo(cargoPath) {

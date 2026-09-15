@@ -7,6 +7,7 @@ import {
   readFileSync,
   realpathSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -55,6 +56,58 @@ function writeMachO(directory: string, arch: HelperArch, fileType = 2, size = 32
   return path;
 }
 
+function createBuildFixture() {
+  const directory = temporaryDirectory();
+  const scriptsDirectory = join(directory, 'scripts');
+  const manifestDirectory = join(directory, 'crates', 'hook-helper');
+  const fakeCargo = join(directory, 'fake-cargo.mjs');
+  const cargoLog = join(directory, 'cargo-args.json');
+  const staleTargetDirectory = join(directory, 'stale-target');
+  const targetRoot = join(directory, 'crates', 'hook-helper', 'target');
+  mkdirSync(scriptsDirectory, { recursive: true });
+  mkdirSync(manifestDirectory, { recursive: true });
+  copyFileSync(
+    join(projectRoot, 'scripts', 'build-hook-helper.mjs'),
+    join(scriptsDirectory, 'build-hook-helper.mjs'),
+  );
+  writeFileSync(
+    join(manifestDirectory, 'Cargo.toml'),
+    '[package]\nname = "fixture-hook-helper"\nversion = "0.0.0"\n',
+  );
+  writeFileSync(
+    fakeCargo,
+    [
+      '#!/usr/bin/env node',
+      "import { chmodSync, mkdirSync, writeFileSync } from 'node:fs';",
+      "import { join } from 'node:path';",
+      "import process from 'node:process';",
+      "if (process.argv[2] === '--version') process.exit(0);",
+      'const args = process.argv.slice(2);',
+      "const target = args[args.indexOf('--target') + 1];",
+      "const targetDirectory = args[args.indexOf('--target-dir') + 1];",
+      'writeFileSync(process.env.FAKE_CARGO_LOG, JSON.stringify(args));',
+      "const cpuType = target === 'aarch64-apple-darwin' ? 0x0100000c : 0x01000007;",
+      'const header = Buffer.alloc(32);',
+      'header.writeUInt32LE(0xfeedfacf, 0);',
+      'header.writeInt32LE(cpuType, 4);',
+      'header.writeUInt32LE(2, 12);',
+      "const output = join(targetDirectory, target, 'release', 'hook-helper');",
+      "mkdirSync(join(targetDirectory, target, 'release'), { recursive: true });",
+      'writeFileSync(output, header);',
+      'chmodSync(output, 0o755);',
+    ].join('\n'),
+  );
+  chmodSync(fakeCargo, 0o755);
+  return {
+    directory,
+    buildScript: realpathSync(join(scriptsDirectory, 'build-hook-helper.mjs')),
+    fakeCargo,
+    cargoLog,
+    staleTargetDirectory,
+    targetRoot,
+  };
+}
+
 describe('hook-helper packaging contract', () => {
   it('maps only the supported Electron architectures to stable resource paths', () => {
     expect(parseBuildOptions([], {}).architectures).toEqual(['arm64', 'x64']);
@@ -82,57 +135,12 @@ describe('hook-helper packaging contract', () => {
   });
 
   it('builds in an isolated fixture despite an inherited stale target directory', () => {
-    const directory = temporaryDirectory();
-    const scriptsDirectory = join(directory, 'scripts');
-    const manifestDirectory = join(directory, 'crates', 'hook-helper');
-    const fakeCargo = join(directory, 'fake-cargo.mjs');
-    const cargoLog = join(directory, 'cargo-args.json');
-    const staleTargetDirectory = join(directory, 'stale-target');
-    const targetRoot = join(directory, 'crates', 'hook-helper', 'target');
-    mkdirSync(scriptsDirectory, { recursive: true });
-    mkdirSync(manifestDirectory, { recursive: true });
-    copyFileSync(
-      join(projectRoot, 'scripts', 'build-hook-helper.mjs'),
-      join(scriptsDirectory, 'build-hook-helper.mjs'),
-    );
-    writeFileSync(
-      join(manifestDirectory, 'Cargo.toml'),
-      '[package]\nname = "fixture-hook-helper"\nversion = "0.0.0"\n',
-    );
-    writeFileSync(
-      fakeCargo,
-      [
-        '#!/usr/bin/env node',
-        "import { chmodSync, mkdirSync, writeFileSync } from 'node:fs';",
-        "import { join } from 'node:path';",
-        "import process from 'node:process';",
-        "if (process.argv[2] === '--version') process.exit(0);",
-        'const args = process.argv.slice(2);',
-        "const target = args[args.indexOf('--target') + 1];",
-        "const targetDirectory = args[args.indexOf('--target-dir') + 1];",
-        'writeFileSync(process.env.FAKE_CARGO_LOG, JSON.stringify(args));',
-        "const cpuType = target === 'aarch64-apple-darwin' ? 0x0100000c : 0x01000007;",
-        'const header = Buffer.alloc(32);',
-        'header.writeUInt32LE(0xfeedfacf, 0);',
-        'header.writeInt32LE(cpuType, 4);',
-        'header.writeUInt32LE(2, 12);',
-        "const output = join(targetDirectory, target, 'release', 'hook-helper');",
-        "mkdirSync(join(targetDirectory, target, 'release'), { recursive: true });",
-        'writeFileSync(output, header);',
-        'chmodSync(output, 0o755);',
-      ].join('\n'),
-    );
-    chmodSync(fakeCargo, 0o755);
+    const { directory, buildScript, fakeCargo, cargoLog, staleTargetDirectory, targetRoot } =
+      createBuildFixture();
 
     const result = spawnSync(
       process.execPath,
-      [
-        realpathSync(join(scriptsDirectory, 'build-hook-helper.mjs')),
-        '--arch',
-        'arm64',
-        '--cargo',
-        fakeCargo,
-      ],
+      [buildScript, '--arch', 'arm64', '--cargo', fakeCargo],
       {
         cwd: directory,
         encoding: 'utf8',
@@ -151,6 +159,26 @@ describe('hook-helper packaging contract', () => {
     const cargoArgs = JSON.parse(readFileSync(cargoLog, 'utf8')) as string[];
     expect(cargoArgs.slice(-2)).toEqual(['--target-dir', realpathSync(targetRoot)]);
     expect(() => readFileSync(join(staleTargetDirectory, 'aarch64-apple-darwin'))).toThrow();
+  });
+
+  it('refuses a symlinked build parent without touching its external contents', () => {
+    const { directory, buildScript, fakeCargo } = createBuildFixture();
+    const externalDirectory = temporaryDirectory();
+    const externalHelperDirectory = join(externalDirectory, 'hook-helper');
+    const sentinelPath = join(externalHelperDirectory, 'sentinel');
+    mkdirSync(externalHelperDirectory, { recursive: true });
+    writeFileSync(sentinelPath, 'preserve-me');
+    symlinkSync(externalDirectory, join(directory, 'build'), 'dir');
+
+    const result = spawnSync(
+      process.execPath,
+      [buildScript, '--arch', 'arm64', '--cargo', fakeCargo],
+      { cwd: directory, encoding: 'utf8' },
+    );
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('Refusing unsafe helper output parent');
+    expect(readFileSync(sentinelPath, 'utf8')).toBe('preserve-me');
   });
 
   it('fails beforePack for missing or wrong-architecture helpers in an isolated fixture', () => {
