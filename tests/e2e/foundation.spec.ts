@@ -15,10 +15,14 @@ const electronExecutable = resolve(
 async function launch(
   userDataDir: string,
   testSessionCount?: number,
+  enterKeyboardMode = false,
 ): Promise<ElectronApplication> {
   const args = [`--user-data-dir=${userDataDir}`, mainEntry];
   if (testSessionCount !== undefined) {
     args.push(`--agent-status-tiles-test-session-count=${String(testSessionCount)}`);
+  }
+  if (enterKeyboardMode) {
+    args.push('--agent-status-tiles-test-keyboard-entry');
   }
   return electron.launch({
     args,
@@ -29,6 +33,72 @@ async function launch(
     },
   });
 }
+
+test('enters and exits native keyboard mode without hiding the overlay', async () => {
+  test.skip(process.platform !== 'darwin', 'the desktop shell targets macOS');
+  const userDataDir = await mkdtemp(join(tmpdir(), 'agent-status-tiles-keyboard-e2e-'));
+  let application: ElectronApplication | undefined;
+
+  try {
+    application = await launch(userDataDir, 1, true);
+    await expect
+      .poll(() =>
+        application!.evaluate(
+          () =>
+            typeof Reflect.get(globalThis, Symbol.for('agent-status-tiles.test.keyboard-entry')),
+        ),
+      )
+      .toBe('function');
+    await application.evaluate(() => {
+      const entry = Reflect.get(
+        globalThis,
+        Symbol.for('agent-status-tiles.test.keyboard-entry'),
+      ) as unknown;
+      if (typeof entry !== 'function') throw new Error('Keyboard-entry test hook is unavailable');
+      entry();
+    });
+    const settings = await settingsWindow(application);
+    const overlay = await overlayWindow(application);
+    await closePage(settings);
+
+    await expect(overlay.locator('.status-tiles__tile').first()).toBeFocused();
+    await expect
+      .poll(() =>
+        application!.evaluate(({ BrowserWindow }) => {
+          const window = BrowserWindow.getAllWindows().find((candidate) =>
+            candidate.webContents.getURL().includes('/renderer/overlay.html'),
+          );
+          return {
+            focusable: window?.isFocusable() ?? false,
+            visible: window?.isVisible() ?? false,
+          };
+        }),
+      )
+      .toEqual({
+        focusable: true,
+        visible: true,
+      });
+
+    await overlay.keyboard.press('Escape');
+    await expect
+      .poll(() =>
+        application!.evaluate(({ BrowserWindow }) => {
+          const window = BrowserWindow.getAllWindows().find((candidate) =>
+            candidate.webContents.getURL().includes('/renderer/overlay.html'),
+          );
+          return {
+            focusable: window?.isFocusable() ?? true,
+            focused: window?.isFocused() ?? true,
+            visible: window?.isVisible() ?? false,
+          };
+        }),
+      )
+      .toEqual({ focusable: false, focused: false, visible: true });
+  } finally {
+    await closeApplication(application);
+    await rm(userDataDir, { recursive: true, force: true });
+  }
+});
 
 async function overlayWindow(application: ElectronApplication): Promise<Page> {
   const deadline = Date.now() + 10_000;

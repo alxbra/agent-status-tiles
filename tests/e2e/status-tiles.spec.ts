@@ -13,6 +13,7 @@ declare global {
   interface Window {
     __setFixtureSessions?: (sessions: readonly SessionSnapshot[]) => void;
     __setFixtureCount?: (count: number) => void;
+    __triggerKeyboardEntry?: () => void;
     __fixtureOpenTarget?: { sessionId: string; completionId?: string };
     __fixtureDismissedSessionId?: string;
     __fixtureHitRegions?: unknown;
@@ -760,6 +761,21 @@ test('keyboard navigation reaches sessions beyond the twelve-slot viewport', asy
   await expect(page.locator('[data-session-id="codex:fixture-0"]')).toBeFocused();
   await page.keyboard.press('Escape');
   await expect.poll(() => page.evaluate(() => document.body.dataset.keyboardExit)).toBe('true');
+});
+
+test('queued keyboard entry focuses the first visible tile after sessions appear', async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 180, height: 480 });
+  await page.goto(fixtureUrl('count=0'));
+  await expect(page.locator('.status-tiles')).toHaveCount(0);
+  await page.evaluate(() => window.__triggerKeyboardEntry?.());
+  await page.evaluate(() => window.__setFixtureCount?.(3));
+  await expect(page.locator('.status-tiles__tile').first()).toBeFocused();
+  await expect(page.locator('.status-tiles__tile').first()).toHaveAttribute(
+    'data-session-id',
+    'codex:fixture-0',
+  );
 });
 
 test('keyboard focus expands the selected tile while the pointer stays inside', async ({

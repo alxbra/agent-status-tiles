@@ -44,6 +44,8 @@ export interface StatusTilesProps {
   onDismissError: (sessionId: string) => void | Promise<unknown>;
   onHitRegionsChange: (regions: readonly TileHitRegion[]) => void;
   onKeyboardExit: () => void;
+  /** Monotonic signal from the native menu-bar keyboard-entry action. */
+  keyboardEntryRevision?: number;
   reducedMotion?: boolean;
   /** Tests and the future overlay controller can provide a measured viewport. */
   width?: number;
@@ -138,6 +140,7 @@ export function StatusTiles({
   onDismissError,
   onHitRegionsChange,
   onKeyboardExit,
+  keyboardEntryRevision,
   reducedMotion,
   width = DEFAULT_STRIP_WIDTH,
   height,
@@ -157,6 +160,7 @@ export function StatusTiles({
   const [pointerY, setPointerY] = useState<number | undefined>();
   const [scrollOffset, setScrollOffset] = useState(0);
   const [focusedIndex, setFocusedIndex] = useState<number | null>(null);
+  const handledKeyboardEntryRevisionRef = useRef(0);
   const [isInteracting, setIsInteracting] = useState(false);
   const [displayedSessions, setDisplayedSessions] = useState<readonly SessionSnapshot[]>(() =>
     visibleTileSessions(sessions),
@@ -294,6 +298,20 @@ export function StatusTiles({
     if (localIndex >= 0) focusButton(tileRefs.current[localIndex]);
   }, [focusedIndex, layout.tiles]);
 
+  useEffect(() => {
+    if (
+      keyboardEntryRevision === undefined ||
+      keyboardEntryRevision <= handledKeyboardEntryRevisionRef.current ||
+      layout.tiles.length === 0
+    ) {
+      return;
+    }
+    handledKeyboardEntryRevisionRef.current = keyboardEntryRevision;
+    setPointerY(undefined);
+    setScrollOffset(0);
+    setFocusedIndex(0);
+  }, [keyboardEntryRevision, layout.tiles]);
+
   function beginInteractionFromRef(): void {
     if (interactingRef.current) return;
     interactingRef.current = true;
@@ -345,6 +363,7 @@ export function StatusTiles({
   function handleKeyboard(event: KeyboardEvent<HTMLDivElement>): void {
     if (event.key === 'Escape') {
       event.preventDefault();
+      if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
       onKeyboardExit();
       return;
     }

@@ -3,6 +3,8 @@ import { describe, expect, it } from 'vitest';
 import {
   createTestSessionSnapshots,
   parseTestSessionCount,
+  isKeyboardEntryTestHookEnabled,
+  TEST_KEYBOARD_ENTRY_FLAG,
   TEST_SESSION_COUNT_FLAG,
 } from '../../src/main/test-session-source';
 
@@ -46,5 +48,14 @@ describe('test-only overlay session source', () => {
     expect(JSON.stringify(snapshots)).not.toMatch(/prompt|transcript|path|credential/u);
     expect(createTestSessionSnapshots(-1)).toEqual([]);
     expect(createTestSessionSnapshots(31)).toEqual([]);
+  });
+
+  it('gates the native keyboard-entry trigger to unpackaged test runs', () => {
+    expect(isKeyboardEntryTestHookEnabled([TEST_KEYBOARD_ENTRY_FLAG], 'test', false)).toBe(true);
+    expect(isKeyboardEntryTestHookEnabled([], 'test', false)).toBe(false);
+    expect(isKeyboardEntryTestHookEnabled([TEST_KEYBOARD_ENTRY_FLAG], 'production', false)).toBe(
+      false,
+    );
+    expect(isKeyboardEntryTestHookEnabled([TEST_KEYBOARD_ENTRY_FLAG], 'test', true)).toBe(false);
   });
 });

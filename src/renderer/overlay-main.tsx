@@ -39,6 +39,7 @@ function visiblePortalRects(): readonly OverlayPortalRect[] {
 
 export function OverlayApp(): ReactElement {
   const [state, setState] = useState<OverlayState>({ sessions: [], reducedMotion: false });
+  const [keyboardEntryRevision, setKeyboardEntryRevision] = useState(0);
   const tileRegionsRef = useRef<readonly TileHitRegion[]>([]);
   const currentRegionsRef = useRef<ReturnType<typeof translateAndClipHitRegions>>([]);
   const regionPublisherRef = useRef<ReturnType<typeof createOverlayHitRegionPublisher> | null>(
@@ -112,9 +113,15 @@ export function OverlayApp(): ReactElement {
       })
       .catch(() => undefined);
 
+    const unsubscribeKeyboardEntry = overlayApi.subscribeKeyboardEntry(() => {
+      setKeyboardEntryRevision((revision) => revision + 1);
+    });
+    void overlayApi.rendererReady().catch(() => undefined);
+
     return () => {
       mounted = false;
       unsubscribe();
+      unsubscribeKeyboardEntry();
     };
   }, []);
 
@@ -208,6 +215,7 @@ export function OverlayApp(): ReactElement {
   }, []);
   const keyboardExit = useCallback(() => {
     if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
+    void overlayApi.requestKeyboardExit().catch(() => undefined);
   }, []);
 
   return (
@@ -218,6 +226,7 @@ export function OverlayApp(): ReactElement {
       onDismissError={dismissError}
       onHitRegionsChange={publishHitRegions}
       onKeyboardExit={keyboardExit}
+      keyboardEntryRevision={keyboardEntryRevision}
     />
   );
 }

@@ -9,6 +9,9 @@ import {
 export const OVERLAY_IPC_CHANNELS = {
   getState: 'overlay:get-state',
   stateChanged: 'overlay:state-changed',
+  keyboardEntry: 'overlay:keyboard-entry',
+  keyboardExit: 'overlay:keyboard-exit',
+  rendererReady: 'overlay:renderer-ready',
   publishHitRegions: 'overlay:publish-hit-regions',
   openSession: 'overlay:open-session',
   dismissError: 'overlay:dismiss-error',
@@ -53,6 +56,9 @@ export const OVERLAY_ACTION_UNAVAILABLE: OverlayActionResult = {
 export interface AgentStatusTilesOverlayApi {
   getState(): Promise<OverlayState>;
   subscribe(listener: (state: OverlayState) => void): () => void;
+  subscribeKeyboardEntry(listener: () => void): () => void;
+  requestKeyboardExit(): Promise<void>;
+  rendererReady(): Promise<void>;
   publishHitRegions(regions: readonly OverlayHitRegion[]): Promise<boolean>;
   openSession(request: OverlayOpenSessionRequest): Promise<OverlayActionResult>;
   dismissError(request: OverlayDismissErrorRequest): Promise<OverlayActionResult>;
@@ -88,6 +94,12 @@ const OPEN_REQUEST_KEYS_WITH_COMPLETION = ['sessionId', 'completionId'];
 const DISMISS_REQUEST_KEYS = ['sessionId'];
 const ACTION_RESULT_KEYS = ['handled', 'reason'];
 const CONTROL_CHARACTER_PATTERN = /\p{Cc}/u;
+
+export function isOverlayNoPayload(value: unknown): value is undefined {
+  return value === undefined;
+}
+
+export const isOverlayKeyboardExitRequest = isOverlayNoPayload;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
