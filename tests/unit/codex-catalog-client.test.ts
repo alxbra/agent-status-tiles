@@ -124,7 +124,6 @@ process.stdin.on('data', (chunk) => {
     }
     if (mode === 'malformed-json') {
       process.stdout.write('{not-json\\n');
-      continue;
     }
     if (mode === 'invalid-utf8' && !invalidUtf8Sent) {
       invalidUtf8Sent = true;
@@ -404,21 +403,25 @@ describe('Codex catalog client', () => {
     }
   });
 
-  it('times out bounded requests and rejects malformed JSON without exposing payloads', async () => {
+  it('times out bounded requests without hanging', async () => {
     const delayDiagnostics: CodexCatalogDiagnosticCode[] = [];
     const delayed = createClient(await createFakeBinary('delay'), delayDiagnostics, 30);
     await expect(delayed.listThreads()).rejects.toMatchObject({ code: 'request-timeout' });
     expect(delayDiagnostics).toContain('request-timeout');
     await delayed.stop();
+  });
 
+  it('reports malformed JSON and recovers with metadata-only results', async () => {
     const malformedDiagnostics: CodexCatalogDiagnosticCode[] = [];
     const malformed = createClient(
       await createFakeBinary('malformed-json'),
       malformedDiagnostics,
-      500,
+      2_000,
     );
-    await expect(malformed.listThreads()).rejects.toMatchObject({ code: 'request-timeout' });
-    expect(malformedDiagnostics).toContain('protocol-malformed');
+    const result = await malformed.listThreads({ maxPages: 1 });
+    expect(result.records).toHaveLength(2);
+    expect(malformedDiagnostics).toEqual(['protocol-malformed']);
+    expect(JSON.stringify(result.records)).not.toContain('PRIVATE_');
     await malformed.stop();
   });
 

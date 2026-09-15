@@ -23,3 +23,10 @@ The Codex catalog adapter reuses protocol and process-lifecycle concepts from
 [`codex-status-actions`](https://github.com/alxbra/codex-status-actions), which
 is licensed under Apache-2.0. No Stream Deck runtime, UI code, or raw provider
 payload handling is copied into this repository.
+
+The macOS navigation adapter also adapts the validated Codex task-link and
+`/usr/bin/open` dispatch boundary from
+[`src/platform/macos/task-navigator.ts`](https://github.com/alxbra/codex-status-actions/blob/main/src/platform/macos/task-navigator.ts)
+and [`src/task-link.ts`](https://github.com/alxbra/codex-status-actions/blob/main/src/task-link.ts).
+The adapter is Apache-2.0 licensed; it does not carry over Stream Deck actions,
+shell execution, or unsupported legacy navigation modes.
