@@ -453,6 +453,25 @@ describe('selectors and provider health', () => {
       upsert('child', { provider: 'claude', isTopLevel: false }),
       {
         type: 'turn-started',
+        sessionId: archivedId,
+        turnId: 'archived-turn',
+        timestamp: 100,
+      },
+      {
+        type: 'turn-started',
+        sessionId: childId,
+        turnId: 'child-turn',
+        timestamp: 100,
+      },
+      {
+        type: 'input-requested',
+        sessionId: childId,
+        turnId: 'child-turn',
+        callId: 'child-wait',
+        timestamp: 110,
+      },
+      {
+        type: 'turn-started',
         sessionId: codexId,
         turnId: 'turn-a',
         timestamp: 100,
@@ -467,10 +486,13 @@ describe('selectors and provider health', () => {
     ]);
 
     expect(selectVisibleSessionSnapshots(state).map(({ id }) => id)).toEqual([codexId]);
+    expect(selectSession(state, codexId)?.status).toBe('unread');
+    expect(selectSession(state, archivedId)?.status).toBe('working');
+    expect(selectSession(state, childId)?.status).toBe('needs-input');
     expect(selectSessionSnapshots(state).map(({ id }) => id)).toEqual([
       codexId,
-      archivedId,
       childId,
+      archivedId,
     ]);
   });
 
