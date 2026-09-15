@@ -23,8 +23,8 @@ The runtime now has:
 - bounded tile, tooltip, and context-menu hit regions;
 - persisted selected-display and reduced-motion preferences plus launch-at-login;
 - deliberate menu-bar keyboard entry and Escape teardown;
-- close, renderer-crash/load-failure, display, resume, activation, and shutdown
-  recovery with bounded renderer handshakes;
+- close, renderer-crash/load-failure, display, resume, and activation recovery
+  with bounded renderer handshakes plus clean shutdown teardown;
 - sanitized test-only native 0/1/12/30-session coverage.
 
 This is not yet a live agent monitor. Production has no provider coordinator,

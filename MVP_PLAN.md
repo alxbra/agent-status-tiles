@@ -38,9 +38,9 @@ bounded session metadata, keeps zero-session production state hidden,
 synchronizes tile and portal hit regions, persists the selected display and
 reduced-motion preference, supports deliberate menu-bar keyboard entry, and
 recovers from window closure, renderer crash/load failure, display events,
-resume, activation, and shutdown without duplicate controllers or stale
-listeners. Sanitized test-only snapshots verify native 0/1/12/30-session
-behavior; no fake production activity is shipped.
+resume, and activation without duplicate controllers or stale listeners, and
+tears down cleanly on shutdown. Sanitized test-only snapshots verify native
+0/1/12/30-session behavior; no fake production activity is shipped.
 
 The application is still not an end-to-end provider-connected companion. The
 session reducer, persistence, Codex readers, hook-journal reader, helper, and
