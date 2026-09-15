@@ -78,6 +78,7 @@
     }
   },
   "dependencies": {
+    "class-variance-authority": "^0.7.1",
     "cn": "^0.3.0",
     "lucide-react": "^1.46.0",
     "radix-ui": "^1.6.7"
