@@ -1,7 +1,10 @@
 # Third-party notices
 
-The foundation currently contains no copied third-party source code or
-artwork.
+The tile renderer uses the OpenAI and Anthropic marks from the SVG Logos icon
+set (`@iconify-json/logos`, CC0-1.0), authored by Gil Barbara and distributed
+at <https://github.com/gilbarbara/logos>. The paths are vendored in
+`src/renderer/tiles/icons.tsx` so the renderer does not load a 7 MB icon
+catalog at runtime.
 
 The implementation plan identifies
 [`codex-status-actions`](https://github.com/alxbra/codex-status-actions) as an
@@ -15,3 +18,8 @@ handling patterns from `src/codex/rollout-watcher.ts` in that project. The
 adapted work remains Apache-2.0 licensed; the root `LICENSE` contains the
 license text. Stream Deck integration, process execution, and legacy aliases
 were not copied.
+
+The Codex catalog adapter reuses protocol and process-lifecycle concepts from
+[`codex-status-actions`](https://github.com/alxbra/codex-status-actions), which
+is licensed under Apache-2.0. No Stream Deck runtime, UI code, or raw provider
+payload handling is copied into this repository.
