@@ -420,9 +420,9 @@ The current `tests/fixtures/README.md` documents the production-data boundary bu
 
 **PRs:** `feat/desktop-shell`, `feat/display-placement`.
 
-- [ ] Create the frameless transparent strip window and separate settings window.
-- [ ] Add menu-bar actions: Show/Hide, Settings, Quit.
-- [ ] Keep the utility out of the macOS Dock during normal operation.
+- [x] Create the frameless transparent strip window and separate settings window.
+- [x] Add menu-bar actions: Show/Hide, Settings, Quit.
+- [x] Keep the utility out of the macOS Dock during normal operation.
 - [ ] Implement primary-display default and selected-display persistence.
 - [ ] Implement Spaces/full-screen visibility without taking focus on hover.
 - [ ] Implement accurate mouse passthrough.
@@ -554,12 +554,15 @@ Maintain this table in the plan:
 | [#1 `chore/app-foundation`](https://github.com/alxbra/agent-status-tiles/pull/1) | Epic 0 application foundation | 1 completed CLI pass after 1 failed transport attempt; 5 findings, 1 valid fixed, 4 rejected | 2 | 5 unit tests, 2 native Electron E2E tests, format/lint/type/build checks, and unsigned arm64 packaging; [CI run 34971932124](https://github.com/alxbra/agent-status-tiles/actions/runs/34971932124) | `4593ee4346272ac1db24510adb821b79fc1d940e` |
 | [#2 `feat: add bounded native hook helper`](https://github.com/alxbra/agent-status-tiles/pull/2) | Bounded Claude hook-helper foundation | 1 completed CLI pass; 2 valid findings fixed | 2 | 11 native helper tests, 5 app unit tests, 2 Electron E2E tests, format/lint/type/build checks; [CI run 34972446167](https://github.com/alxbra/agent-status-tiles/actions/runs/34972446167), [CI run 34972446325](https://github.com/alxbra/agent-status-tiles/actions/runs/34972446325) | `b536b6c4a6246e6e31650304ea10c94b1f87963f` |
 | [#3 `feat: add deterministic session state`](https://github.com/alxbra/agent-status-tiles/pull/3) | Pure session types, reducer, selectors, lifecycle, and provider-health behavior | 1 completed CLI pass; 0 findings | 2 | 18 unit tests, 2 Electron E2E tests, format/lint/type/build checks; [CI run 34973408658](https://github.com/alxbra/agent-status-tiles/actions/runs/34973408658) | `33657030eff342466aa9bb8f4ffc001bce8212d4` |
+| [#4 `feat: add desktop shell and menu bar`](https://github.com/alxbra/agent-status-tiles/pull/4) | Epic 1 shell window, menu-bar lifecycle, default placement, and visibility scaffolding | 1 completed CLI pass; 1 invalid finding rejected | 2 | 23 unit tests, 3 Electron E2E tests, format/lint/type/build checks; [CI run 34978000636](https://github.com/alxbra/agent-status-tiles/actions/runs/34978000636) | `a454bf22a8c9521eeefb9db87845fd438d44e7c9` |
 
 Foundation review corrections included strict IPC sender/frame validation, same-host renderer navigation checks, supported Node engine ranges, formatter coverage, and recovery after a failed settings-window load. No signing or notarization was claimed; Apple Developer credentials remain a release dependency.
 
 Hook helper PR #2 merged into `staging` at `b536b6c4a6246e6e31650304ea10c94b1f87963f`. Its CodeRabbit and QA corrections were partial-tail recovery, safe lock-path handling, canonical payload fields, private paths, bounded subprocess tests, and a monotonic 500 ms lock deadline. Helper packaging, app replay, hook installation, and the full Claude epic remain incomplete.
 
 Session-state PR #3 merged into `staging` at `33657030eff342466aa9bb8f4ffc001bce8212d4`. It completed one CodeRabbit CLI pass with zero findings and two root QA passes, including fixes for out-of-order waits, health overlays, safe identifier lookup, bounded UTF-8 fields, redundant state, and active child/archive filter coverage. The pure reducer, identity, ordering/filter, lifecycle, provider-health, and race-safe acknowledgement tasks above are verified; persistence and real-app replay remain pending.
+
+Desktop-shell PR #4 merged into `staging` at `a454bf22a8c9521eeefb9db87845fd438d44e7c9`. It completed one CodeRabbit CLI pass with one invalid fake-session finding rejected and two root QA passes. The frameless strip/settings windows, menu-bar actions, Dock hiding, and default placement scaffolding are verified. Selected-display persistence, native click-through, Spaces/full-screen, multi-display, sleep/wake, and real desktop interaction acceptance remain pending.
 
 Record corrections made after review and the commit used for final validation.
 
