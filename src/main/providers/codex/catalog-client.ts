@@ -195,10 +195,13 @@ function parseSource(value: unknown): ParsedSource | undefined {
     };
   }
   if (!isRecord(value)) return undefined;
-  if (hasOwn(value, 'custom') && safeString(value.custom, MAX_LABEL_BYTES)) {
+  const hasCustom = hasOwn(value, 'custom');
+  const hasSubAgent = hasOwn(value, 'subAgent');
+  if (hasCustom && hasSubAgent) return undefined;
+  if (hasCustom && safeString(value.custom, MAX_LABEL_BYTES)) {
     return { source: 'custom', customSource: value.custom, isSubAgent: false };
   }
-  if (!hasOwn(value, 'subAgent')) return undefined;
+  if (!hasSubAgent) return undefined;
   if (typeof value.subAgent === 'string' && SUBAGENT_STRING_KINDS.has(value.subAgent)) {
     return {
       source:
@@ -357,6 +360,7 @@ export class CodexCatalogClient {
   private readonly ownedChildren = new Set<ChildProcessWithoutNullStreams>();
   private readonly terminations = new Map<ChildProcessWithoutNullStreams, Promise<void>>();
   private stopped = true;
+  private stopGeneration = 0;
   private nextRequestId = 1;
   private readonly pending = new Map<number, PendingRequest>();
   private lineBuffer = Buffer.alloc(0);
@@ -391,8 +395,12 @@ export class CodexCatalogClient {
   }
 
   async start(): Promise<void> {
+    const requestedStopGeneration = this.stopGeneration;
     if (this.stopping) await this.stopping;
     if (this.terminations.size > 0) await this.waitForTerminations();
+    if (requestedStopGeneration !== this.stopGeneration) {
+      throw new CodexCatalogError('stopped');
+    }
     if (this.connected) return;
     if (this.starting) return this.starting;
     if (this.ownedChildren.size > 0) {
@@ -408,6 +416,7 @@ export class CodexCatalogClient {
   }
 
   async stop(): Promise<void> {
+    this.stopGeneration += 1;
     if (this.stopping) return this.stopping;
     this.stopped = true;
     this.child = undefined;
@@ -437,6 +446,12 @@ export class CodexCatalogClient {
       throw new CodexCatalogError('invalid-options');
     }
 
+    let cursor = options.cursor ?? null;
+    if (cursor !== null && !safeString(cursor, MAX_CURSOR_BYTES)) {
+      this.report('invalid-options');
+      throw new CodexCatalogError('invalid-options');
+    }
+
     await this.start();
     const child = this.child;
     if (child === undefined) {
@@ -444,11 +459,6 @@ export class CodexCatalogClient {
       throw new CodexCatalogError('disconnected');
     }
 
-    let cursor = options.cursor ?? null;
-    if (cursor !== null && !safeString(cursor, MAX_CURSOR_BYTES)) {
-      this.report('invalid-options');
-      throw new CodexCatalogError('invalid-options');
-    }
     const seenCursors = new Set<string>();
     if (cursor !== null) seenCursors.add(cursor);
     const records: CodexCatalogRecord[] = [];
@@ -529,7 +539,10 @@ export class CodexCatalogClient {
     child.stderr.on('data', () => {
       if (this.child === child) this.report('server-stderr');
     });
-    child.once('error', () => {
+    child.stderr.on('error', () => {
+      if (this.child === child) this.handleChildFailure(child);
+    });
+    child.on('error', () => {
       if (this.child === child) this.handleChildFailure(child);
     });
     child.once('close', () => {
@@ -677,7 +690,8 @@ export class CodexCatalogClient {
   private handleLine(line: Buffer): void {
     let message: ProtocolMessage;
     try {
-      message = JSON.parse(line.toString('utf8')) as ProtocolMessage;
+      const decoded = new TextDecoder('utf-8', { fatal: true }).decode(line);
+      message = JSON.parse(decoded) as ProtocolMessage;
     } catch {
       this.report('protocol-malformed');
       return;

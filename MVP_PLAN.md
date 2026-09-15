@@ -1,7 +1,7 @@
 # Agent Status Tiles — MVP Implementation Plan
 
 **Document:** `MVP_PLAN.md` in the project root.  
-**Document status:** Implementation in progress; repository bootstrap and the Epic 0 application foundation are merged. Fixture evidence and later epics remain pending.
+**Document status:** Implementation in progress; repository bootstrap, the Epic 0 application foundation, session state/persistence, and the bounded Codex rollout reader are merged. The Codex catalog (PR #7), rounded-square tile renderer (PR #8), and unsigned helper packaging (PR #9) are implementation-complete on open branches awaiting review and merge. Native integration, live provider wiring, and later release gates remain pending.
 **Repository:** [alxbra/agent-status-tiles](https://github.com/alxbra/agent-status-tiles)
 
 ## 1. Product and release target
@@ -354,9 +354,7 @@ The published Claude link documentation describes opening chats and starting Cod
 
 ### Repository bootstrap
 
-The repository currently has no commits or remote branches.
-
-The only direct bootstrap is the minimum initial commit containing the plan, project instructions, README, and ignore rules. Create `main` and `staging` from that commit. All subsequent implementation uses feature branches and PRs into `staging`.
+Repository bootstrap is complete. The minimum initial commit contains the plan, project instructions, README, and ignore rules; `main` and `staging` were created from that commit. All subsequent implementation uses feature branches and PRs into `staging`.
 
 Do not promote application code to `main` during MVP development.
 
@@ -410,20 +408,21 @@ Every epic ends with E2E verification, corrections, and the PR hardening/merge g
 - [x] Add pnpm scripts for development, build, checks, tests, and packaging.
 - [x] Add CI for lint, types, unit tests, build, and Electron smoke tests.
 - [x] Configure one-pass CodeRabbit operation.
-- [ ] Add a test-only fixture source isolated from production data.
+- [x] Add a test-only fixture source isolated from production data.
 - [x] Add Apache-2.0 licensing and attribution for reused project code.
 - [x] **E2E and corrections:** launch the built Electron application, open and close settings, verify single-instance behavior, fix failures, rerun, harden, and merge.
 
-The current `tests/fixtures/README.md` documents the production-data boundary but is not a real fixture source, so that task remains unchecked.
+The synthetic/source-derived Codex rollout fixtures under `tests/fixtures/codex/` are a real test-only source and are isolated from production data. The browser-only settings and tile fixtures on open presentation branches are not production data sources; controlled live-format capture and end-to-end app replay remain pending.
 
 ### Epic 1 — macOS overlay and menu-bar lifecycle
 
 **PRs:** `feat/desktop-shell`, `feat/display-placement`.
 
-- [ ] Create the frameless transparent strip window and separate settings window.
-- [ ] Add menu-bar actions: Show/Hide, Settings, Quit.
-- [ ] Keep the utility out of the macOS Dock during normal operation.
-- [ ] Implement primary-display default and selected-display persistence.
+- [x] Create the frameless transparent strip window and separate settings window.
+- [x] Add menu-bar actions: Show/Hide, Settings, Quit.
+- [x] Keep the utility out of the macOS Dock during normal operation.
+- [x] Implement primary-display default placement (verified by merged PR #4).
+- [ ] Persist the selected display and restore it after reconnect.
 - [ ] Implement Spaces/full-screen visibility without taking focus on hover.
 - [ ] Implement accurate mouse passthrough.
 - [ ] Handle display changes, sleep/wake, and application shutdown.
@@ -432,6 +431,16 @@ The current `tests/fixtures/README.md` documents the production-data boundary bu
 ### Epic 2 — Rounded-square status tiles and Dock magnification
 
 **PRs:** `feat/status-tiles`, `feat/dock-magnification`.
+
+Implementation progress (not an acceptance checkoff): PR #8 implements the
+rounded-square renderer, magnification, overflow and keyboard behavior, stock
+tooltip/context-menu composition, and browser visual fixtures. Its 72 total
+unit tests, 3 Electron smoke tests, and 17 browser fixture tests pass in CI
+[run 34981413118](https://github.com/alxbra/agent-status-tiles/actions/runs/34981413118).
+The implementation is complete on the open branch; review and merge are
+pending. Native overlay integration, portal bounds, passthrough hit testing,
+underlying-app click-through, Spaces/full-screen, and multi-display acceptance
+remain pending, so the acceptance tasks below remain unchecked.
 
 - [ ] Implement the exact palette and rounded-square geometry at collapsed, intermediate, and expanded sizes.
 - [ ] Render provider and state icons only at expanded sizes.
@@ -449,8 +458,8 @@ The current `tests/fixtures/README.md` documents the production-data boundary bu
 - [x] Implement shared session types and the deterministic status reducer.
 - [x] Namespace identities and deduplicate surfaces.
 - [x] Implement new-turn ordering and active/unread filtering.
-- [ ] Persist unread state, acknowledgement IDs, ordering, and cursors.
-- [ ] Suppress historical unread completions on first installation.
+- [x] Persist unread state, acknowledgement IDs, ordering, and cursors atomically (merged PR #5).
+- [ ] Suppress historical unread completions on first installation (persistence and reader emit baseline markers; applying them in live app replay remains pending).
 - [x] Handle late events, duplicate events, overlapping input requests, and archived sessions.
 - [x] Keep provider health separate from task failures.
 - [x] Implement race-safe completion acknowledgement.
@@ -460,22 +469,38 @@ The current `tests/fixtures/README.md` documents the production-data boundary bu
 
 **PRs:** `feat/codex-observation`, `feat/codex-hook-setup`.
 
-- [ ] Adapt the existing project’s catalog and incremental event reader.
-- [ ] Retain attribution and avoid coupling to its Stream Deck runtime.
+Implementation progress (not an acceptance checkoff): PR #6’s bounded rollout
+reader and synthetic/source-derived fixtures are merged; PR #7’s read-only
+catalog client is complete on its open branch with 83 unit tests, 3 Electron smoke tests, and
+passing [CI run 34981325184](https://github.com/alxbra/agent-status-tiles/actions/runs/34981325184).
+PR #7 review and merge are pending. The live catalog-to-reader qualifier,
+Desktop/CLI surface mapping, and provider wiring remain pending.
+
+- [x] Implement the bounded incremental Codex rollout reader (merged PR #6).
+- [ ] Integrate the reader with the Codex catalog and qualify live Desktop/CLI sessions (PR #7 review/merge pending).
+- [x] Retain attribution and avoid coupling to its Stream Deck runtime (verified by merged PR #6).
 - [ ] Recognize both Desktop and CLI sessions.
-- [ ] Extract only required metadata.
+- [x] Extract only required metadata in the bounded rollout reader (merged PR #6); catalog qualification and live surface mapping remain pending.
 - [ ] Add explicit hook installation, trust status, repair, and removal.
 - [ ] Preserve unrelated hooks, including the existing Stream Deck integration.
 - [ ] Add version/format diagnostics and reconnection behavior.
-- [ ] Record sanitized fixtures for actual supported local formats.
+- [x] Add synthetic/source-derived rollout fixtures plus a metadata-only installed-format check (merged PR #6).
+- [ ] Record sanitized fixtures from controlled live Desktop/CLI lifecycles and validate them against observations.
 - [ ] **E2E and corrections:** test a live task on both surfaces, including working, approval/question, completion, error, restart, and existing-hook coexistence; verify fixtures against observations; fix, rerun, harden, and merge.
 
 ### Epic 5 — Claude Code Desktop and CLI
 
 **PRs:** `feat/hook-helper`, `feat/claude-observation`.
 
-- [ ] Build and package the small hook helper.
-- [ ] Implement reduced local event journals, concurrency handling, rotation, and replay.
+Implementation progress (not an acceptance checkoff): PR #9 contains the
+unsigned arm64/x64 helper packaging implementation and passes its native,
+package, and CI checks on the open branch; review and merge are pending. It
+does not install hooks, wire startup, or make a signing/notarization claim.
+
+- [x] Build the native hook-helper executable (merged PR #2).
+- [ ] Package the helper into the application and complete packaging review/integration (PR #9 review/merge pending).
+- [x] Implement reduced local event journal writing, concurrency handling, bounded rotation, and silent malformed-input behavior in the merged native helper (PR #2).
+- [ ] Replay helper journals through companion app state; the app reader/replay path remains pending.
 - [ ] Install only owned hooks into shared user settings.
 - [ ] Detect local Desktop and terminal ownership.
 - [ ] Normalize Claude lifecycle events into the shared state model.
@@ -529,7 +554,7 @@ The current `tests/fixtures/README.md` documents the production-data boundary bu
 **PRs:** `build/macos-release`, `docs/release-readiness`.
 
 - [ ] Package separate Apple Silicon and Intel DMG/ZIP artifacts.
-- [ ] Use product name `Agent Status Tiles` and bundle ID `com.alxbra.agent-status-tiles`.
+- [x] Use product name `Agent Status Tiles` and bundle ID `com.alxbra.agent-status-tiles` (verified in the merged package configuration).
 - [ ] Provide an original minimal application/menu-bar icon.
 - [ ] Sign the application and bundled helper; notarize and staple release artifacts.
 - [ ] Make release builds fail if required signing credentials are missing.
@@ -554,12 +579,24 @@ Maintain this table in the plan:
 | [#1 `chore/app-foundation`](https://github.com/alxbra/agent-status-tiles/pull/1) | Epic 0 application foundation | 1 completed CLI pass after 1 failed transport attempt; 5 findings, 1 valid fixed, 4 rejected | 2 | 5 unit tests, 2 native Electron E2E tests, format/lint/type/build checks, and unsigned arm64 packaging; [CI run 34971932124](https://github.com/alxbra/agent-status-tiles/actions/runs/34971932124) | `4593ee4346272ac1db24510adb821b79fc1d940e` |
 | [#2 `feat: add bounded native hook helper`](https://github.com/alxbra/agent-status-tiles/pull/2) | Bounded Claude hook-helper foundation | 1 completed CLI pass; 2 valid findings fixed | 2 | 11 native helper tests, 5 app unit tests, 2 Electron E2E tests, format/lint/type/build checks; [CI run 34972446167](https://github.com/alxbra/agent-status-tiles/actions/runs/34972446167), [CI run 34972446325](https://github.com/alxbra/agent-status-tiles/actions/runs/34972446325) | `b536b6c4a6246e6e31650304ea10c94b1f87963f` |
 | [#3 `feat: add deterministic session state`](https://github.com/alxbra/agent-status-tiles/pull/3) | Pure session types, reducer, selectors, lifecycle, and provider-health behavior | 1 completed CLI pass; 0 findings | 2 | 18 unit tests, 2 Electron E2E tests, format/lint/type/build checks; [CI run 34973408658](https://github.com/alxbra/agent-status-tiles/actions/runs/34973408658) | `33657030eff342466aa9bb8f4ffc001bce8212d4` |
+| [#4 `feat: add desktop shell and menu bar`](https://github.com/alxbra/agent-status-tiles/pull/4) | Epic 1 shell window, menu-bar lifecycle, default placement, and visibility scaffolding | 1 completed CLI pass; 1 invalid finding rejected | 2 | 23 unit tests, 3 Electron E2E tests, format/lint/type/build checks; [CI run 34978000636](https://github.com/alxbra/agent-status-tiles/actions/runs/34978000636) | `a454bf22a8c9521eeefb9db87845fd438d44e7c9` |
+| [#5 `feat: add atomic session persistence`](https://github.com/alxbra/agent-status-tiles/pull/5) | Atomic persisted session state and restart-safe status refresh | 1 completed CLI pass; 0 findings | 2 | 33 unit tests, 3 Electron E2E tests, format/lint/type/build checks; [CI run 34978274333](https://github.com/alxbra/agent-status-tiles/actions/runs/34978274333) | `5deb6aeb1f6dee9a5d0ab44e038102b3efb6c6fd` |
+| [#6 `feat: add bounded Codex rollout reader`](https://github.com/alxbra/agent-status-tiles/pull/6) | Codex rollout reader with bounded, causal event normalization, synthetic/source-derived fixtures, and a metadata-only installed-format check | 1 completed CLI pass; 1 valid finding fixed | 2 | 62 unit tests, 3 Electron E2E tests, format/lint/type/build checks; [CI run 34980907374](https://github.com/alxbra/agent-status-tiles/actions/runs/34980907374); [audit comment](https://github.com/alxbra/agent-status-tiles/pull/6#issuecomment-5681842281) | `3f7fa776065ca6aaf6942c1c06dd6c7e8894ab68` |
+| [#7 `feat/codex catalog`](https://github.com/alxbra/agent-status-tiles/pull/7) | Read-only Codex app-server catalog client with bounded metadata projection | 1 completed CLI pass; 2 valid findings fixed | Pending | Implementation complete; review/merge pending. 83 unit tests, 3 Electron smoke tests, format/lint/type/build checks; [CI run 34981325184](https://github.com/alxbra/agent-status-tiles/actions/runs/34981325184) | Open; no merge SHA |
+| [#8 `feat: add rounded-square status tile UI`](https://github.com/alxbra/agent-status-tiles/pull/8) | Isolated rounded-square tile renderer, magnification, overflow, keyboard interaction, and visual fixtures | Pending; no CodeRabbit pass claimed | Pending | Implementation complete; review/merge pending. 72 total unit tests, 3 Electron smoke tests, 17 browser fixture tests; [CI run 34981413118](https://github.com/alxbra/agent-status-tiles/actions/runs/34981413118) | Open; no merge SHA |
+| [#9 `build/helper packaging`](https://github.com/alxbra/agent-status-tiles/pull/9) | Unsigned arm64/x64 packaging for the existing native hook helper | Pending; no CodeRabbit pass claimed | Pending | Implementation complete; review/merge pending. 72 TypeScript unit tests, 11 native helper tests, 3 Electron smoke tests, format/lint/type checks, and unsigned packaging; [CI run 34982354667](https://github.com/alxbra/agent-status-tiles/actions/runs/34982354667), [native run 34982354694](https://github.com/alxbra/agent-status-tiles/actions/runs/34982354694), [package run 34982354691](https://github.com/alxbra/agent-status-tiles/actions/runs/34982354691) | Open; no merge SHA |
 
 Foundation review corrections included strict IPC sender/frame validation, same-host renderer navigation checks, supported Node engine ranges, formatter coverage, and recovery after a failed settings-window load. No signing or notarization was claimed; Apple Developer credentials remain a release dependency.
 
 Hook helper PR #2 merged into `staging` at `b536b6c4a6246e6e31650304ea10c94b1f87963f`. Its CodeRabbit and QA corrections were partial-tail recovery, safe lock-path handling, canonical payload fields, private paths, bounded subprocess tests, and a monotonic 500 ms lock deadline. Helper packaging, app replay, hook installation, and the full Claude epic remain incomplete.
 
 Session-state PR #3 merged into `staging` at `33657030eff342466aa9bb8f4ffc001bce8212d4`. It completed one CodeRabbit CLI pass with zero findings and two root QA passes, including fixes for out-of-order waits, health overlays, safe identifier lookup, bounded UTF-8 fields, redundant state, and active child/archive filter coverage. The pure reducer, identity, ordering/filter, lifecycle, provider-health, and race-safe acknowledgement tasks above are verified; persistence and real-app replay remain pending.
+
+Desktop-shell PR #4 merged into `staging` at `a454bf22a8c9521eeefb9db87845fd438d44e7c9`. It completed one CodeRabbit CLI pass with one invalid fake-session finding rejected and two root QA passes. The frameless strip/settings windows, menu-bar actions, Dock hiding, and default placement scaffolding are verified. Selected-display persistence, native click-through, Spaces/full-screen, multi-display, sleep/wake, and real desktop interaction acceptance remain pending.
+
+Persistence PR #5 merged into `staging` at `5deb6aeb1f6dee9a5d0ab44e038102b3efb6c6fd`. It completed one CodeRabbit CLI pass with zero findings and two root QA passes, including canonical status refresh and queued-failure/short-read regressions. The persistence implementation is verified by 33 unit tests, 3 Electron E2E tests, format/lint/type/build checks, and [CI run 34978274333](https://github.com/alxbra/agent-status-tiles/actions/runs/34978274333). Live-app persistence replay and the cross-file baseline gate remain pending.
+
+Codex rollout reader PR #6 merged into `staging` at `3f7fa776065ca6aaf6942c1c06dd6c7e8894ab68`; its final feature head was `dd471955`. It completed one CodeRabbit CLI pass with one valid finding fixed and two root QA passes. Corrections covered causal input timestamps, canonical IDs, ordinary `function_call` handling, missing-metadata quarantine, stale-turn correlation, and the canonical current-turn predicate. Catalog integration, live four-surface wiring, the cross-file baseline, and cross-batch output-before-request remain pending. See the [CI run 34980907374](https://github.com/alxbra/agent-status-tiles/actions/runs/34980907374) and [audit comment](https://github.com/alxbra/agent-status-tiles/pull/6#issuecomment-5681842281).
 
 Record corrections made after review and the commit used for final validation.
 

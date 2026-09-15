@@ -72,6 +72,7 @@ const mode = ${JSON.stringify(mode)};
 const pages = ${pages};
 let carry = '';
 let initializeResponseSent = false;
+let invalidUtf8Sent = false;
 if (mode === 'ignore-term') process.on('SIGTERM', () => {});
 const expectedSourceKinds = ['cli', 'vscode', 'exec', 'appServer', 'subAgent', 'subAgentReview', 'subAgentCompact', 'subAgentThreadSpawn', 'subAgentOther', 'unknown'];
 process.stdin.setEncoding('utf8');
@@ -125,6 +126,13 @@ process.stdin.on('data', (chunk) => {
       process.stdout.write('{not-json\\n');
       continue;
     }
+    if (mode === 'invalid-utf8' && !invalidUtf8Sent) {
+      invalidUtf8Sent = true;
+      const prefix = Buffer.from('{"id":' + request.id + ',"result":"');
+      const suffix = Buffer.from([0x22, 0x7d, 0x0a]);
+      process.stdout.write(Buffer.concat([prefix, Buffer.from([0xc3, 0x28]), suffix]));
+      continue;
+    }
     if (mode === 'exit') { process.exit(0); }
     const page = request.params.cursor === null ? pages[0] : pages[1];
     const outputPage = { ...page, data: page.data.slice(0, request.params.limit) };
@@ -134,6 +142,12 @@ process.stdin.on('data', (chunk) => {
     }
     if (mode === 'thread-source-subagent') {
       outputPage.data[0] = { ...outputPage.data[0], threadSource: 'subAgent' };
+    }
+    if (mode === 'conflicting-source') {
+      outputPage.data[0] = {
+        ...outputPage.data[0],
+        source: { custom: 'custom-connector', subAgent: 'review' },
+      };
     }
     if (mode === 'omitted-discarded') {
       const { preview, turns, status, modelProvider, projectId, ...metadata } = outputPage.data[0];
@@ -171,6 +185,17 @@ function createClient(
     requestTimeoutMs: timeoutMs,
     onDiagnostic: ({ code }) => diagnostics.push(code),
   });
+}
+
+async function waitForDiagnostic(
+  diagnostics: readonly CodexCatalogDiagnosticCode[],
+  expected: CodexCatalogDiagnosticCode,
+  timeoutMs = 1_000,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!diagnostics.includes(expected) && Date.now() < deadline) {
+    await new Promise<void>((resolve) => setTimeout(resolve, 10));
+  }
 }
 
 afterEach(async () => {
@@ -309,6 +334,7 @@ describe('Codex catalog client', () => {
     const stderrDiagnostics: CodexCatalogDiagnosticCode[] = [];
     const stderr = createClient(await createFakeBinary('stderr'), stderrDiagnostics);
     await stderr.start();
+    await waitForDiagnostic(stderrDiagnostics, 'server-stderr');
     expect(stderrDiagnostics).toContain('server-stderr');
     expect(stderrDiagnostics).not.toContain('PRIVATE_SERVER_ERROR');
     await stderr.stop();
@@ -361,6 +387,18 @@ describe('Codex catalog client', () => {
       isSubAgent: true,
     });
     await marker.stop();
+  });
+
+  it('rejects conflicting custom and subagent source variants', async () => {
+    const diagnostics: CodexCatalogDiagnosticCode[] = [];
+    const client = createClient(await createFakeBinary('conflicting-source'), diagnostics);
+
+    const result = await client.listThreads({ maxPages: 1 });
+
+    expect(result.records).toHaveLength(1);
+    expect(result.records[0]?.sourceEvidence.source).toBe('subAgentReview');
+    expect(diagnostics).toEqual(['unsupported-record']);
+    await client.stop();
   });
 
   it('projects metadata when discarded fields are omitted or changed', async () => {
@@ -432,6 +470,34 @@ describe('Codex catalog client', () => {
     await client.stop();
   });
 
+  it('rejects a start queued before the latest stop and permits a later restart', async () => {
+    const diagnostics: CodexCatalogDiagnosticCode[] = [];
+    const client = createClient(await createFakeBinary('slow-start'), diagnostics, 1_000);
+    const firstStart = client.start();
+    const firstStop = client.stop();
+    const queuedStart = client.start();
+    const latestStop = client.stop();
+
+    await expect(firstStart).rejects.toMatchObject({ code: 'stopped' });
+    await expect(Promise.all([firstStop, latestStop])).resolves.toEqual([undefined, undefined]);
+    await expect(queuedStart).rejects.toMatchObject({ code: 'stopped' });
+    expect(client.connected).toBe(false);
+    expect(
+      (client as unknown as { ownedChildren: Set<ChildProcessWithoutNullStreams> }).ownedChildren
+        .size,
+    ).toBe(0);
+
+    const restart = client.start();
+    const concurrentRestart = client.start();
+    await Promise.all([restart, concurrentRestart]);
+    expect(client.connected).toBe(true);
+    await client.stop();
+    expect(
+      (client as unknown as { ownedChildren: Set<ChildProcessWithoutNullStreams> }).ownedChildren
+        .size,
+    ).toBe(0);
+  });
+
   it('stops an in-flight handshake and can restart after an owned child exits', async () => {
     const diagnostics: CodexCatalogDiagnosticCode[] = [];
     const client = createClient(await createFakeBinary('slow-start'), diagnostics, 1_000);
@@ -458,11 +524,17 @@ describe('Codex catalog client', () => {
     if (child === undefined) throw new Error('expected owned child');
 
     child.stdout.emit('error', new Error('PRIVATE_STREAM_ERROR'));
+    child.stdout.emit('error', new Error('PRIVATE_REPEATED_STREAM_ERROR'));
+    child.stderr.emit('error', new Error('PRIVATE_STDERR_ERROR'));
+    child.stderr.emit('error', new Error('PRIVATE_REPEATED_STDERR_ERROR'));
+    child.emit('error', new Error('PRIVATE_REPEATED_CHILD_ERROR'));
+    child.emit('error', new Error('PRIVATE_SECOND_CHILD_ERROR'));
     await client.start();
 
     expect(child.exitCode !== null || child.signalCode !== null).toBe(true);
     expect(client.connected).toBe(true);
     expect(diagnostics).toContain('disconnected');
+    expect(JSON.stringify(diagnostics)).not.toContain('PRIVATE_');
     await client.stop();
   });
 
@@ -478,6 +550,39 @@ describe('Codex catalog client', () => {
     expect(child.exitCode !== null || child.signalCode !== null).toBe(true);
     expect(client.connected).toBe(false);
     expect(diagnostics).not.toContain('termination-failed');
+  });
+
+  it('rejects an invalid cursor before spawning a child', async () => {
+    const diagnostics: CodexCatalogDiagnosticCode[] = [];
+    const client = createClient(
+      join(tmpdir(), 'agent-status-tiles-invalid-cursor-codex-executable'),
+      diagnostics,
+    );
+
+    await expect(client.listThreads({ cursor: '' })).rejects.toMatchObject({
+      code: 'invalid-options',
+    });
+    expect(diagnostics).toEqual(['invalid-options']);
+    expect(client.connected).toBe(false);
+    expect(
+      (client as unknown as { ownedChildren: Set<ChildProcessWithoutNullStreams> }).ownedChildren
+        .size,
+    ).toBe(0);
+    await client.stop();
+  });
+
+  it('rejects invalid UTF-8 protocol lines and recovers on the next request', async () => {
+    const diagnostics: CodexCatalogDiagnosticCode[] = [];
+    const client = createClient(await createFakeBinary('invalid-utf8'), diagnostics, 1_000);
+
+    await expect(client.listThreads({ maxPages: 1 })).rejects.toMatchObject({
+      code: 'request-timeout',
+    });
+    expect(diagnostics).toContain('protocol-malformed');
+
+    const recovered = await client.listThreads({ maxPages: 1 });
+    expect(recovered.records).toHaveLength(2);
+    await client.stop();
   });
 
   it('releases a child that never spawned for a missing executable', async () => {
