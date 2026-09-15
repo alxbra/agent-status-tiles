@@ -86,11 +86,13 @@ describe('overlay IPC contract validators', () => {
     expect(isOverlayHitRegions([])).toBe(true);
     expect(isOverlayHitRegions([{ x: 0, y: 0, width: 24, height: 24 }])).toBe(true);
     expect(isOverlayHitRegions([{ x: 0, y: 0, width: Number.NaN, height: 24 }])).toBe(false);
+    expect(isOverlayHitRegions([{ x: -1, y: 0, width: 24, height: 24 }])).toBe(false);
+    expect(isOverlayHitRegions([{ x: 0, y: -1, width: 24, height: 24 }])).toBe(false);
     expect(isOverlayHitRegions([{ x: 0, y: 0, width: 24, height: 24, sessionId: 'secret' }])).toBe(
       false,
     );
     expect(
-      isOverlayHitRegions(Array.from({ length: 13 }, () => ({ x: 0, y: 0, width: 1, height: 1 }))),
+      isOverlayHitRegions(Array.from({ length: 15 }, () => ({ x: 0, y: 0, width: 1, height: 1 }))),
     ).toBe(false);
     expect(isOverlayOpenSessionRequest({ sessionId: 'codex:one' })).toBe(true);
     expect(isOverlayOpenSessionRequest({ sessionId: 'codex:one', completionId: undefined })).toBe(

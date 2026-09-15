@@ -8,3 +8,9 @@ body,
   background: transparent;
   pointer-events: none;
 }
+
+/* Radix portals sit outside .status-tiles and remain interactive surfaces. */
+[data-slot='tooltip-content'],
+[data-slot='context-menu-content'] {
+  pointer-events: auto;
+}

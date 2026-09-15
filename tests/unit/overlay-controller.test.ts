@@ -49,7 +49,7 @@ const electronMocks = vi.hoisted(() => ({
 vi.mock('electron', () => electronMocks);
 
 function createOverlayWindowMock(
-  initialBounds: Bounds = { x: 1352, y: 222, width: 88, height: 480 },
+  initialBounds: Bounds = { x: 1080, y: 222, width: 360, height: 480 },
 ): OverlayWindowMock {
   let visible = false;
   let bounds = initialBounds;
@@ -131,9 +131,9 @@ describe('overlay controller', () => {
     const options = electronMocks.BrowserWindow.mock.calls[0]?.[0] as Record<string, unknown>;
 
     expect(options).toMatchObject({
-      x: 1352,
+      x: 1080,
       y: 222,
-      width: 88,
+      width: 360,
       height: 480,
       frame: false,
       transparent: true,
@@ -202,7 +202,7 @@ describe('overlay controller', () => {
     )?.[1] as (() => void) | undefined;
     resume?.();
     expect(recoveredWindow.setBounds).toHaveBeenCalledWith(
-      { x: 1352, y: 222, width: 88, height: 480 },
+      { x: 1080, y: 222, width: 360, height: 480 },
       false,
     );
 
@@ -245,12 +245,12 @@ describe('overlay controller', () => {
     )?.[1] as (() => void) | undefined;
     reposition?.();
     expect(overlayWindow.setBounds).toHaveBeenLastCalledWith(
-      { x: 1352, y: 24, width: 88, height: 80 },
+      { x: 1080, y: 24, width: 360, height: 80 },
       false,
     );
     expect(controller.setHitRegions([{ x: 10, y: 71, width: 24, height: 10 }])).toBe(false);
 
-    electronMocks.screen.getCursorScreenPoint.mockReturnValue({ x: 1362, y: 60 });
+    electronMocks.screen.getCursorScreenPoint.mockReturnValue({ x: 1092, y: 60 });
     expect(controller.setHitRegions([{ x: 10, y: 20, width: 24, height: 24 }])).toBe(true);
     expect(overlayWindow.setIgnoreMouseEvents).toHaveBeenLastCalledWith(false, undefined);
     controller.setQualifyingSessionCount(0);
@@ -272,7 +272,7 @@ describe('overlay controller', () => {
     const controller = createOverlayController();
 
     expect(isValidOverlayHitRegion({ x: 10, y: 20, width: 24, height: 24 })).toBe(true);
-    expect(isValidOverlayHitRegion({ x: 80, y: 20, width: 10, height: 24 })).toBe(false);
+    expect(isValidOverlayHitRegion({ x: 360, y: 20, width: 10, height: 24 })).toBe(false);
     expect(isPointInOverlayHitRegion(12, 22, [{ x: 10, y: 20, width: 24, height: 24 }])).toBe(true);
     expect(isPointInOverlayHitRegion(34, 22, [{ x: 10, y: 20, width: 24, height: 24 }])).toBe(
       false,
@@ -289,7 +289,7 @@ describe('overlay controller', () => {
     ).toBe(false);
     overlayWindow.readyListener?.();
     controller.setQualifyingSessionCount(1);
-    electronMocks.screen.getCursorScreenPoint.mockReturnValue({ x: 1364, y: 244 });
+    electronMocks.screen.getCursorScreenPoint.mockReturnValue({ x: 1092, y: 244 });
     expect(controller.setHitRegions([{ x: 10, y: 20, width: 24, height: 24 }])).toBe(true);
     expect(overlayWindow.setIgnoreMouseEvents).toHaveBeenLastCalledWith(false, undefined);
     expect(controller.setHitRegions([{ x: 40, y: 20, width: 24, height: 24 }])).toBe(true);

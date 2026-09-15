@@ -15,7 +15,8 @@ export const OVERLAY_IPC_CHANNELS = {
 } as const;
 
 export const MAX_OVERLAY_SESSIONS = 256;
-export const MAX_OVERLAY_HIT_REGIONS = 12;
+// Twelve tile targets plus one tooltip and one context-menu portal.
+export const MAX_OVERLAY_HIT_REGIONS = 14;
 
 export interface OverlayState {
   sessions: readonly SessionSnapshot[];
@@ -161,8 +162,10 @@ export function isOverlayHitRegions(value: unknown): value is readonly OverlayHi
       return (
         typeof region.x === 'number' &&
         Number.isFinite(region.x) &&
+        region.x >= 0 &&
         typeof region.y === 'number' &&
         Number.isFinite(region.y) &&
+        region.y >= 0 &&
         typeof region.width === 'number' &&
         Number.isFinite(region.width) &&
         region.width > 0 &&
