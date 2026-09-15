@@ -9,6 +9,14 @@ export default defineConfig({
   preload: {},
   renderer: {
     plugins: [react(), tailwindcss()],
+    build: {
+      rollupOptions: {
+        input: {
+          index: resolve(__dirname, 'src/renderer/index.html'),
+          overlay: resolve(__dirname, 'src/renderer/overlay.html'),
+        },
+      },
+    },
     resolve: {
       alias: {
         '@': resolve(__dirname, 'src'),
