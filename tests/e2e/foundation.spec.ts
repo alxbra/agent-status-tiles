@@ -24,19 +24,20 @@ async function launch(userDataDir: string): Promise<ElectronApplication> {
 }
 
 async function settingsWindow(application: ElectronApplication): Promise<Page> {
-  const existingSettingsWindow = application
-    .windows()
-    .find((window) => window.url().includes('/renderer/index.html'));
-  if (existingSettingsWindow) {
-    return existingSettingsWindow;
+  const deadline = Date.now() + 10_000;
+
+  while (Date.now() < deadline) {
+    const existingSettingsWindow = application
+      .windows()
+      .find((window) => window.url().includes('/renderer/index.html'));
+    if (existingSettingsWindow) {
+      return existingSettingsWindow;
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, 50));
   }
 
-  while (true) {
-    const window = await application.waitForEvent('window');
-    if (window.url().includes('/renderer/index.html')) {
-      return window;
-    }
-  }
+  throw new Error('Timed out waiting for the Settings window to load');
 }
 
 async function closeApplication(application: ElectronApplication | undefined): Promise<void> {
