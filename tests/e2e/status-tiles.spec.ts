@@ -177,6 +177,142 @@ test('magnification survives a pointer sweep through transparent inter-tile gaps
   );
 });
 
+async function sampleTransition(page: Page): Promise<
+  readonly {
+    target: { x: number; y: number; width: number; height: number };
+    surfaces: readonly { right: number; top: number; bottom: number; width: number }[];
+    rootRight: number;
+  }[]
+> {
+  return page.evaluate(async () => {
+    const root = document.querySelector<HTMLElement>('.status-tiles');
+    if (root === null) throw new Error('Status tile strip has no bounds');
+    const samples: {
+      target: { x: number; y: number; width: number; height: number };
+      surfaces: readonly { right: number; top: number; bottom: number; width: number }[];
+      rootRight: number;
+    }[] = [];
+    const startedAt = performance.now();
+    while (performance.now() - startedAt <= 220) {
+      const rootBounds = root.getBoundingClientRect();
+      const firstTarget = root.querySelector<HTMLElement>('.status-tiles__tile');
+      if (firstTarget === null) throw new Error('Status tile target is missing');
+      samples.push({
+        target: (() => {
+          const bounds = firstTarget.getBoundingClientRect();
+          return { x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height };
+        })(),
+        surfaces: [...root.querySelectorAll<HTMLElement>('.status-tiles__tile-surface')].map(
+          (surface) => {
+            const bounds = surface.getBoundingClientRect();
+            return {
+              right: bounds.right,
+              top: bounds.top,
+              bottom: bounds.bottom,
+              width: bounds.width,
+            };
+          },
+        ),
+        rootRight: rootBounds.right,
+      });
+      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+    }
+    return samples;
+  });
+}
+
+function expectTransitionGeometry(
+  samples: readonly {
+    target: { x: number; y: number; width: number; height: number };
+    surfaces: readonly { right: number; top: number; bottom: number; width: number }[];
+    rootRight: number;
+  }[],
+  initialTarget: { x: number; y: number; width: number; height: number },
+): void {
+  expect(samples.length).toBeGreaterThan(4);
+  for (const sample of samples) {
+    expect(sample.target.width).toBe(24);
+    expect(sample.target.height).toBe(24);
+    expect(Math.abs(sample.target.x - initialTarget.x)).toBeLessThan(0.01);
+    expect(Math.abs(sample.target.y - initialTarget.y)).toBeLessThan(0.01);
+    const surfaces = [...sample.surfaces].sort((left, right) => left.top - right.top);
+    for (const surface of surfaces) {
+      expect(Math.abs(surface.right - (sample.rootRight - 12))).toBeLessThan(0.01);
+    }
+    for (let index = 1; index < surfaces.length; index += 1) {
+      expect(surfaces[index]!.top - surfaces[index - 1]!.bottom).toBeGreaterThanOrEqual(5.99);
+    }
+  }
+}
+
+test('animates anchored surfaces while fixed hit targets and gaps stay valid', async ({ page }) => {
+  await openFixture(page, 5);
+  const root = page.locator('.status-tiles');
+  const rootBox = await root.boundingBox();
+  const first = page.locator('.status-tiles__tile').first();
+  const initialTarget = await first.boundingBox();
+  if (rootBox === null || initialTarget === null) throw new Error('Tile fixture has no bounds');
+
+  await page.mouse.move(
+    initialTarget.x + initialTarget.width / 2,
+    initialTarget.y + initialTarget.height / 2,
+  );
+  expectTransitionGeometry(await sampleTransition(page), initialTarget);
+
+  await page.mouse.move(rootBox.x - 8, rootBox.y + rootBox.height / 2);
+  expectTransitionGeometry(await sampleTransition(page), initialTarget);
+});
+
+test('waits for enough expanded surface room before revealing both icons', async ({ page }) => {
+  await openFixture(page, 2, '&visual=all');
+  const first = page.locator('.status-tiles__tile').first();
+  const firstTarget = await first.boundingBox();
+  if (firstTarget === null) throw new Error('First tile has no target box');
+
+  await page.mouse.move(
+    firstTarget.x + firstTarget.width / 2,
+    firstTarget.y + firstTarget.height / 2 + 20,
+  );
+  await expect
+    .poll(async () =>
+      Number(
+        await first
+          .locator('.status-tiles__tile-surface')
+          .evaluate((node) => node.getBoundingClientRect().width),
+      ),
+    )
+    .toBeGreaterThanOrEqual(26);
+  const intermediate = await first.locator('.status-tiles__tile-surface').evaluate((node) => ({
+    width: node.getBoundingClientRect().width,
+    expanded: node.parentElement?.getAttribute('data-expanded'),
+    providerIcons: node.querySelectorAll('.status-tiles__provider-icon').length,
+    statusIcons: node.querySelectorAll('.status-tiles__status-icon').length,
+  }));
+  expect(intermediate.width).toBeLessThan(38);
+  expect(intermediate.expanded).toBe('false');
+  expect(intermediate.providerIcons).toBe(0);
+  expect(intermediate.statusIcons).toBe(0);
+
+  await page.mouse.move(
+    firstTarget.x + firstTarget.width / 2,
+    firstTarget.y + firstTarget.height / 2,
+  );
+  await expect(first.locator('.status-tiles__tile-surface')).toHaveCSS('width', '40px');
+  await expect(first.locator('.status-tiles__provider-icon')).toHaveCSS('opacity', '1');
+  await expect(first.locator('.status-tiles__status-icon')).toHaveCSS('opacity', '1');
+
+  const second = page.locator('.status-tiles__tile').nth(1);
+  const secondTarget = await second.boundingBox();
+  if (secondTarget === null) throw new Error('Second tile has no target box');
+  await page.mouse.move(
+    secondTarget.x + secondTarget.width / 2,
+    secondTarget.y + secondTarget.height / 2,
+  );
+  await expect(second.locator('.status-tiles__tile-surface')).toHaveCSS('width', '40px');
+  await expect(second.locator('.status-tiles__provider-icon')).toHaveCSS('opacity', '1');
+  await expect(second).toHaveAttribute('data-provider', 'claude');
+});
+
 test('opens from the invisible part of a 24px target outside the colored surface', async ({
   page,
 }) => {
@@ -237,6 +373,18 @@ test('reduced motion disables working animation while preserving keyboard focus 
   await tile.focus();
   await expect(tile.locator('.status-tiles__tile-surface')).toHaveCSS('width', '40px');
   await expect(tile.locator('.status-tiles__working-glyph')).toHaveCSS('animation-name', 'none');
+});
+
+test('respects emulated reduced motion when the component prop is false', async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await openFixture(page, 2, '&reduced=0');
+  await expect(page.locator('.status-tiles')).toHaveClass(/status-tiles--reduced-motion/);
+  const workingTile = page.locator('.status-tiles__tile[data-status="working"]');
+  await workingTile.focus();
+  await expect(workingTile.locator('.status-tiles__working-glyph')).toHaveCSS(
+    'animation-name',
+    'none',
+  );
 });
 
 test('captures the completion that was visible at pointer-down', async ({ page }) => {
@@ -334,37 +482,27 @@ async function captureVisualEvidence(page: Page, scaleLabel: string): Promise<vo
       animations: 'disabled',
     });
 
-    await openFixture(page, 2, `&visual=all&theme=${theme}`);
-    const providerTiles = page.locator('.status-tiles__tile');
-    const providerBoxes = await providerTiles.evaluateAll((elements) =>
-      elements.map((element) => {
-        const box = element.getBoundingClientRect();
-        return { x: box.x + box.width / 2, y: box.y + box.height / 2 };
-      }),
-    );
-    const firstProvider = providerBoxes[0];
-    const secondProvider = providerBoxes[1];
-    if (firstProvider === undefined || secondProvider === undefined) {
-      throw new Error('Provider fixture has insufficient tiles');
+    for (const [provider, screenshotName] of [
+      ['codex', 'openai-expanded'],
+      ['claude', 'anthropic-expanded'],
+    ] as const) {
+      await openFixture(page, 2, `&visual=all&theme=${theme}`);
+      const providerTile = page.locator(`.status-tiles__tile[data-provider="${provider}"]`);
+      const providerBox = await providerTile.boundingBox();
+      if (providerBox === null) throw new Error(`Missing ${provider} provider fixture tile`);
+      await page.mouse.move(
+        providerBox.x + providerBox.width / 2,
+        providerBox.y + providerBox.height / 2,
+      );
+      await expect(providerTile.locator('.status-tiles__tile-surface')).toHaveCSS('width', '40px');
+      await expect(providerTile.locator('.status-tiles__provider-icon')).toHaveCSS('opacity', '1');
+      await expect(providerTile.locator('.status-tiles__status-icon')).toHaveCSS('opacity', '1');
+      await page.screenshot({
+        path: visualScreenshotPath(`${scaleLabel}-${theme}-${screenshotName}`),
+        scale: 'device',
+        animations: 'disabled',
+      });
     }
-    await page.mouse.move(
-      (firstProvider.x + secondProvider.x) / 2,
-      (firstProvider.y + secondProvider.y) / 2,
-    );
-    await expect(providerTiles.locator('.status-tiles__provider-icon')).toHaveCount(2);
-    await expect(providerTiles.locator('.status-tiles__provider-icon').first()).toHaveCSS(
-      'opacity',
-      '1',
-    );
-    await expect(providerTiles.locator('.status-tiles__provider-icon').last()).toHaveCSS(
-      'opacity',
-      '1',
-    );
-    await page.screenshot({
-      path: visualScreenshotPath(`${scaleLabel}-${theme}-both-providers-expanded`),
-      scale: 'device',
-      animations: 'disabled',
-    });
 
     await openFixture(page, 30, `&theme=${theme}`);
     const nextIndicator = page.locator('.status-tiles__indicator--next');

@@ -17,6 +17,7 @@ import {
   DEFAULT_STRIP_HEIGHT,
   DEFAULT_STRIP_WIDTH,
   layoutTiles,
+  TILE_CONTENT_SIZE,
   type TileHitRegion,
 } from './geometry';
 import {
@@ -142,7 +143,7 @@ export function StatusTiles({
     visibleTileSessions(sessions),
   );
   const prefersReducedMotion = usePrefersReducedMotion();
-  const motionReduced = reducedMotion ?? prefersReducedMotion;
+  const motionReduced = prefersReducedMotion || reducedMotion === true;
   const visibleSessions = useMemo(() => visibleTileSessions(sessions), [sessions]);
   visibleSessionsRef.current = visibleSessions;
 
@@ -392,7 +393,7 @@ export function StatusTiles({
         const session = displayedSessions[tile.index];
         if (session === undefined) return null;
         const title = sessionDisplayTitle(session.title, session.id);
-        const expanded = tile.size >= 26;
+        const expanded = tile.size >= TILE_CONTENT_SIZE;
         const targetStyle = {
           left: `${tile.hitRegion.x}px`,
           top: `${tile.hitRegion.y}px`,
@@ -400,6 +401,7 @@ export function StatusTiles({
           height: `${tile.hitRegion.height}px`,
         } satisfies CSSProperties;
         const surfaceStyle = {
+          top: `calc(50% + ${tile.surfaceOffsetY}px)`,
           width: `${tile.size}px`,
           height: `${tile.size}px`,
           borderRadius: `${tile.radius}px`,
@@ -426,6 +428,7 @@ export function StatusTiles({
                   : -1
             }
             data-session-id={session.id}
+            data-provider={session.provider}
             data-status={session.status}
             data-expanded={expanded}
             onFocus={() => {

@@ -14,6 +14,7 @@ export {
   SLOT_SPACING,
   surfacesHaveMinimumGap,
   TILE_HIT_SIZE,
+  TILE_CONTENT_SIZE,
   TILE_RADIUS,
   TILE_SIZE,
   tileRadiusForInfluence,

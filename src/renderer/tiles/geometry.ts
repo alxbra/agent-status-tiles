@@ -12,6 +12,7 @@ export const MAGNIFICATION_RADIUS_SLOTS = 2;
 export const MAX_VISIBLE_TILES = 12;
 export const DEFAULT_STRIP_WIDTH = 88;
 export const DEFAULT_STRIP_HEIGHT = 480;
+export const TILE_CONTENT_SIZE = 38;
 
 export interface TilePoint {
   x: number;
@@ -29,9 +30,13 @@ export interface TileHitRegion {
 export interface TileGeometry {
   index: number;
   sessionId: string;
+  /** Stable unmagnified slot coordinate used by the fixed 24px hit target. */
+  stableCenterY: number;
   centerY: number;
   size: number;
   radius: number;
+  /** Animated surface displacement from the stable hit-target center. */
+  surfaceOffsetY: number;
   x: number;
   y: number;
   influence: number;
@@ -94,7 +99,7 @@ export function tileRadiusForInfluence(influence: number): number {
   return TILE_RADIUS + (EXPANDED_TILE_RADIUS - TILE_RADIUS) * clamp(influence, 0, 1);
 }
 
-function packUnboundedCenters(
+function packSurfaceCenters(
   desiredCenters: readonly number[],
   sizes: readonly number[],
 ): readonly number[] {
@@ -111,12 +116,7 @@ function packUnboundedCenters(
   return centers;
 }
 
-/**
- * Returns the vertical space needed for a given number of slots, including
- * 24px hit targets and the worst two-slot magnification neighborhood. This
- * prevents a short work area from producing clipped expanded surfaces.
- */
-export function minimumHeightForSlots(count: number): number {
+function calculateMinimumHeightForSlots(count: number): number {
   const slotCount = Math.max(0, Math.floor(count));
   if (slotCount === 0) return 0;
 
@@ -137,7 +137,7 @@ export function minimumHeightForSlots(count: number): number {
     const sizes = centers.map((center) =>
       tileSizeForInfluence(magnificationInfluence(pointerY, center)),
     );
-    const packedCenters = packUnboundedCenters(centers, sizes);
+    const packedCenters = packSurfaceCenters(centers, sizes);
     const top = Math.min(
       ...packedCenters.map((center, index) => center - Math.max(TILE_HIT_SIZE, sizes[index]) / 2),
     );
@@ -147,6 +147,23 @@ export function minimumHeightForSlots(count: number): number {
     required = Math.max(required, bottom - top);
   }
   return required;
+}
+
+const MINIMUM_HEIGHT_BY_SLOTS = Array.from({ length: MAX_VISIBLE_TILES + 1 }, (_, count) =>
+  calculateMinimumHeightForSlots(count),
+);
+
+/**
+ * Returns the vertical space needed for a given number of slots, including
+ * 24px hit targets and the worst two-slot magnification neighborhood. This
+ * prevents a short work area from producing clipped expanded surfaces.
+ */
+export function minimumHeightForSlots(count: number): number {
+  const slotCount = Number.isFinite(count) ? Math.max(0, Math.floor(count)) : 0;
+  if (slotCount === 0) return 0;
+  return slotCount <= MAX_VISIBLE_TILES
+    ? MINIMUM_HEIGHT_BY_SLOTS[slotCount]!
+    : calculateMinimumHeightForSlots(slotCount);
 }
 
 export function visibleSlotCount(height: number, requested = MAX_VISIBLE_TILES): number {
@@ -176,15 +193,7 @@ function packCenters(
 ): readonly number[] {
   if (desiredCenters.length === 0) return [];
 
-  const centers = [...desiredCenters];
-  for (let index = 1; index < centers.length; index += 1) {
-    const minimum = centers[index - 1] + (sizes[index - 1] + sizes[index]) / 2 + MIN_SURFACE_GAP;
-    centers[index] = Math.max(centers[index], minimum);
-  }
-  for (let index = centers.length - 2; index >= 0; index -= 1) {
-    const maximum = centers[index + 1] - (sizes[index] + sizes[index + 1]) / 2 - MIN_SURFACE_GAP;
-    centers[index] = Math.min(centers[index], maximum);
-  }
+  const centers = [...packSurfaceCenters(desiredCenters, sizes)];
 
   const top = centers[0] - Math.max(TILE_HIT_SIZE, sizes[0]) / 2;
   const bottom = centers.at(-1)! + Math.max(TILE_HIT_SIZE, sizes.at(-1)!) / 2;
@@ -199,14 +208,15 @@ function packCenters(
 }
 
 function hitRegionForTile(
-  tile: Pick<TileGeometry, 'x' | 'y' | 'size' | 'centerY' | 'sessionId'>,
+  tile: Pick<TileGeometry, 'stableCenterY' | 'sessionId'>,
+  width: number,
 ): TileHitRegion {
-  const hitSize = Math.max(TILE_HIT_SIZE, tile.size);
+  const targetCenterX = width - RIGHT_EDGE_INSET - TILE_SIZE / 2;
   return {
-    x: tile.x + tile.size / 2 - hitSize / 2,
-    y: tile.centerY - hitSize / 2,
-    width: hitSize,
-    height: hitSize,
+    x: targetCenterX - TILE_HIT_SIZE / 2,
+    y: tile.stableCenterY - TILE_HIT_SIZE / 2,
+    width: TILE_HIT_SIZE,
+    height: TILE_HIT_SIZE,
     sessionId: tile.sessionId,
   };
 }
@@ -239,9 +249,11 @@ export function layoutTiles(
     const tile: TileGeometry = {
       index: visibleStart + index,
       sessionId: session.id,
+      stableCenterY: stableCenters[index],
       centerY,
       size,
       radius: tileRadiusForInfluence(influence),
+      surfaceOffsetY: centerY - stableCenters[index],
       x,
       y: centerY - size / 2,
       influence,
@@ -254,7 +266,7 @@ export function layoutTiles(
         sessionId: session.id,
       },
     };
-    tile.hitRegion = hitRegionForTile(tile);
+    tile.hitRegion = hitRegionForTile(tile, width);
     return tile;
   });
 
