@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
+import type { ChildProcessWithoutNullStreams } from 'node:child_process';
 import { chmod, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -70,6 +71,8 @@ async function createFakeBinary(mode: string): Promise<string> {
 const mode = ${JSON.stringify(mode)};
 const pages = ${pages};
 let carry = '';
+let initializeResponseSent = false;
+if (mode === 'ignore-term') process.on('SIGTERM', () => {});
 process.stdin.setEncoding('utf8');
 process.stdin.on('data', (chunk) => {
   carry += chunk;
@@ -86,10 +89,14 @@ process.stdin.on('data', (chunk) => {
         continue;
       }
       if (mode === 'slow-start') {
-        setTimeout(() => process.stdout.write(JSON.stringify({ id: request.id, result: {
-          codexHome: '/tmp/fake-codex-home', platformFamily: 'unix', platformOs: 'macos', userAgent: 'fake'
-        }}) + '\\n'), 200);
+        setTimeout(() => {
+          initializeResponseSent = true;
+          process.stdout.write(JSON.stringify({ id: request.id, result: {
+            codexHome: '/tmp/fake-codex-home', platformFamily: 'unix', platformOs: 'macos', userAgent: 'fake'
+          }}) + '\\n');
+        }, 200);
       } else {
+        initializeResponseSent = true;
         process.stdout.write(JSON.stringify({ id: request.id, result: {
           codexHome: '/tmp/fake-codex-home', platformFamily: 'unix', platformOs: 'macos', userAgent: 'fake'
         }}) + '\\n');
@@ -97,6 +104,7 @@ process.stdin.on('data', (chunk) => {
       continue;
     }
     if (request.method !== 'thread/list') continue;
+    if (mode === 'slow-start' && !initializeResponseSent) process.exit(3);
     if (mode === 'delay') continue;
     if (mode === 'oversized') {
       process.stdout.write('x'.repeat(1024 * 1024 + 1) + '\\n');
@@ -118,6 +126,27 @@ process.stdin.on('data', (chunk) => {
     const page = request.params.cursor === null ? pages[0] : pages[1];
     const outputPage = { ...page, data: page.data.slice(0, request.params.limit) };
     if (mode === 'unsupported-record') outputPage.data[0] = { ...outputPage.data[0], source: 'ambiguous' };
+    if (mode === 'custom-source') {
+      outputPage.data[0] = { ...outputPage.data[0], source: { custom: 'custom-connector' } };
+    }
+    if (mode === 'thread-source-subagent') {
+      outputPage.data[0] = { ...outputPage.data[0], threadSource: 'subAgent' };
+    }
+    if (mode === 'omitted-discarded') {
+      const { preview, turns, status, modelProvider, projectId, ...metadata } = outputPage.data[0];
+      outputPage.data[0] = metadata;
+    }
+    if (mode === 'changed-discarded') {
+      const { ...metadata } = outputPage.data[0];
+      outputPage.data[0] = {
+        ...metadata,
+        preview: 'PRIVATE_CHANGED_PREVIEW',
+        turns: ['PRIVATE_CHANGED_TURNS'],
+        status: 'PRIVATE_CHANGED_STATUS',
+        modelProvider: 'PRIVATE_CHANGED_PROVIDER',
+        projectId: 'PRIVATE_CHANGED_PROJECT',
+      };
+    }
     if (mode === 'repeated-cursor') outputPage.nextCursor = 'page-2';
     process.stdout.write(JSON.stringify({ id: request.id, result: outputPage }) + '\\n');
   }
@@ -168,7 +197,6 @@ describe('Codex catalog client', () => {
       projectBasename: 'demo-app',
       rolloutPath: topLevelThread.path,
       isEphemeral: false,
-      isTopLevel: true,
       sourceEvidence: {
         source: 'cli',
         originator: 'codex_cli_rs',
@@ -179,18 +207,18 @@ describe('Codex catalog client', () => {
     expect(result.records[1]).toMatchObject({
       nativeId: childThread.id,
       parentThreadId: topLevelThread.id,
-      isTopLevel: false,
       sourceEvidence: { source: 'subAgentReview', isSubAgent: true },
     });
     expect(result.records[2]).toMatchObject({
       nativeId: appServerThread.id,
-      isTopLevel: true,
       sourceEvidence: { source: 'appServer' },
     });
     expect(result.records[3]).toMatchObject({ nativeId: ephemeralThread.id, isEphemeral: true });
     expect(result.records[0]).not.toHaveProperty('preview');
     expect(result.records[0]).not.toHaveProperty('name');
     expect(result.records[0]).not.toHaveProperty('turns');
+    expect(result.records[0]).not.toHaveProperty('projectId');
+    expect(result.records[0]).not.toHaveProperty('isTopLevel');
     expect(JSON.stringify(result.records)).not.toContain('PRIVATE_');
     expect(diagnostics).toEqual([]);
 
@@ -284,6 +312,47 @@ describe('Codex catalog client', () => {
     await client.stop();
   });
 
+  it('retains bounded custom-source evidence and confirmed subagent markers', async () => {
+    const customDiagnostics: CodexCatalogDiagnosticCode[] = [];
+    const custom = createClient(await createFakeBinary('custom-source'), customDiagnostics);
+    const customResult = await custom.listThreads({ maxPages: 1 });
+    expect(customResult.records[0]?.sourceEvidence).toMatchObject({
+      source: 'custom',
+      customSource: 'custom-connector',
+      isSubAgent: false,
+    });
+    expect(customResult.records[0]).not.toHaveProperty('isTopLevel');
+    await custom.stop();
+
+    const markerDiagnostics: CodexCatalogDiagnosticCode[] = [];
+    const marker = createClient(
+      await createFakeBinary('thread-source-subagent'),
+      markerDiagnostics,
+    );
+    const markerResult = await marker.listThreads({ maxPages: 1 });
+    expect(markerResult.records[0]?.sourceEvidence).toMatchObject({
+      source: 'cli',
+      threadSource: 'subAgent',
+      isSubAgent: true,
+    });
+    await marker.stop();
+  });
+
+  it('projects metadata when discarded fields are omitted or changed', async () => {
+    for (const mode of ['omitted-discarded', 'changed-discarded']) {
+      const diagnostics: CodexCatalogDiagnosticCode[] = [];
+      const client = createClient(await createFakeBinary(mode), diagnostics);
+      const result = await client.listThreads({ maxPages: 1 });
+
+      expect(result.records).toHaveLength(2);
+      expect(result.records[0]).not.toHaveProperty('projectId');
+      expect(result.records[0]).not.toHaveProperty('isTopLevel');
+      expect(JSON.stringify(result.records)).not.toContain('PRIVATE_');
+      expect(diagnostics).toEqual([]);
+      await client.stop();
+    }
+  });
+
   it('times out bounded requests and rejects malformed JSON without exposing payloads', async () => {
     const delayDiagnostics: CodexCatalogDiagnosticCode[] = [];
     const delayed = createClient(await createFakeBinary('delay'), delayDiagnostics, 30);
@@ -304,7 +373,7 @@ describe('Codex catalog client', () => {
 
   it('caps concurrent pending requests with a fixed diagnostic', async () => {
     const diagnostics: CodexCatalogDiagnosticCode[] = [];
-    const client = createClient(await createFakeBinary('delay'), diagnostics, 40);
+    const client = createClient(await createFakeBinary('delay'), diagnostics, 300);
     const requests = await Promise.allSettled(
       Array.from({ length: 33 }, () => client.listThreads({ maxPages: 1 })),
     );
@@ -315,6 +384,23 @@ describe('Codex catalog client', () => {
       ),
     ).toBe(true);
     expect(diagnostics).toContain('request-capacity');
+    await client.stop();
+  });
+
+  it('awaits the delayed handshake before concurrent list calls', async () => {
+    const diagnostics: CodexCatalogDiagnosticCode[] = [];
+    const client = createClient(await createFakeBinary('slow-start'), diagnostics, 1_000);
+    const firstStart = client.start();
+    const secondStart = client.start();
+    await Promise.all([firstStart, secondStart]);
+
+    const first = client.listThreads({ maxPages: 1 });
+    const second = client.listThreads({ maxPages: 1 });
+    const [firstResult, secondResult] = await Promise.all([first, second]);
+
+    expect(firstResult.records).toHaveLength(2);
+    expect(secondResult.records).toHaveLength(2);
+    expect(diagnostics).toEqual([]);
     await client.stop();
   });
 
@@ -334,6 +420,50 @@ describe('Codex catalog client', () => {
     await exiting.start();
     expect(exiting.connected).toBe(true);
     await exiting.stop();
+  });
+
+  it('terminates a still-live owned child after a stream error before restart', async () => {
+    const diagnostics: CodexCatalogDiagnosticCode[] = [];
+    const client = createClient(await createFakeBinary('pagination'), diagnostics, 1_000);
+    await client.start();
+    const child = (client as unknown as { child?: ChildProcessWithoutNullStreams }).child;
+    if (child === undefined) throw new Error('expected owned child');
+
+    child.stdout.emit('error', new Error('PRIVATE_STREAM_ERROR'));
+    await client.start();
+
+    expect(child.exitCode !== null || child.signalCode !== null).toBe(true);
+    expect(client.connected).toBe(true);
+    expect(diagnostics).toContain('disconnected');
+    await client.stop();
+  });
+
+  it('waits for SIGKILL reaping when an owned child ignores SIGTERM', async () => {
+    const diagnostics: CodexCatalogDiagnosticCode[] = [];
+    const client = createClient(await createFakeBinary('ignore-term'), diagnostics, 3_000);
+    await client.start();
+    const child = (client as unknown as { child?: ChildProcessWithoutNullStreams }).child;
+    if (child === undefined) throw new Error('expected owned child');
+
+    await client.stop();
+
+    expect(child.exitCode !== null || child.signalCode !== null).toBe(true);
+    expect(client.connected).toBe(false);
+    expect(diagnostics).not.toContain('termination-failed');
+  });
+
+  it('releases a child that never spawned for a missing executable', async () => {
+    const diagnostics: CodexCatalogDiagnosticCode[] = [];
+    const client = createClient(
+      join(tmpdir(), 'agent-status-tiles-no-such-codex-executable'),
+      diagnostics,
+      500,
+    );
+
+    await expect(client.start()).rejects.toMatchObject({ code: 'spawn-failed' });
+    expect(diagnostics).toContain('spawn-failed');
+    expect(diagnostics).not.toContain('termination-failed');
+    await expect(client.stop()).resolves.toBeUndefined();
   });
 
   it('rejects unsafe client options before spawning a process', () => {

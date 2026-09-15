@@ -19,6 +19,14 @@ const DIRECT_SOURCE_KINDS = new Set(['cli', 'vscode', 'exec', 'appServer', 'unkn
 
 const SUBAGENT_STRING_KINDS = new Set(['review', 'compact', 'memory_consolidation']);
 
+const SUBAGENT_THREAD_SOURCE_KINDS = new Set([
+  'subAgent',
+  'subAgentReview',
+  'subAgentCompact',
+  'subAgentThreadSpawn',
+  'subAgentOther',
+]);
+
 export type CodexCatalogDiagnosticCode =
   | 'invalid-options'
   | 'spawn-failed'
@@ -30,6 +38,7 @@ export type CodexCatalogDiagnosticCode =
   | 'disconnected'
   | 'server-stderr'
   | 'stopped'
+  | 'termination-failed'
   | 'cursor-repeated'
   | 'unsupported-record';
 
@@ -56,6 +65,8 @@ export interface CodexCatalogClientOptions {
 export interface CodexSourceEvidence {
   /** Raw protocol source discriminator after bounded validation; never a surface guess. */
   source: string;
+  /** Bounded custom-source discriminator retained for later qualification. */
+  customSource?: string;
   /** Optional analytics discriminator, retained only when it is a safe string. */
   threadSource?: string;
   originator?: string;
@@ -73,8 +84,6 @@ export interface CodexCatalogRecord {
   parentThreadId?: string;
   forkedFromId?: string;
   isEphemeral: boolean;
-  isTopLevel: boolean;
-  projectId?: string;
   projectBasename: string;
   rolloutPath?: string;
   sourceEvidence: CodexSourceEvidence;
@@ -113,6 +122,7 @@ interface ListPage {
 
 interface ParsedSource {
   source: string;
+  customSource?: string;
   isSubAgent: boolean;
 }
 
@@ -168,7 +178,7 @@ function parseSource(value: unknown): ParsedSource | undefined {
   }
   if (!isRecord(value)) return undefined;
   if (hasOwn(value, 'custom') && safeString(value.custom, MAX_LABEL_BYTES)) {
-    return { source: 'custom', isSubAgent: false };
+    return { source: 'custom', customSource: value.custom, isSubAgent: false };
   }
   if (!hasOwn(value, 'subAgent')) return undefined;
   if (typeof value.subAgent === 'string' && SUBAGENT_STRING_KINDS.has(value.subAgent)) {
@@ -202,20 +212,6 @@ function parseSource(value: unknown): ParsedSource | undefined {
   return undefined;
 }
 
-function validThreadStatus(value: unknown): boolean {
-  if (!isRecord(value) || !safeString(value.type, MAX_LABEL_BYTES)) return false;
-  if (value.type === 'active') {
-    return (
-      hasOwn(value, 'activeFlags') &&
-      Array.isArray(value.activeFlags) &&
-      value.activeFlags.every(
-        (flag) => flag === 'waitingOnApproval' || flag === 'waitingOnUserInput',
-      )
-    );
-  }
-  return value.type === 'notLoaded' || value.type === 'idle' || value.type === 'systemError';
-}
-
 function projectThread(value: unknown): CodexCatalogRecord | undefined {
   if (!isRecord(value)) return undefined;
   const nativeId = value.id;
@@ -225,25 +221,16 @@ function projectThread(value: unknown): CodexCatalogRecord | undefined {
   const source = parseSource(value.source);
   const createdAt = timestampMilliseconds(value.createdAt);
   const updatedAt = timestampMilliseconds(value.updatedAt);
-  const modelProvider = value.modelProvider;
   if (
     !safeString(nativeId, MAX_ID_BYTES) ||
     !safeString(sessionId, MAX_ID_BYTES) ||
     !safeString(cliVersion, MAX_LABEL_BYTES) ||
-    !safeString(modelProvider, MAX_LABEL_BYTES) ||
     !safeString(cwd, MAX_PATH_BYTES) ||
     !isAbsolute(cwd) ||
     source === undefined ||
     createdAt === undefined ||
     updatedAt === undefined ||
-    typeof value.ephemeral !== 'boolean' ||
-    !hasOwn(value, 'preview') ||
-    typeof value.preview !== 'string' ||
-    !hasOwn(value, 'turns') ||
-    !Array.isArray(value.turns) ||
-    !hasOwn(value, 'status') ||
-    !validThreadStatus(value.status) ||
-    !hasOwn(value, 'projectId')
+    typeof value.ephemeral !== 'boolean'
   ) {
     return undefined;
   }
@@ -262,10 +249,6 @@ function projectThread(value: unknown): CodexCatalogRecord | undefined {
     value.forkedFromId !== null &&
     forkedFromId === undefined
   ) {
-    return undefined;
-  }
-  const projectId = safeOptionalString(value.projectId, MAX_ID_BYTES);
-  if (value.projectId !== undefined && value.projectId !== null && projectId === undefined) {
     return undefined;
   }
   const rolloutPath = safeOptionalString(value.path, MAX_PATH_BYTES);
@@ -306,16 +289,17 @@ function projectThread(value: unknown): CodexCatalogRecord | undefined {
     ...(parentThreadId === undefined ? {} : { parentThreadId }),
     ...(forkedFromId === undefined ? {} : { forkedFromId }),
     isEphemeral: value.ephemeral,
-    isTopLevel: parentThreadId === undefined && !source.isSubAgent,
-    ...(projectId === undefined ? {} : { projectId }),
     projectBasename,
     ...(rolloutPath === undefined ? {} : { rolloutPath }),
     sourceEvidence: {
       source: source.source,
+      ...(source.customSource === undefined ? {} : { customSource: source.customSource }),
       ...(threadSource === undefined ? {} : { threadSource }),
       ...(originator === undefined ? {} : { originator }),
       cliVersion,
-      isSubAgent: source.isSubAgent,
+      isSubAgent:
+        source.isSubAgent ||
+        (threadSource !== undefined && SUBAGENT_THREAD_SOURCE_KINDS.has(threadSource)),
     },
   };
 }
@@ -352,6 +336,8 @@ export class CodexCatalogClient {
   private readyChild: ChildProcessWithoutNullStreams | undefined;
   private starting: Promise<void> | undefined;
   private stopping: Promise<void> | undefined;
+  private readonly ownedChildren = new Set<ChildProcessWithoutNullStreams>();
+  private readonly terminations = new Map<ChildProcessWithoutNullStreams, Promise<void>>();
   private stopped = true;
   private nextRequestId = 1;
   private readonly pending = new Map<number, PendingRequest>();
@@ -378,14 +364,23 @@ export class CodexCatalogClient {
 
   get connected(): boolean {
     return Boolean(
-      this.child && this.child.exitCode === null && this.child.signalCode === null && !this.stopped,
+      this.child &&
+      this.readyChild === this.child &&
+      this.child.exitCode === null &&
+      this.child.signalCode === null &&
+      !this.stopped,
     );
   }
 
   async start(): Promise<void> {
     if (this.stopping) await this.stopping;
+    if (this.terminations.size > 0) await this.waitForTerminations();
     if (this.connected) return;
     if (this.starting) return this.starting;
+    if (this.ownedChildren.size > 0) {
+      this.report('termination-failed');
+      throw new CodexCatalogError('termination-failed');
+    }
     this.stopped = false;
     const starting = this.startProcess().finally(() => {
       if (this.starting === starting) this.starting = undefined;
@@ -397,14 +392,13 @@ export class CodexCatalogClient {
   async stop(): Promise<void> {
     if (this.stopping) return this.stopping;
     this.stopped = true;
-    const child = this.child;
     this.child = undefined;
     this.readyChild = undefined;
     this.rejectPending('stopped');
     const starting = this.starting;
     const stopping = (async () => {
       await starting?.catch(() => undefined);
-      if (child !== undefined) await this.terminate(child);
+      await this.terminateOwnedChildren();
     })().finally(() => {
       if (this.stopping === stopping) this.stopping = undefined;
     });
@@ -498,8 +492,9 @@ export class CodexCatalogClient {
       this.report('spawn-failed');
       throw new CodexCatalogError('spawn-failed');
     }
+    this.ownedChildren.add(child);
     if (this.stopped) {
-      await this.terminate(child);
+      await this.terminateOwned(child);
       throw new CodexCatalogError('stopped');
     }
     this.child = child;
@@ -518,7 +513,18 @@ export class CodexCatalogClient {
     child.once('error', () => {
       if (this.child === child) this.handleChildFailure(child);
     });
+    child.once('close', () => {
+      if (
+        child.pid === undefined &&
+        child.exitCode === null &&
+        child.signalCode === null &&
+        this.child === child
+      ) {
+        this.handleChildFailure(child);
+      }
+    });
     child.once('exit', () => {
+      this.ownedChildren.delete(child);
       if (this.child === child) this.handleChildFailure(child);
     });
 
@@ -542,6 +548,8 @@ export class CodexCatalogClient {
         throw new CodexCatalogError('protocol-malformed');
       }
       this.notify(child, 'initialized', {});
+      if (this.stopped) throw new CodexCatalogError('stopped');
+      if (this.child !== child) throw new CodexCatalogError('disconnected');
       this.readyChild = child;
     } catch (error) {
       if (this.child === child) {
@@ -549,7 +557,7 @@ export class CodexCatalogClient {
         this.readyChild = undefined;
         this.rejectPending('disconnected');
       }
-      await this.terminate(child);
+      await this.terminateOwned(child);
       throw error instanceof CodexCatalogError ? error : new CodexCatalogError('spawn-failed');
     }
   }
@@ -688,6 +696,13 @@ export class CodexCatalogClient {
     this.readyChild = undefined;
     this.rejectPending(code);
     this.report(code);
+    const neverSpawned =
+      child.pid === undefined && child.exitCode === null && child.signalCode === null;
+    if (neverSpawned) {
+      this.ownedChildren.delete(child);
+      return;
+    }
+    void this.terminateOwned(child).catch(() => undefined);
   }
 
   private rejectPending(code: CodexCatalogDiagnosticCode): void {
@@ -699,17 +714,73 @@ export class CodexCatalogClient {
   }
 
   private async terminate(child: ChildProcessWithoutNullStreams): Promise<void> {
-    if (child.exitCode !== null || child.signalCode !== null) return;
-    child.kill('SIGTERM');
-    await new Promise<void>((resolve) => {
-      const timer = setTimeout(() => {
-        if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
-        resolve();
-      }, 1_000);
-      child.once('exit', () => {
-        clearTimeout(timer);
-        resolve();
+    if (await this.waitForExit(child, 0)) return;
+    try {
+      child.kill('SIGTERM');
+    } catch {
+      // Escalate to SIGKILL after the bounded grace period.
+    }
+    if (await this.waitForExit(child, 1_000)) return;
+    try {
+      child.kill('SIGKILL');
+    } catch {
+      // The bounded wait below determines whether the process actually exited.
+    }
+    if (await this.waitForExit(child, 1_000)) return;
+    throw new CodexCatalogError('termination-failed');
+  }
+
+  private terminateOwned(child: ChildProcessWithoutNullStreams): Promise<void> {
+    if (!this.ownedChildren.has(child)) return Promise.resolve();
+    const existing = this.terminations.get(child);
+    if (existing !== undefined) return existing;
+    const termination = this.terminate(child)
+      .catch((error) => {
+        this.report('termination-failed');
+        throw error instanceof CodexCatalogError
+          ? error
+          : new CodexCatalogError('termination-failed');
+      })
+      .finally(() => {
+        this.terminations.delete(child);
       });
+    this.terminations.set(child, termination);
+    return termination;
+  }
+
+  private async waitForTerminations(): Promise<void> {
+    while (this.terminations.size > 0) {
+      await Promise.all([...this.terminations.values()]);
+    }
+  }
+
+  private async terminateOwnedChildren(): Promise<void> {
+    const results = await Promise.allSettled(
+      [...this.ownedChildren].map((child) => this.terminateOwned(child)),
+    );
+    const failed = results.find((result) => result.status === 'rejected');
+    if (failed?.status === 'rejected') {
+      throw failed.reason instanceof CodexCatalogError
+        ? failed.reason
+        : new CodexCatalogError('termination-failed');
+    }
+  }
+
+  private waitForExit(child: ChildProcessWithoutNullStreams, timeoutMs: number): Promise<boolean> {
+    if (child.exitCode !== null || child.signalCode !== null) return Promise.resolve(true);
+    if (timeoutMs === 0) return Promise.resolve(false);
+    return new Promise((resolve) => {
+      let settled = false;
+      const finish = (exited: boolean) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        child.removeListener('exit', onExit);
+        resolve(exited || child.exitCode !== null || child.signalCode !== null);
+      };
+      const onExit = () => finish(true);
+      const timer = setTimeout(() => finish(false), timeoutMs);
+      child.once('exit', onExit);
     });
   }
 
