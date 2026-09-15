@@ -1,0 +1,7 @@
+{"ordinal":1,"timestamp":"2026-09-15T10:00:00.000Z","type":"session_meta","payload":{"id":"019f6b6d-644d-7701-8858-9da6837aaaaa","session_id":"019f6b6d-644d-7701-8858-9da6837aaaaa","cli_version":"0.154.0-alpha.6.2","source":"cli","thread_source":"cli","cwd":"/Users/example/private-project"}}
+{"ordinal":2,"timestamp":"2026-09-15T10:00:00.001Z","type":"world_state","payload":{"full":false,"state":{}}}
+{"ordinal":3,"timestamp":"2026-09-15T10:00:00.002Z","type":"token_usage_record","payload":{"session_id":"019f6b6d-644d-7701-8858-9da6837aaaaa","turn_id":"turn-current","usage":{"input_tokens":1}}}
+{"ordinal":4,"timestamp":"2026-09-15T10:00:01.000Z","type":"event_msg","payload":{"type":"task_started","turn_id":"turn-current","started_at":"2026-09-15T10:00:01.000Z"}}
+{"ordinal":5,"timestamp":"2026-09-15T10:00:02.000Z","type":"event_msg","payload":{"type":"token_count","turn_id":"turn-current","info":{}}}
+{"ordinal":6,"timestamp":"2026-09-15T10:00:03.000Z","type":"event_msg","payload":{"type":"thread_settings_applied","thread_id":"019f6b6d-644d-7701-8858-9da6837aaaaa","thread_settings":{}}}
+{"ordinal":7,"timestamp":"2026-09-15T10:00:04.000Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-current","completed_at":"2026-09-15T10:00:04.000Z"}}
