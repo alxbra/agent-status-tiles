@@ -7,47 +7,44 @@ import {
   type SessionState,
   type Provider,
   type TurnKey,
-} from "../../shared/session";
+  type InputRequest,
+} from '../../shared/session';
 
 function compareTurnKeys(left: TurnKey, right: TurnKey): number {
-  if (left.timestamp !== right.timestamp)
-    return left.timestamp - right.timestamp;
+  if (left.timestamp !== right.timestamp) return left.timestamp - right.timestamp;
   return left.turnId.localeCompare(right.turnId);
 }
 
 function isNewerTurn(
   record: SessionRecord,
-  event: Extract<SessionEvent, { type: "turn-started" }>,
+  event: Extract<SessionEvent, { type: 'turn-started' }>,
 ): boolean {
   if (record.lastTurnId === event.turnId) return false;
   if (record.turnKey === undefined) return true;
-  return (
-    compareTurnKeys(
-      { timestamp: event.timestamp, turnId: event.turnId },
-      record.turnKey,
-    ) > 0
-  );
+  return compareTurnKeys({ timestamp: event.timestamp, turnId: event.turnId }, record.turnKey) > 0;
 }
 
-function hasCurrentTurn(
-  record: SessionRecord,
-  turnId: string,
-  timestamp: number,
-): boolean {
-  return record.activeTurnId === turnId && timestamp >= record.lastEventAt;
+function hasCurrentTurn(record: SessionRecord, turnId: string, timestamp: number): boolean {
+  return record.activeTurnId === turnId && timestamp >= record.lastTurnStartedAt;
 }
 
-function statusFor(record: SessionRecord): SessionSnapshot["status"] {
-  if (record.failed && !record.errorDismissed) return "error";
-  if (Object.keys(record.pendingInputs).length > 0) return "needs-input";
-  if (record.activeTurnId !== undefined) return "working";
+function statusFor(record: SessionRecord): SessionSnapshot['status'] {
+  if (record.isFailed && !record.isErrorDismissed) return 'error';
+  if (
+    Object.values(record.inputRequests).some(
+      (request) => request.turnId === record.activeTurnId && request.resolvedAt === undefined,
+    )
+  ) {
+    return 'needs-input';
+  }
+  if (record.activeTurnId !== undefined) return 'working';
   if (
     record.completionId !== undefined &&
     record.completionId !== record.acknowledgedCompletionId
   ) {
-    return "unread";
+    return 'unread';
   }
-  return "idle";
+  return 'idle';
 }
 
 function refreshStatus(record: SessionRecord): SessionRecord {
@@ -72,15 +69,15 @@ function replaceRecord(
 function withEventTime(
   record: SessionRecord,
   timestamp: number,
-): Pick<SessionRecord, "updatedAt" | "lastEventAt"> {
+): Pick<SessionRecord, 'updatedAt' | 'lastEventAt'> {
   return {
     updatedAt: Math.max(record.updatedAt, timestamp),
-    lastEventAt: timestamp,
+    lastEventAt: Math.max(record.lastEventAt, timestamp),
   };
 }
 
 function initialRecord(
-  event: Extract<SessionEvent, { type: "upsert" }>,
+  event: Extract<SessionEvent, { type: 'upsert' }>,
   id: string,
 ): SessionRecord {
   return {
@@ -89,15 +86,15 @@ function initialRecord(
     surface: event.surface,
     nativeSessionId: event.nativeSessionId,
     title: event.title,
-    status: "idle",
+    status: 'idle',
     updatedAt: event.updatedAt,
     lastTurnStartedAt: 0,
     isTopLevel: event.isTopLevel,
     isArchived: event.isArchived,
     canOpen: event.canOpen,
-    pendingInputs: {},
-    failed: false,
-    errorDismissed: false,
+    inputRequests: {},
+    isFailed: false,
+    isErrorDismissed: false,
     metadataUpdatedAt: event.updatedAt,
     lastEventAt: 0,
   };
@@ -105,7 +102,7 @@ function initialRecord(
 
 function upsertSession(
   state: SessionState,
-  event: Extract<SessionEvent, { type: "upsert" }>,
+  event: Extract<SessionEvent, { type: 'upsert' }>,
 ): SessionState {
   const id = makeSessionId(event.provider, event.nativeSessionId);
   const previous = state.sessions[id];
@@ -143,20 +140,13 @@ function upsertSession(
   return replaceRecord(state, id, next);
 }
 
-export function reduceSessionState(
-  state: SessionState,
-  event: SessionEvent,
-): SessionState {
-  if (event.type === "upsert") return upsertSession(state, event);
+export function reduceSessionState(state: SessionState, event: SessionEvent): SessionState {
+  if (event.type === 'upsert') return upsertSession(state, event);
 
-  if (event.type === "provider-health") {
+  if (event.type === 'provider-health') {
     const previous = state.providerHealth[event.provider];
     if (event.timestamp < previous.updatedAt) return state;
-    if (
-      event.timestamp === previous.updatedAt &&
-      event.status === previous.status
-    )
-      return state;
+    if (event.timestamp === previous.updatedAt && event.status === previous.status) return state;
     return {
       ...state,
       providerHealth: {
@@ -170,7 +160,7 @@ export function reduceSessionState(
   if (previous === undefined) return state;
 
   switch (event.type) {
-    case "turn-started": {
+    case 'turn-started': {
       if (!isNewerTurn(previous, event)) return state;
       return replaceRecord(
         state,
@@ -184,79 +174,98 @@ export function reduceSessionState(
           lastTurnStartedAt: event.timestamp,
           completionId: undefined,
           acknowledgedCompletionId: undefined,
-          pendingInputs: {},
-          failed: false,
-          errorDismissed: false,
+          inputRequests: {},
+          isFailed: false,
+          isErrorDismissed: false,
         },
         true,
       );
     }
-    case "activity": {
+    case 'activity': {
       if (previous.activeTurnId === undefined) return state;
-      if (event.turnId !== undefined && event.turnId !== previous.activeTurnId)
-        return state;
-      if (event.timestamp < previous.lastEventAt) return state;
+      if (event.turnId !== undefined && event.turnId !== previous.activeTurnId) return state;
+      if (event.timestamp < previous.lastTurnStartedAt) return state;
       return replaceRecord(state, event.sessionId, {
         ...previous,
         ...withEventTime(previous, event.timestamp),
-        failed: false,
-        errorDismissed: false,
+        isFailed: false,
+        isErrorDismissed: false,
       });
     }
-    case "input-requested": {
-      if (!hasCurrentTurn(previous, event.turnId, event.timestamp))
+    case 'input-requested': {
+      if (!hasCurrentTurn(previous, event.turnId, event.timestamp)) return state;
+      const previousRequest = previous.inputRequests[event.callId];
+      if (previousRequest !== undefined) {
+        // A resolved request is a tombstone: replaying the request must not
+        // make a completed wait visible again. Duplicate unresolved requests
+        // are also no-ops, even when their timestamps arrive out of order.
         return state;
-      if (previous.pendingInputs[event.callId] === event.turnId) return state;
+      }
       return replaceRecord(state, event.sessionId, {
         ...previous,
         ...withEventTime(previous, event.timestamp),
-        pendingInputs: {
-          ...previous.pendingInputs,
-          [event.callId]: event.turnId,
+        inputRequests: {
+          ...previous.inputRequests,
+          [event.callId]: {
+            turnId: event.turnId,
+            requestedAt: event.timestamp,
+          },
         },
       });
     }
-    case "input-resolved": {
-      if (!hasCurrentTurn(previous, event.turnId, event.timestamp))
-        return state;
-      if (previous.pendingInputs[event.callId] !== event.turnId) return state;
-      const pendingInputs = { ...previous.pendingInputs };
-      delete pendingInputs[event.callId];
+    case 'input-resolved': {
+      if (!hasCurrentTurn(previous, event.turnId, event.timestamp)) return state;
+      const previousRequest = previous.inputRequests[event.callId];
+      if (previousRequest !== undefined) {
+        if (
+          previousRequest.turnId !== event.turnId ||
+          previousRequest.resolvedAt !== undefined ||
+          event.timestamp < previousRequest.requestedAt
+        ) {
+          return state;
+        }
+      }
+      const inputRequest: InputRequest = {
+        turnId: event.turnId,
+        requestedAt: previousRequest?.requestedAt ?? event.timestamp,
+        resolvedAt: event.timestamp,
+      };
       return replaceRecord(state, event.sessionId, {
         ...previous,
         ...withEventTime(previous, event.timestamp),
-        pendingInputs,
+        inputRequests: {
+          ...previous.inputRequests,
+          [event.callId]: inputRequest,
+        },
       });
     }
-    case "turn-completed": {
-      if (!hasCurrentTurn(previous, event.turnId, event.timestamp))
-        return state;
+    case 'turn-completed': {
+      if (!hasCurrentTurn(previous, event.turnId, event.timestamp)) return state;
       return replaceRecord(state, event.sessionId, {
         ...previous,
         ...withEventTime(previous, event.timestamp),
         activeTurnId: undefined,
         completionId: event.completionId,
         acknowledgedCompletionId: undefined,
-        pendingInputs: {},
-        failed: false,
-        errorDismissed: false,
+        inputRequests: {},
+        isFailed: false,
+        isErrorDismissed: false,
       });
     }
-    case "turn-failed": {
-      if (!hasCurrentTurn(previous, event.turnId, event.timestamp))
-        return state;
+    case 'turn-failed': {
+      if (!hasCurrentTurn(previous, event.turnId, event.timestamp)) return state;
       return replaceRecord(state, event.sessionId, {
         ...previous,
         ...withEventTime(previous, event.timestamp),
         activeTurnId: undefined,
         completionId: undefined,
         acknowledgedCompletionId: undefined,
-        pendingInputs: {},
-        failed: true,
-        errorDismissed: false,
+        inputRequests: {},
+        isFailed: true,
+        isErrorDismissed: false,
       });
     }
-    case "acknowledged": {
+    case 'acknowledged': {
       if (
         previous.completionId !== event.expectedCompletionId ||
         previous.acknowledgedCompletionId === event.expectedCompletionId
@@ -269,50 +278,50 @@ export function reduceSessionState(
         acknowledgedCompletionId: event.expectedCompletionId,
       });
     }
-    case "dismissed-error": {
-      if (!previous.failed || previous.errorDismissed) return state;
+    case 'dismissed-error': {
+      if (!previous.isFailed || previous.isErrorDismissed) return state;
       return replaceRecord(state, event.sessionId, {
         ...previous,
         updatedAt: Math.max(previous.updatedAt, event.timestamp),
-        errorDismissed: true,
+        isErrorDismissed: true,
       });
     }
   }
 }
 
-export function promoteSession(
-  order: readonly string[],
-  sessionId: string,
-): readonly string[] {
+export function promoteSession(order: readonly string[], sessionId: string): readonly string[] {
   if (order[0] === sessionId) return order;
   return [sessionId, ...order.filter((id) => id !== sessionId)];
 }
 
-export function selectSessionSnapshots(
-  state: SessionState,
-): readonly SessionSnapshot[] {
+export function selectSessionSnapshots(state: SessionState): readonly SessionSnapshot[] {
   return state.order.flatMap((id) => {
     const record = state.sessions[id];
     return record === undefined ? [] : [snapshotOf(record)];
   });
 }
 
-export function selectVisibleSessionSnapshots(
-  state: SessionState,
-): readonly SessionSnapshot[] {
-  return selectSessionSnapshots(state).filter(
-    (session) =>
-      session.isTopLevel &&
-      !session.isArchived &&
-      session.status !== "idle" &&
-      session.status !== "unavailable",
-  );
+export function selectVisibleSessionSnapshots(state: SessionState): readonly SessionSnapshot[] {
+  return state.order.flatMap((id) => {
+    const record = state.sessions[id];
+    if (
+      record === undefined ||
+      !record.isTopLevel ||
+      record.isArchived ||
+      record.status === 'idle'
+    ) {
+      return [];
+    }
+
+    const snapshot = snapshotOf(record);
+    const health = state.providerHealth[record.provider].status;
+    return health === 'unavailable' || health === 'error'
+      ? [{ ...snapshot, status: 'unavailable' }]
+      : [snapshot];
+  });
 }
 
-export function selectSession(
-  state: SessionState,
-  sessionId: string,
-): SessionSnapshot | undefined {
+export function selectSession(state: SessionState, sessionId: string): SessionSnapshot | undefined {
   const record = state.sessions[sessionId];
   return record === undefined ? undefined : snapshotOf(record);
 }
