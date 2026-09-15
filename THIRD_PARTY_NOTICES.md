@@ -1,7 +1,10 @@
 # Third-party notices
 
-The foundation currently contains no copied third-party source code or
-artwork.
+The tile renderer uses the OpenAI and Anthropic marks from the SVG Logos icon
+set (`@iconify-json/logos`, CC0-1.0), authored by Gil Barbara and distributed
+at <https://github.com/gilbarbara/logos>. The paths are vendored in
+`src/renderer/tiles/icons.tsx` so the renderer does not load a 7 MB icon
+catalog at runtime.
 
 The implementation plan identifies
 [`codex-status-actions`](https://github.com/alxbra/codex-status-actions) as an

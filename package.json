@@ -39,6 +39,7 @@
     "eslint": "^10.10.0",
     "eslint-plugin-react-hooks": "^7.1.1",
     "eslint-plugin-react-refresh": "^0.5.7",
+    "playwright": "^1.63.0",
     "prettier": "^3.9.6",
     "react": "^19.3.0",
     "react-dom": "^19.3.0",
@@ -46,8 +47,7 @@
     "typescript": "^6.0.3",
     "typescript-eslint": "^8.70.0",
     "vite": "^7.3.6",
-    "vitest": "^5.0.1",
-    "playwright": "^1.63.0"
+    "vitest": "^5.0.1"
   },
   "build": {
     "appId": "com.alxbra.agent-status-tiles",
@@ -76,5 +76,10 @@
         "zip"
       ]
     }
+  },
+  "dependencies": {
+    "cn": "^0.3.0",
+    "lucide-react": "^1.46.0",
+    "radix-ui": "^1.6.7"
   }
 }
