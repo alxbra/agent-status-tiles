@@ -1,7 +1,7 @@
 # Agent Status Tiles — MVP Implementation Plan
 
 **Document:** `MVP_PLAN.md` in the project root.  
-**Document status:** Implementation in progress; repository bootstrap, the Epic 0 application foundation, session state/persistence, the bounded Codex rollout reader, and the Codex catalog (PR #7) are merged. The rounded-square tile renderer (PR #8) is reviewed and implementation-complete on an open branch awaiting merge; unsigned helper packaging (PR #9) remains implementation-complete on an open branch awaiting review and merge. Native integration, live provider wiring, and later release gates remain pending.
+**Document status:** Implementation in progress; repository bootstrap, the Epic 0 application foundation, session state/persistence, the bounded Codex rollout reader, the Codex catalog (PR #7), and the rounded-square tile renderer (PR #8) are merged. Unsigned helper packaging (PR #9) remains implementation-complete on an open branch awaiting review and merge. Native integration, live provider wiring, and later release gates remain pending.
 **Repository:** [alxbra/agent-status-tiles](https://github.com/alxbra/agent-status-tiles)
 
 ## 1. Product and release target
@@ -436,20 +436,20 @@ Implementation progress (not an acceptance checkoff): PR #8 implements the
 rounded-square renderer, magnification, overflow and keyboard behavior, stock
 tooltip/context-menu composition, and browser visual fixtures. Its 94 total
 unit tests, 3 Electron smoke tests, and 22 browser fixture tests pass at
-validation head `4130023` in [CI run
-34987573632](https://github.com/alxbra/agent-status-tiles/actions/runs/34987573632).
-Renderer/browser review is complete and merge is pending. Native overlay
-integration, portal bounds, passthrough hit testing, underlying-app
-click-through, Spaces/full-screen, and multi-display acceptance remain
-pending; those native acceptance tasks below remain unchecked.
+final feature head `febe543d76a4e8d052b85c8e044bf612f471a1d3` in [CI run
+34987937805](https://github.com/alxbra/agent-status-tiles/actions/runs/34987937805).
+Renderer/browser review and merge are complete. Native overlay integration,
+portal bounds, passthrough hit testing, underlying-app click-through,
+Spaces/full-screen, and multi-display acceptance remain pending; those native
+acceptance tasks below remain unchecked.
 Formal root QA1 found and corrected the height-observer remount lifecycle,
 zero/non-finite wheel delta handling, and redundant reverse packing pass. Formal
 root QA2 found and removed the unused `TileGeometry.expanded` field; it found no
-further issues. Validation head `4130023` passed 94 unit tests and 25 E2E tests
+further issues. The final feature head passed 94 unit tests and 25 E2E tests
 (3 Electron smoke tests and 22 browser fixture tests), with [CI run
-34987573632](https://github.com/alxbra/agent-status-tiles/actions/runs/34987573632).
-Merge remains pending; native overlay integration and interaction acceptance
-remain unchecked.
+34987937805](https://github.com/alxbra/agent-status-tiles/actions/runs/34987937805).
+The merged renderer work remains scoped to browser/renderer behavior; native
+overlay integration and interaction acceptance remain unchecked.
 
 - [x] Implement the exact palette and rounded-square geometry at collapsed, intermediate, and expanded sizes (renderer/browser verified; native integration remains pending).
 - [x] Render provider and state icons only at expanded sizes (renderer/browser verified).
@@ -599,7 +599,7 @@ Maintain this table in the plan:
 | [#5 `feat: add atomic session persistence`](https://github.com/alxbra/agent-status-tiles/pull/5) | Atomic persisted session state and restart-safe status refresh | 1 completed CLI pass; 0 findings | 2 | 33 unit tests, 3 Electron E2E tests, format/lint/type/build checks; [CI run 34978274333](https://github.com/alxbra/agent-status-tiles/actions/runs/34978274333) | `5deb6aeb1f6dee9a5d0ab44e038102b3efb6c6fd` |
 | [#6 `feat: add bounded Codex rollout reader`](https://github.com/alxbra/agent-status-tiles/pull/6) | Codex rollout reader with bounded, causal event normalization, synthetic/source-derived fixtures, and a metadata-only installed-format check | 1 completed CLI pass; 1 valid finding fixed | 2 | 62 unit tests, 3 Electron E2E tests, format/lint/type/build checks; [CI run 34980907374](https://github.com/alxbra/agent-status-tiles/actions/runs/34980907374); [audit comment](https://github.com/alxbra/agent-status-tiles/pull/6#issuecomment-5681842281) | `3f7fa776065ca6aaf6942c1c06dd6c7e8894ab68` |
 | [#7 `feat/codex catalog`](https://github.com/alxbra/agent-status-tiles/pull/7) | Read-only Codex app-server catalog client with bounded metadata projection | 1 completed CLI pass; 2 valid findings fixed | 2 | 83 unit tests, 3 Electron smoke tests, format/lint/type/build checks; green [CI run 34986281698](https://github.com/alxbra/agent-status-tiles/actions/runs/34986281698); [audit comment](https://github.com/alxbra/agent-status-tiles/pull/7#issuecomment-5682690186) | `419322edcfd277730acd0fef669c26479352c443` |
-| [#8 `feat: add rounded-square status tile UI`](https://github.com/alxbra/agent-status-tiles/pull/8) | Isolated rounded-square tile renderer, magnification, overflow, keyboard interaction, and visual fixtures | 1 completed CLI pass; 1 valid finding fixed | 2 | 94 unit tests, 3 Electron smoke tests, 22 browser fixture tests; validation head `4130023`; [CI run 34987573632](https://github.com/alxbra/agent-status-tiles/actions/runs/34987573632) | Open; no merge SHA |
+| [#8 `feat: add rounded-square status tile UI`](https://github.com/alxbra/agent-status-tiles/pull/8) | Isolated rounded-square tile renderer, magnification, overflow, keyboard interaction, and visual fixtures | 1 completed CLI pass; 1 valid finding fixed | 2 | 94 unit tests, 3 Electron smoke tests, 22 browser fixture tests; final head `febe543d76a4e8d052b85c8e044bf612f471a1d3`; [CI run 34987937805](https://github.com/alxbra/agent-status-tiles/actions/runs/34987937805); [audit comment](https://github.com/alxbra/agent-status-tiles/pull/8#issuecomment-5682973864) | `1f3c523465de0cff9eb2cbafb65a04cb347ce301` |
 | [#9 `build/helper packaging`](https://github.com/alxbra/agent-status-tiles/pull/9) | Unsigned arm64/x64 packaging for the existing native hook helper | Pending; no CodeRabbit pass claimed | Pending | Implementation complete; review/merge pending. 72 TypeScript unit tests, 11 native helper tests, 3 Electron smoke tests, format/lint/type checks, and unsigned packaging; [CI run 34982354667](https://github.com/alxbra/agent-status-tiles/actions/runs/34982354667), [native run 34982354694](https://github.com/alxbra/agent-status-tiles/actions/runs/34982354694), [package run 34982354691](https://github.com/alxbra/agent-status-tiles/actions/runs/34982354691) | Open; no merge SHA |
 
 Foundation review corrections included strict IPC sender/frame validation, same-host renderer navigation checks, supported Node engine ranges, formatter coverage, and recovery after a failed settings-window load. No signing or notarization was claimed; Apple Developer credentials remain a release dependency.
@@ -613,6 +613,16 @@ Desktop-shell PR #4 merged into `staging` at `a454bf22a8c9521eeefb9db87845fd438d
 Persistence PR #5 merged into `staging` at `5deb6aeb1f6dee9a5d0ab44e038102b3efb6c6fd`. It completed one CodeRabbit CLI pass with zero findings and two root QA passes, including canonical status refresh and queued-failure/short-read regressions. The persistence implementation is verified by 33 unit tests, 3 Electron E2E tests, format/lint/type/build checks, and [CI run 34978274333](https://github.com/alxbra/agent-status-tiles/actions/runs/34978274333). Live-app persistence replay and the cross-file baseline gate remain pending.
 
 Codex rollout reader PR #6 merged into `staging` at `3f7fa776065ca6aaf6942c1c06dd6c7e8894ab68`; its final feature head was `dd471955`. It completed one CodeRabbit CLI pass with one valid finding fixed and two root QA passes. Corrections covered causal input timestamps, canonical IDs, ordinary `function_call` handling, missing-metadata quarantine, stale-turn correlation, and the canonical current-turn predicate. Catalog integration, live four-surface wiring, the cross-file baseline, and cross-batch output-before-request remain pending. See the [CI run 34980907374](https://github.com/alxbra/agent-status-tiles/actions/runs/34980907374) and [audit comment](https://github.com/alxbra/agent-status-tiles/pull/6#issuecomment-5681842281).
+
+Rounded-square tile renderer PR #8 merged into `staging` at
+`1f3c523465de0cff9eb2cbafb65a04cb347ce301`; its final feature head was
+`febe543d76a4e8d052b85c8e044bf612f471a1d3`. It completed one CodeRabbit CLI
+pass with one valid finding fixed and two root QA passes. The renderer/browser
+scope is verified by 94 unit tests, 3 Electron smoke tests, 22 browser fixture
+tests, and [CI run 34987937805](https://github.com/alxbra/agent-status-tiles/actions/runs/34987937805);
+see the [audit comment](https://github.com/alxbra/agent-status-tiles/pull/8#issuecomment-5682973864).
+Native overlay integration, portal and passthrough behavior, and multi-display
+acceptance remain pending.
 
 Record corrections made after review and the commit used for final validation.
 
