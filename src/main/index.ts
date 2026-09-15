@@ -3,12 +3,16 @@ import { app, ipcMain, screen, type IpcMainInvokeEvent } from 'electron';
 import { closeSettingsWindow, getSettingsWindow, showSettingsWindow } from './settings-window';
 import { createMenuBar, type MenuBarController } from './menu-bar';
 import { createOverlayController, type OverlayController } from './overlay-controller';
-import { publishOverlayState, registerOverlayIpcHandlers } from './overlay-ipc';
+import {
+  publishOverlayKeyboardEntry,
+  publishOverlayState,
+  registerOverlayIpcHandlers,
+} from './overlay-ipc';
 import { connectedDisplays, displayOptionsWithPreference, serializeDisplayId } from './display';
 import { DesktopPreferencesStore } from './desktop-preferences';
 import { publishSettingsState, registerSettingsIpcHandlers } from './settings-ipc';
 import { evaluateLoginItemSettings, shouldOpenSettingsAtStartup } from './login-item';
-import { createStartupOverlayState } from './test-session-source';
+import { createStartupOverlayState, isKeyboardEntryTestHookEnabled } from './test-session-source';
 import packageJson from '../../package.json';
 import { IPC_CHANNELS, type SettingsState } from '../shared/ipc';
 import type { OverlayState } from '../shared/overlay-ipc';
@@ -16,6 +20,7 @@ import type { SessionSnapshot } from '../shared/session';
 import { PRIMARY_DISPLAY_ID } from '../shared/settings';
 
 const hasSingleInstanceLock = app.requestSingleInstanceLock();
+const TEST_KEYBOARD_ENTRY_HOOK = Symbol.for('agent-status-tiles.test.keyboard-entry');
 let menuBar: MenuBarController | null = null;
 let overlayController: OverlayController | null = null;
 let removeOverlayIpcHandlers: (() => void) | null = null;
@@ -126,6 +131,7 @@ if (!hasSingleInstanceLock) {
   });
 
   app.on('will-quit', () => {
+    Reflect.deleteProperty(globalThis, TEST_KEYBOARD_ENTRY_HOOK);
     removeSettingsIpcHandlers?.();
     removeSettingsIpcHandlers = null;
     removeAppIpcHandlers?.();
@@ -149,19 +155,30 @@ if (!hasSingleInstanceLock) {
     overlayState = { ...overlayState, reducedMotion: preferences.reduceMotion };
     overlayController = createOverlayController({
       preferredDisplayId: preferences.preferredDisplayId,
+      onKeyboardEntry: () => publishOverlayKeyboardEntry(overlayController?.getWindow() ?? null),
     });
     overlayController.setQualifyingSessionCount(qualifyingSessionCount(overlayState.sessions));
     removeOverlayIpcHandlers = registerOverlayIpcHandlers({
       getWindow: () => overlayController?.getWindow() ?? null,
       getState: () => overlayState,
       setHitRegions: (regions) => overlayController?.setHitRegions(regions) ?? false,
+      onKeyboardExit: () => overlayController?.exitKeyboardMode(),
     });
     menuBar = createMenuBar({
-      showOverlay: () => overlayController?.setVisible(true),
-      hideOverlay: () => overlayController?.setVisible(false),
+      showOverlay: () => overlayController?.enterKeyboardMode(),
+      hideOverlay: () => {
+        overlayController?.exitKeyboardMode();
+        overlayController?.setVisible(false);
+      },
       openSettings: openSettingsWindow,
       quit: () => app.quit(),
     });
+    if (isKeyboardEntryTestHookEnabled(process.argv, process.env.NODE_ENV, app.isPackaged)) {
+      Reflect.defineProperty(globalThis, TEST_KEYBOARD_ENTRY_HOOK, {
+        configurable: true,
+        value: () => overlayController?.enterKeyboardMode(),
+      });
+    }
     removeAppIpcHandlers = registerIpcHandlers();
     removeSettingsIpcHandlers = registerSettingsIpcHandlers({
       getWindow: getSettingsWindow,

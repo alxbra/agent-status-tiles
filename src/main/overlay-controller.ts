@@ -27,6 +27,8 @@ export const OVERLAY_WINDOW_WIDTH = 360;
 export const OVERLAY_WINDOW_HEIGHT = 480;
 export interface OverlayController {
   getWindow(): BrowserWindow | null;
+  enterKeyboardMode(): void;
+  exitKeyboardMode(): void;
   setPreferredDisplayId(displayId: string): void;
   setQualifyingSessionCount(count: number): void;
   setVisible(visible: boolean): void;
@@ -152,6 +154,7 @@ function createOverlayWindow(
 
 export interface OverlayControllerOptions {
   preferredDisplayId?: string;
+  onKeyboardEntry?: () => void;
 }
 
 export function createOverlayController(options: OverlayControllerOptions = {}): OverlayController {
@@ -159,6 +162,8 @@ export function createOverlayController(options: OverlayControllerOptions = {}):
   let readyToShow = false;
   let requestedVisible = true;
   let hasQualifyingSessions = false;
+  let keyboardMode = false;
+  let keyboardEntryNotified = false;
   let preferredDisplayId = options.preferredDisplayId ?? PRIMARY_DISPLAY_ID;
   let hitRegions: readonly OverlayHitRegion[] = [];
   let ignoringMouseEvents = true;
@@ -209,10 +214,37 @@ export function createOverlayController(options: OverlayControllerOptions = {}):
 
     const shouldShow = requestedVisible && hasQualifyingSessions && readyToShow;
     if (shouldShow) {
-      overlayWindow.showInactive();
+      if (keyboardMode) {
+        overlayWindow.setFocusable(true);
+        if (!keyboardEntryNotified) {
+          overlayWindow.show();
+          app.focus({ steal: true });
+          overlayWindow.focus();
+          overlayWindow.webContents.focus();
+          options.onKeyboardEntry?.();
+          keyboardEntryNotified = true;
+        } else if (!overlayWindow.isVisible()) {
+          overlayWindow.show();
+        }
+      } else {
+        overlayWindow.setFocusable(false);
+        if (!overlayWindow.isVisible()) overlayWindow.showInactive();
+      }
     } else if (overlayWindow.isVisible()) {
       overlayWindow.hide();
+      overlayWindow.setFocusable(false);
+      keyboardEntryNotified = false;
+    } else {
+      overlayWindow.setFocusable(false);
+      keyboardEntryNotified = false;
     }
+    syncMouseMode();
+  };
+
+  const reapplyMousePassthrough = (): void => {
+    if (!overlayWindow || overlayWindow.isDestroyed()) return;
+    ignoringMouseEvents = true;
+    overlayWindow.setIgnoreMouseEvents(true, { forward: true });
     syncMouseMode();
   };
 
@@ -289,19 +321,55 @@ export function createOverlayController(options: OverlayControllerOptions = {}):
 
       return overlayWindow;
     },
+    enterKeyboardMode: () => {
+      requestedVisible = true;
+      if (!hasQualifyingSessions) return;
+      keyboardMode = true;
+      keyboardEntryNotified = false;
+      syncVisibility();
+    },
+    exitKeyboardMode: () => {
+      keyboardMode = false;
+      keyboardEntryNotified = false;
+      if (overlayWindow && !overlayWindow.isDestroyed()) {
+        overlayWindow.blur();
+        overlayWindow.setFocusable(false);
+      }
+      syncVisibility();
+      reapplyMousePassthrough();
+    },
     setPreferredDisplayId: (displayId) => {
       preferredDisplayId = displayId;
       reposition();
     },
     setQualifyingSessionCount: (count) => {
       hasQualifyingSessions = Number.isFinite(count) && count > 0;
-      if (hasQualifyingSessions) createWindow();
+      if (hasQualifyingSessions) {
+        createWindow();
+      } else {
+        keyboardMode = false;
+        keyboardEntryNotified = false;
+        if (overlayWindow && !overlayWindow.isDestroyed()) {
+          overlayWindow.blur();
+          overlayWindow.setFocusable(false);
+        }
+      }
       syncVisibility();
+      if (!hasQualifyingSessions) reapplyMousePassthrough();
     },
     setVisible: (visible) => {
+      if (!visible) {
+        keyboardMode = false;
+        keyboardEntryNotified = false;
+        if (overlayWindow && !overlayWindow.isDestroyed()) {
+          overlayWindow.blur();
+          overlayWindow.setFocusable(false);
+        }
+      }
       requestedVisible = visible;
       if (requestedVisible) createWindow();
       syncVisibility();
+      if (!visible) reapplyMousePassthrough();
     },
     setHitRegions: (regions) => {
       if (isDestroyed || !overlayWindow || overlayWindow.isDestroyed()) {
@@ -329,6 +397,7 @@ export function createOverlayController(options: OverlayControllerOptions = {}):
       }
       overlayWindow = null;
       readyToShow = false;
+      keyboardEntryNotified = false;
       ignoringMouseEvents = true;
       hitRegions = [];
     },

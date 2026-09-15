@@ -1,6 +1,7 @@
 import type { SessionSnapshot, SessionStatus } from '../shared/session';
 
 export const TEST_SESSION_COUNT_FLAG = '--agent-status-tiles-test-session-count=';
+export const TEST_KEYBOARD_ENTRY_FLAG = '--agent-status-tiles-test-keyboard-entry';
 export const MAX_TEST_SESSION_COUNT = 30;
 
 const TEST_STATUSES: readonly SessionStatus[] = ['working', 'needs-input', 'unread', 'error'];
@@ -53,4 +54,13 @@ export function createStartupOverlayState(isPackaged: boolean): {
     sessions: createTestSessionSnapshots(count),
     reducedMotion: false,
   };
+}
+
+/** Test-only native entry trigger; never available in a packaged or non-test build. */
+export function isKeyboardEntryTestHookEnabled(
+  argv: readonly string[] = process.argv,
+  nodeEnvironment: string | undefined = process.env.NODE_ENV,
+  isPackaged = true,
+): boolean {
+  return !isPackaged && nodeEnvironment === 'test' && argv.includes(TEST_KEYBOARD_ENTRY_FLAG);
 }

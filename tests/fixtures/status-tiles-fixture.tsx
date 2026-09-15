@@ -9,6 +9,7 @@ declare global {
   interface Window {
     __setFixtureSessions?: (sessions: readonly SessionSnapshot[]) => void;
     __setFixtureCount?: (count: number) => void;
+    __triggerKeyboardEntry?: () => void;
     __fixtureOpenTarget?: OpenSessionTarget;
     __fixtureDismissedSessionId?: string;
     __fixtureHitRegions?: unknown;
@@ -70,9 +71,11 @@ export function Fixture(): ReactElement {
   const [sessions, setSessions] = useState<readonly SessionSnapshot[]>(() =>
     makeSessions(count, forceError, visualStates),
   );
+  const [keyboardEntryRevision, setKeyboardEntryRevision] = useState(0);
   window.__setFixtureSessions = setSessions;
   window.__setFixtureCount = (nextCount) =>
     setSessions(makeSessions(nextCount, forceError, visualStates));
+  window.__triggerKeyboardEntry = () => setKeyboardEntryRevision((revision) => revision + 1);
 
   return (
     <StatusTiles
@@ -93,6 +96,7 @@ export function Fixture(): ReactElement {
       onKeyboardExit={() => {
         document.body.dataset.keyboardExit = 'true';
       }}
+      keyboardEntryRevision={keyboardEntryRevision}
     />
   );
 }

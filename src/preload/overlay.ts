@@ -3,6 +3,7 @@ import { contextBridge, ipcRenderer } from 'electron';
 import {
   isOverlayDismissErrorRequest,
   isOverlayHitRegions,
+  isOverlayNoPayload,
   isOverlayOpenSessionRequest,
   isOverlayActionResult,
   isOverlayState,
@@ -28,6 +29,18 @@ const api: AgentStatusTilesOverlayApi = {
     ipcRenderer.on(OVERLAY_IPC_CHANNELS.stateChanged, handleStateChanged);
     return () => ipcRenderer.removeListener(OVERLAY_IPC_CHANNELS.stateChanged, handleStateChanged);
   },
+  subscribeKeyboardEntry: (listener: () => void): (() => void) => {
+    const handleKeyboardEntry = (_event: Electron.IpcRendererEvent, payload?: unknown): void => {
+      if (isOverlayNoPayload(payload)) listener();
+    };
+    ipcRenderer.on(OVERLAY_IPC_CHANNELS.keyboardEntry, handleKeyboardEntry);
+    return () =>
+      ipcRenderer.removeListener(OVERLAY_IPC_CHANNELS.keyboardEntry, handleKeyboardEntry);
+  },
+  requestKeyboardExit: (): Promise<void> =>
+    ipcRenderer.invoke(OVERLAY_IPC_CHANNELS.keyboardExit).then((result: unknown) => {
+      if (!isOverlayNoPayload(result)) throw new Error('Overlay keyboard-exit result is invalid');
+    }),
   publishHitRegions: (regions: readonly OverlayHitRegion[]): Promise<boolean> => {
     if (!isOverlayHitRegions(regions)) return Promise.resolve(false);
     return ipcRenderer

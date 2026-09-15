@@ -18,6 +18,7 @@ vi.mock('electron', () => electronMocks);
 import {
   isOverlayDismissErrorRequest,
   isOverlayHitRegions,
+  isOverlayNoPayload,
   isOverlayOpenSessionRequest,
   isOverlayState,
   OVERLAY_ACTION_UNAVAILABLE,
@@ -101,6 +102,9 @@ describe('overlay IPC contract validators', () => {
     expect(isOverlayOpenSessionRequest({ sessionId: 'codex:one', path: '/private' })).toBe(false);
     expect(isOverlayDismissErrorRequest({ sessionId: 'codex:one' })).toBe(true);
     expect(isOverlayDismissErrorRequest({ sessionId: '' })).toBe(false);
+    expect(isOverlayNoPayload(undefined)).toBe(true);
+    expect(isOverlayNoPayload(null)).toBe(false);
+    expect(isOverlayNoPayload({})).toBe(false);
   });
 });
 
@@ -126,6 +130,7 @@ describe('overlay IPC handlers', () => {
 
     for (const channel of [
       OVERLAY_IPC_CHANNELS.getState,
+      OVERLAY_IPC_CHANNELS.keyboardExit,
       OVERLAY_IPC_CHANNELS.publishHitRegions,
       OVERLAY_IPC_CHANNELS.openSession,
       OVERLAY_IPC_CHANNELS.dismissError,
@@ -186,8 +191,29 @@ describe('overlay IPC handlers', () => {
     ).rejects.toThrow('Overlay dismiss-error request is invalid');
   });
 
+  it('accepts only a no-payload keyboard exit from the overlay main frame', async () => {
+    const { registerOverlayIpcHandlers } = await import('../../src/main/overlay-ipc');
+    const window = overlayWindow();
+    const onKeyboardExit = vi.fn();
+    registerOverlayIpcHandlers({
+      getWindow: () => window as never,
+      getState: state,
+      setHitRegions: vi.fn(() => true),
+      onKeyboardExit,
+    });
+    const event = { sender: window.webContents, senderFrame: window.webContents.mainFrame };
+    const handler = electronMocks.handlers.get(OVERLAY_IPC_CHANNELS.keyboardExit)!;
+
+    await expect(Promise.resolve().then(() => handler(event))).resolves.toBeUndefined();
+    expect(onKeyboardExit).toHaveBeenCalledOnce();
+    await expect(
+      Promise.resolve().then(() => handler(event, { unexpected: true })),
+    ).rejects.toThrow('Overlay keyboard-exit request does not accept a payload');
+    expect(onKeyboardExit).toHaveBeenCalledOnce();
+  });
+
   it('validates hit regions and publishes only a valid state projection', async () => {
-    const { publishOverlayState, registerOverlayIpcHandlers } =
+    const { publishOverlayKeyboardEntry, publishOverlayState, registerOverlayIpcHandlers } =
       await import('../../src/main/overlay-ipc');
     const window = overlayWindow();
     const setHitRegions = vi.fn(() => true);
@@ -226,6 +252,10 @@ describe('overlay IPC handlers', () => {
     expect(publishOverlayState(window as never, { ...state(), unexpected: true } as never)).toBe(
       false,
     );
+    expect(publishOverlayKeyboardEntry(window as never)).toBe(true);
+    expect(window.webContents.send).toHaveBeenCalledWith(OVERLAY_IPC_CHANNELS.keyboardEntry);
+    window.isDestroyed.mockReturnValue(true);
+    expect(publishOverlayKeyboardEntry(window as never)).toBe(false);
   });
 
   it('removes exactly the invoke handlers it registered', async () => {
@@ -240,6 +270,7 @@ describe('overlay IPC handlers', () => {
     cleanup();
     expect(electronMocks.ipcMain.removeHandler.mock.calls.map(([channel]) => channel)).toEqual([
       OVERLAY_IPC_CHANNELS.getState,
+      OVERLAY_IPC_CHANNELS.keyboardExit,
       OVERLAY_IPC_CHANNELS.publishHitRegions,
       OVERLAY_IPC_CHANNELS.openSession,
       OVERLAY_IPC_CHANNELS.dismissError,

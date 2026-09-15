@@ -3,6 +3,7 @@ import { BrowserWindow, ipcMain, type IpcMainInvokeEvent } from 'electron';
 import {
   isOverlayDismissErrorRequest,
   isOverlayHitRegions,
+  isOverlayNoPayload,
   isOverlayOpenSessionRequest,
   isOverlayState,
   OVERLAY_ACTION_UNAVAILABLE,
@@ -16,6 +17,7 @@ export interface OverlayIpcOptions {
   getWindow: () => BrowserWindow | null;
   getState: () => OverlayState;
   setHitRegions: (regions: readonly OverlayHitRegion[]) => boolean;
+  onKeyboardExit?: () => void;
 }
 
 function assertOverlaySender(
@@ -33,8 +35,8 @@ function assertOverlaySender(
   }
 }
 
-function assertNoPayload(payload: unknown): void {
-  if (payload !== undefined) throw new Error('Overlay state request does not accept a payload');
+function assertNoPayload(payload: unknown, label = 'Overlay state request'): void {
+  if (!isOverlayNoPayload(payload)) throw new Error(`${label} does not accept a payload`);
 }
 
 /** Register the complete overlay surface and return its exact cleanup operation. */
@@ -48,6 +50,12 @@ export function registerOverlayIpcHandlers(options: OverlayIpcOptions): () => vo
     const state = options.getState();
     if (!isOverlayState(state)) throw new Error('Overlay state is invalid');
     return state;
+  });
+
+  ipcMain.handle(OVERLAY_IPC_CHANNELS.keyboardExit, (event, payload?: unknown): void => {
+    assertSender(event);
+    assertNoPayload(payload, 'Overlay keyboard-exit request');
+    options.onKeyboardExit?.();
   });
 
   ipcMain.handle(OVERLAY_IPC_CHANNELS.publishHitRegions, (event, payload: unknown) => {
@@ -85,7 +93,12 @@ export function registerOverlayIpcHandlers(options: OverlayIpcOptions): () => vo
     if (!isRegistered) return;
     isRegistered = false;
     for (const channel of Object.values(OVERLAY_IPC_CHANNELS)) {
-      if (channel === OVERLAY_IPC_CHANNELS.stateChanged) continue;
+      if (
+        channel === OVERLAY_IPC_CHANNELS.stateChanged ||
+        channel === OVERLAY_IPC_CHANNELS.keyboardEntry
+      ) {
+        continue;
+      }
       ipcMain.removeHandler(channel);
     }
   };
@@ -101,5 +114,13 @@ export function publishOverlayState(
   }
 
   overlayWindow.webContents.send(OVERLAY_IPC_CHANNELS.stateChanged, state);
+  return true;
+}
+
+/** Notify only the exact overlay window that deliberate keyboard entry occurred. */
+export function publishOverlayKeyboardEntry(overlayWindow: BrowserWindow | null): boolean {
+  if (overlayWindow === null || overlayWindow.isDestroyed()) return false;
+
+  overlayWindow.webContents.send(OVERLAY_IPC_CHANNELS.keyboardEntry);
   return true;
 }

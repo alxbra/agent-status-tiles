@@ -15,20 +15,26 @@ type Bounds = {
 
 type OverlayWindowMock = {
   destroy: ReturnType<typeof vi.fn>;
+  blur: ReturnType<typeof vi.fn>;
+  focus: ReturnType<typeof vi.fn>;
   hide: ReturnType<typeof vi.fn>;
   isDestroyed: ReturnType<typeof vi.fn>;
   isVisible: ReturnType<typeof vi.fn>;
   getBounds: ReturnType<typeof vi.fn>;
+  isFocusable: ReturnType<typeof vi.fn> & (() => boolean);
   loadFile: ReturnType<typeof vi.fn>;
   loadURL: ReturnType<typeof vi.fn>;
   setAlwaysOnTop: ReturnType<typeof vi.fn>;
   setBounds: ReturnType<typeof vi.fn>;
+  setFocusable: ReturnType<typeof vi.fn>;
   setIgnoreMouseEvents: ReturnType<typeof vi.fn>;
   setVisibleOnAllWorkspaces: ReturnType<typeof vi.fn>;
   showInactive: ReturnType<typeof vi.fn>;
+  show: ReturnType<typeof vi.fn>;
   readyListener?: () => void;
   pointerListener?: (inputEvent: PointerEvent) => void;
   webContents: {
+    focus: ReturnType<typeof vi.fn>;
     on: ReturnType<typeof vi.fn>;
     setWindowOpenHandler: ReturnType<typeof vi.fn>;
   };
@@ -36,7 +42,7 @@ type OverlayWindowMock = {
 
 const electronMocks = vi.hoisted(() => ({
   BrowserWindow: vi.fn(),
-  app: { isPackaged: true },
+  app: { focus: vi.fn(), isPackaged: true },
   powerMonitor: { on: vi.fn(), off: vi.fn() },
   screen: {
     getAllDisplays: vi.fn(() => [{ id: 1, workArea: { x: 0, y: 24, width: 1440, height: 876 } }]),
@@ -53,14 +59,18 @@ function createOverlayWindowMock(
   initialBounds: Bounds = { x: 1080, y: 222, width: 360, height: 480 },
 ): OverlayWindowMock {
   let visible = false;
+  let focusable = false;
   let bounds = initialBounds;
   const mock: OverlayWindowMock = {
+    blur: vi.fn(),
     destroy: vi.fn(),
+    focus: vi.fn(),
     hide: vi.fn(() => {
       visible = false;
     }),
     isDestroyed: vi.fn(() => false),
     isVisible: vi.fn(() => visible),
+    isFocusable: vi.fn(() => focusable),
     getBounds: vi.fn(() => bounds),
     loadFile: vi.fn(() => Promise.resolve()),
     loadURL: vi.fn(),
@@ -68,12 +78,21 @@ function createOverlayWindowMock(
     setBounds: vi.fn((nextBounds: Bounds) => {
       bounds = nextBounds;
     }),
+    setFocusable: vi.fn((nextFocusable: boolean) => {
+      focusable = nextFocusable;
+    }),
     setIgnoreMouseEvents: vi.fn(),
     setVisibleOnAllWorkspaces: vi.fn(),
+    show: vi.fn(() => {
+      visible = true;
+      focusable = true;
+    }),
     showInactive: vi.fn(() => {
       visible = true;
+      focusable = false;
     }),
     webContents: {
+      focus: vi.fn(),
       on: vi.fn((event: string, callback: unknown) => {
         if (event === 'input-event') {
           const inputCallback = callback as (event: unknown, inputEvent: PointerEvent) => void;
@@ -84,6 +103,9 @@ function createOverlayWindowMock(
     },
   };
 
+  mock.setFocusable.mockImplementation((nextFocusable: boolean) => {
+    focusable = nextFocusable;
+  });
   const once = vi.fn((event: string, callback: unknown) => {
     if (event === 'ready-to-show') {
       mock.readyListener = callback as () => void;
@@ -108,6 +130,7 @@ describe('overlay controller', () => {
   beforeEach(() => {
     vi.resetModules();
     electronMocks.BrowserWindow.mockReset();
+    electronMocks.app.focus.mockClear();
     electronMocks.screen.getAllDisplays.mockReset();
     electronMocks.screen.getAllDisplays.mockReturnValue([
       { id: 1, workArea: { x: 0, y: 24, width: 1440, height: 876 } },
@@ -168,6 +191,100 @@ describe('overlay controller', () => {
     expect(overlayWindow.hide).toHaveBeenCalledOnce();
     controller.destroy();
     expect(overlayWindow.destroy).toHaveBeenCalledOnce();
+  });
+
+  it('enters keyboard mode only through explicit requests and safely refocuses', async () => {
+    const overlayWindow = createOverlayWindowMock();
+    mockOverlayWindow(overlayWindow);
+    const onKeyboardEntry = vi.fn();
+    const { createOverlayController } = await import('../../src/main/overlay-controller');
+
+    const controller = createOverlayController({ onKeyboardEntry });
+    overlayWindow.readyListener?.();
+    controller.setQualifyingSessionCount(1);
+    expect(overlayWindow.showInactive).toHaveBeenCalledOnce();
+    expect(overlayWindow.show).not.toHaveBeenCalled();
+    expect(overlayWindow.focus).not.toHaveBeenCalled();
+    expect(overlayWindow.isFocusable()).toBe(false);
+
+    controller.enterKeyboardMode();
+    expect(overlayWindow.setFocusable).toHaveBeenLastCalledWith(true);
+    expect(overlayWindow.show).toHaveBeenCalledOnce();
+    expect(electronMocks.app.focus).toHaveBeenCalledWith({ steal: true });
+    expect(overlayWindow.focus).toHaveBeenCalledOnce();
+    expect(onKeyboardEntry).toHaveBeenCalledOnce();
+    expect(overlayWindow.isFocusable()).toBe(true);
+
+    controller.enterKeyboardMode();
+    expect(overlayWindow.show).toHaveBeenCalledTimes(2);
+    expect(overlayWindow.focus).toHaveBeenCalledTimes(2);
+    expect(onKeyboardEntry).toHaveBeenCalledTimes(2);
+    controller.exitKeyboardMode();
+    expect(overlayWindow.blur).toHaveBeenCalledOnce();
+    expect(overlayWindow.setFocusable).toHaveBeenLastCalledWith(false);
+    expect(overlayWindow.showInactive).toHaveBeenCalledOnce();
+    expect(overlayWindow.isFocusable()).toBe(false);
+    controller.destroy();
+  });
+
+  it('queues keyboard entry until a ready overlay has a qualifying session', async () => {
+    const overlayWindow = createOverlayWindowMock();
+    mockOverlayWindow(overlayWindow);
+    const onKeyboardEntry = vi.fn();
+    const { createOverlayController } = await import('../../src/main/overlay-controller');
+
+    const controller = createOverlayController({ onKeyboardEntry });
+    controller.setQualifyingSessionCount(1);
+    controller.enterKeyboardMode();
+    expect(overlayWindow.show).not.toHaveBeenCalled();
+    expect(onKeyboardEntry).not.toHaveBeenCalled();
+
+    overlayWindow.readyListener?.();
+    expect(overlayWindow.show).toHaveBeenCalledOnce();
+    expect(overlayWindow.focus).toHaveBeenCalledOnce();
+    expect(onKeyboardEntry).toHaveBeenCalledOnce();
+
+    controller.setQualifyingSessionCount(0);
+    expect(overlayWindow.hide).toHaveBeenCalledOnce();
+    expect(overlayWindow.isFocusable()).toBe(false);
+    controller.destroy();
+  });
+
+  it('does not arm future focus when Show is requested without sessions', async () => {
+    const overlayWindow = createOverlayWindowMock();
+    mockOverlayWindow(overlayWindow);
+    const onKeyboardEntry = vi.fn();
+    const { createOverlayController } = await import('../../src/main/overlay-controller');
+
+    const controller = createOverlayController({ onKeyboardEntry });
+    overlayWindow.readyListener?.();
+    controller.enterKeyboardMode();
+    controller.setQualifyingSessionCount(1);
+
+    expect(overlayWindow.show).not.toHaveBeenCalled();
+    expect(overlayWindow.focus).not.toHaveBeenCalled();
+    expect(onKeyboardEntry).not.toHaveBeenCalled();
+    expect(overlayWindow.showInactive).toHaveBeenCalledOnce();
+    controller.destroy();
+  });
+
+  it('exits keyboard mode before hiding and restores passthrough', async () => {
+    const overlayWindow = createOverlayWindowMock();
+    mockOverlayWindow(overlayWindow);
+    const { createOverlayController } = await import('../../src/main/overlay-controller');
+
+    const controller = createOverlayController();
+    overlayWindow.readyListener?.();
+    controller.setQualifyingSessionCount(1);
+    controller.enterKeyboardMode();
+    controller.setHitRegions([{ x: 10, y: 20, width: 24, height: 24 }]);
+    controller.setVisible(false);
+
+    expect(overlayWindow.blur).toHaveBeenCalledOnce();
+    expect(overlayWindow.setFocusable).toHaveBeenLastCalledWith(false);
+    expect(overlayWindow.hide).toHaveBeenCalledOnce();
+    expect(overlayWindow.setIgnoreMouseEvents).toHaveBeenLastCalledWith(true, { forward: true });
+    controller.destroy();
   });
 
   it('recreates a failed renderer only after a later qualifying-session update', async () => {
