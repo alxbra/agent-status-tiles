@@ -531,13 +531,13 @@ a signing/notarization claim.
 
 **PRs:** `feat/session-navigation`.
 
-- [ ] Add validated Codex task navigation.
-- [ ] Add Claude Desktop activation.
-- [ ] Resolve and activate owning terminal apps.
-- [ ] Add the one-time terminal selection fallback for unknown ownership.
+- [x] Add validated Codex task navigation (PR #11 main-process primitive; live task selection remains pending).
+- [x] Add Claude Desktop activation (PR #11 fixed bundle activation; live harness validation remains pending).
+- [x] Resolve and activate qualified terminal apps (PR #11 fixed bundle activation; ownership discovery remains pending).
+- [x] Return the one-time terminal selection-required result for unknown ownership (PR #11; selection UI remains pending).
 - [ ] Connect successful dispatch to completion acknowledgement.
 - [ ] Preserve unread state on launch failure.
-- [ ] Prevent duplicate launches from rapid repeated clicks.
+- [x] Prevent duplicate launches from rapid repeated clicks (PR #11 single-flight guard).
 - [ ] **E2E and corrections:** verify real harness activation, exact Codex task selection, terminal app fallback, missing-app errors, rapid clicks, and completion races; confirm no new agent session or prompt is created; fix, rerun, harden, and merge.
 
 ### Epic 7 — Minimal settings and setup
@@ -611,6 +611,7 @@ Maintain this table in the plan:
 | [#8 `feat: add rounded-square status tile UI`](https://github.com/alxbra/agent-status-tiles/pull/8) | Isolated rounded-square tile renderer, magnification, overflow, keyboard interaction, and visual fixtures | 1 completed CLI pass; 1 valid finding fixed | 2 | 94 unit tests, 3 Electron smoke tests, 22 browser fixture tests; final head `febe543d76a4e8d052b85c8e044bf612f471a1d3`; [CI run 34987937805](https://github.com/alxbra/agent-status-tiles/actions/runs/34987937805); [audit comment](https://github.com/alxbra/agent-status-tiles/pull/8#issuecomment-5682973864) | `1f3c523465de0cff9eb2cbafb65a04cb347ce301` |
 | [#9 `build/helper packaging`](https://github.com/alxbra/agent-status-tiles/pull/9) | Unsigned arm64/x64 packaging for the existing native hook helper | 1 completed CLI pass; 1 valid documentation finding fixed | 2 | 104 TypeScript unit tests, 11 native helper tests, 25 E2E tests (3 Electron and 22 browser), format/lint/type/build checks, and unsigned arm64/x64 resource validation; [CI run 34991704461](https://github.com/alxbra/agent-status-tiles/actions/runs/34991704461), [native run 34991704642](https://github.com/alxbra/agent-status-tiles/actions/runs/34991704642), [package run 34991704417](https://github.com/alxbra/agent-status-tiles/actions/runs/34991704417); [audit comment](https://github.com/alxbra/agent-status-tiles/pull/9#issuecomment-5683519994) | `c9905833628a533f7aadaf93ff82dfd0d8c9c94f` |
 | [#10 `feat: add presentational settings view`](https://github.com/alxbra/agent-status-tiles/pull/10) | Renderer-only stock-shadcn Settings view, controlled provider/display/preferences presentation, and browser fixture | 1 completed CLI pass; 0 findings | 2 | Final local validation at `d07b3a3`: 104 unit tests, 3 Electron smoke tests, 29 browser fixture tests, format/lint/type/build checks; [CI run 34992343659](https://github.com/alxbra/agent-status-tiles/actions/runs/34992343659); [package run 34992343684](https://github.com/alxbra/agent-status-tiles/actions/runs/34992343684); [audit comment](https://github.com/alxbra/agent-status-tiles/pull/10#issuecomment-5683612055) | `07b399fb5d6b8b8bac696f599860a02797bd464b` |
+| [#11 `feat: add application navigation`](https://github.com/alxbra/agent-status-tiles/pull/11) | Main-only macOS navigation primitive for validated Codex, Claude Desktop, qualified terminal, and unknown-owner selection results | 1 completed CLI pass; 0 findings (2 rate-limited attempts were not passes) | 2 | 121 unit tests, 32 E2E tests (3 Electron and 29 browser), format/lint/type/build checks; standalone process, target-validation, single-flight, and dispatch tests; live activation and native acceptance pending | Open; no merge SHA |
 
 Foundation review corrections included strict IPC sender/frame validation, same-host renderer navigation checks, supported Node engine ranges, formatter coverage, and recovery after a failed settings-window load. No signing or notarization was claimed; Apple Developer credentials remain a release dependency.
 
@@ -658,6 +659,18 @@ format/lint/type/build checks, and no live provider or native settings wiring;
 see [CI run 34992343659](https://github.com/alxbra/agent-status-tiles/actions/runs/34992343659),
 [package run 34992343684](https://github.com/alxbra/agent-status-tiles/actions/runs/34992343684),
 and the [audit comment](https://github.com/alxbra/agent-status-tiles/pull/10#issuecomment-5683612055).
+
+Application-navigation PR #11 remains open pending merge. It completed one
+CodeRabbit CLI pass with zero findings; two earlier rate-limited attempts were
+not counted as passes. QA1 consolidated process-state flags, renamed internal
+helpers, and strengthened output/timeout assertions; QA2 found only the final
+test-helper names, now corrected. The passes covered process ownership and
+cleanup, validated Codex task-link dispatch, Claude Desktop activation,
+qualified terminal activation, the unknown-owner selection-required result,
+and single-flight behavior. Final validation passed 121 unit tests and 32 E2E
+tests (3 Electron and 29 browser), plus format/lint/type/build checks. Live harness
+activation, task selection confirmation, terminal ownership discovery, fallback
+UI, acknowledgement wiring, and native acceptance remain unchecked.
 
 Record corrections made after review and the commit used for final validation.
 

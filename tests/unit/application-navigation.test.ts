@@ -17,7 +17,7 @@ import {
 const codexId = '019f6b6d-644d-7701-8858-9da6837aaaaa';
 const claudeId = '019f6b6d-644d-7701-8858-9da6837aaaab';
 
-function ok(): ProcessResult {
+function createSuccessfulResult(): ProcessResult {
   return { exitCode: 0, stdout: '', stderr: '', hasTimedOut: false, isCleanupConfirmed: true };
 }
 
@@ -38,11 +38,11 @@ class FakeChild extends EventEmitter {
   }
 }
 
-function fakeFactory(child: FakeChild): ProcessFactory {
+function createFakeFactory(child: FakeChild): ProcessFactory {
   return () => child as unknown as ChildProcess;
 }
 
-function runnerFor(result: ProcessResult = ok()) {
+function createRunner(result: ProcessResult = createSuccessfulResult()) {
   const calls: Array<{ executable: string; args: readonly string[] }> = [];
   const run = vi.fn(async (executable: string, args: readonly string[]) => {
     calls.push({ executable, args: [...args] });
@@ -53,7 +53,7 @@ function runnerFor(result: ProcessResult = ok()) {
 
 describe('macOS application navigation', () => {
   it('opens the validated Codex task only after foregrounding Codex', async () => {
-    const { calls, run } = runnerFor();
+    const { calls, run } = createRunner();
     const pause = vi.fn(() => Promise.resolve());
     const navigator = new MacOsNavigator(run, pause, 'darwin');
 
@@ -76,7 +76,7 @@ describe('macOS application navigation', () => {
   });
 
   it('rejects hostile or mismatched targets without invoking open', async () => {
-    const { calls, run } = runnerFor();
+    const { calls, run } = createRunner();
     const navigator = new MacOsNavigator(
       run,
       vi.fn(() => Promise.resolve()),
@@ -121,7 +121,7 @@ describe('macOS application navigation', () => {
   });
 
   it('reports an unsupported platform without attempting activation', async () => {
-    const { calls, run } = runnerFor();
+    const { calls, run } = createRunner();
     const navigator = new MacOsNavigator(
       run,
       vi.fn(() => Promise.resolve()),
@@ -140,7 +140,7 @@ describe('macOS application navigation', () => {
   });
 
   it('activates Claude without fabricating a session link', async () => {
-    const { calls, run } = runnerFor();
+    const { calls, run } = createRunner();
     const navigator = new MacOsNavigator(
       run,
       vi.fn(() => Promise.resolve()),
@@ -165,7 +165,7 @@ describe('macOS application navigation', () => {
   });
 
   it('activates only the selected fixed terminal application', async () => {
-    const { calls, run } = runnerFor();
+    const { calls, run } = createRunner();
     const navigator = new MacOsNavigator(
       run,
       vi.fn(() => Promise.resolve()),
@@ -186,7 +186,7 @@ describe('macOS application navigation', () => {
   });
 
   it('returns a selection-required result for unknown terminal ownership', async () => {
-    const { calls, run } = runnerFor();
+    const { calls, run } = createRunner();
     const navigator = new MacOsNavigator(
       run,
       vi.fn(() => Promise.resolve()),
@@ -210,7 +210,7 @@ describe('macOS application navigation', () => {
   });
 
   it('reports missing apps and timeouts without exposing process output', async () => {
-    const missing = runnerFor({
+    const missing = createRunner({
       exitCode: 1,
       stdout: 'ignored stdout',
       stderr: 'Unable to find application by bundle identifier',
@@ -236,7 +236,7 @@ describe('macOS application navigation', () => {
       reason: 'missing-application',
     });
 
-    const timeout = runnerFor({
+    const timeout = createRunner({
       exitCode: null,
       stdout: 'secret',
       stderr: 'secret',
@@ -263,7 +263,7 @@ describe('macOS application navigation', () => {
     const run = vi.fn(async (executable: string, args: readonly string[]) => {
       calls.push({ executable, args: [...args] });
       return calls.length === 1
-        ? ok()
+        ? createSuccessfulResult()
         : {
             exitCode: 1,
             stdout: '',
@@ -298,7 +298,7 @@ describe('macOS application navigation', () => {
   it('allows one navigation at a time and reports a concurrent request as busy', async () => {
     let release!: () => void;
     const firstProcess = new Promise<ProcessResult>((resolve) => {
-      release = () => resolve(ok());
+      release = () => resolve(createSuccessfulResult());
     });
     const run = vi.fn(() => firstProcess);
     const navigator = new MacOsNavigator(
@@ -461,7 +461,7 @@ describe('macOS application navigation', () => {
   it('maps an unconfirmed process cleanup to an explicit navigation failure', async () => {
     const child = new FakeChild('false');
     const navigator = new MacOsNavigator(
-      createNavigationProcessRunner(fakeFactory(child)),
+      createNavigationProcessRunner(createFakeFactory(child)),
       vi.fn(() => Promise.resolve()),
       'darwin',
     );
