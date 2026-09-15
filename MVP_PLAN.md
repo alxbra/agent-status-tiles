@@ -1,7 +1,7 @@
 # Agent Status Tiles — MVP Implementation Plan
 
 **Document:** `MVP_PLAN.md` in the project root.  
-**Document status:** Implementation in progress; repository bootstrap and the Epic 0 application foundation are merged. Fixture evidence and later epics remain pending.  
+**Document status:** Implementation in progress; repository bootstrap and the Epic 0 application foundation are merged. Fixture evidence and later epics remain pending.
 **Repository:** [alxbra/agent-status-tiles](https://github.com/alxbra/agent-status-tiles)
 
 ## 1. Product and release target
