@@ -80,6 +80,10 @@ function finiteOr(value: number | undefined, fallback: number): number {
   return value !== undefined && Number.isFinite(value) ? value : fallback;
 }
 
+export function normalizeStripWidth(width?: number): number {
+  return Math.max(DEFAULT_STRIP_WIDTH, finiteOr(width, DEFAULT_STRIP_WIDTH));
+}
+
 /** Smoothstep falloff keeps adjacent tiles calm while retaining a two-slot influence radius. */
 export function magnificationInfluence(pointerY: number | undefined, slotCenterY: number): number {
   if (pointerY === undefined || !Number.isFinite(pointerY)) return 0;
@@ -231,7 +235,7 @@ export function layoutTiles(
   options: TileLayoutOptions,
 ): TileLayout {
   const height = Math.max(0, finiteOr(options.height, DEFAULT_STRIP_HEIGHT));
-  const width = Math.max(DEFAULT_STRIP_WIDTH, finiteOr(options.width, DEFAULT_STRIP_WIDTH));
+  const width = normalizeStripWidth(options.width);
   const visibleCount = Math.min(
     sessions.length,
     visibleSlotCount(height, finiteOr(options.maxVisible, MAX_VISIBLE_TILES)),

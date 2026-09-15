@@ -61,6 +61,8 @@ export function Fixture(): ReactElement {
   const forceError = query.get('error') === '1';
   const visualStates = query.get('visual') === 'all';
   const theme = query.get('theme') === 'dark' ? 'dark' : 'light';
+  const widthQuery = query.get('width');
+  const width = widthQuery === null ? undefined : Number(widthQuery);
   document.body.dataset.fixtureTheme = theme;
   const [sessions, setSessions] = useState<readonly SessionSnapshot[]>(() =>
     makeSessions(count, forceError, visualStates),
@@ -73,6 +75,7 @@ export function Fixture(): ReactElement {
       reducedMotion={reducedMotion}
       backgroundTone={theme}
       height={480}
+      width={width}
       onOpenSession={(target) => {
         window.__fixtureOpenTarget = target;
       }}

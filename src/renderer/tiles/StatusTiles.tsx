@@ -17,6 +17,7 @@ import {
   DEFAULT_STRIP_HEIGHT,
   DEFAULT_STRIP_WIDTH,
   layoutTiles,
+  normalizeStripWidth,
   TILE_CONTENT_SIZE,
   type TileHitRegion,
 } from './geometry';
@@ -162,6 +163,7 @@ export function StatusTiles({
   );
   const prefersReducedMotion = usePrefersReducedMotion();
   const motionReduced = prefersReducedMotion || reducedMotion === true;
+  const effectiveWidth = normalizeStripWidth(width);
   const visibleSessions = useMemo(() => visibleTileSessions(sessions), [sessions]);
   visibleSessionsRef.current = visibleSessions;
 
@@ -194,11 +196,11 @@ export function StatusTiles({
   const baseLayout = useMemo(
     () =>
       layoutTiles(displayedSessions, {
-        width,
+        width: effectiveWidth,
         height: measuredHeight,
         scrollOffset,
       }),
-    [displayedSessions, measuredHeight, scrollOffset, width],
+    [displayedSessions, effectiveWidth, measuredHeight, scrollOffset],
   );
   const focusedTile =
     focusedIndex === null
@@ -208,13 +210,15 @@ export function StatusTiles({
   const layout = useMemo(
     () =>
       layoutTiles(displayedSessions, {
-        width,
+        width: effectiveWidth,
         height: measuredHeight,
         pointer:
-          effectivePointerY === undefined ? undefined : { x: width - 1, y: effectivePointerY },
+          effectivePointerY === undefined
+            ? undefined
+            : { x: effectiveWidth - 1, y: effectivePointerY },
         scrollOffset,
       }),
-    [displayedSessions, effectivePointerY, measuredHeight, scrollOffset, width],
+    [displayedSessions, effectivePointerY, effectiveWidth, measuredHeight, scrollOffset],
   );
 
   useEffect(() => {
@@ -385,7 +389,7 @@ export function StatusTiles({
 
   if (displayedSessions.length === 0 && visibleSessions.length === 0) return null;
 
-  const rootStyle = { width: `${width}px` } satisfies CSSProperties;
+  const rootStyle = { width: `${effectiveWidth}px` } satisfies CSSProperties;
   const indicatorStyle = {
     color: backgroundTone === 'dark' ? TILE_COLORS.neutral : TILE_COLORS.glyph,
   } satisfies CSSProperties;

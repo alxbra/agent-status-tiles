@@ -5,6 +5,7 @@ import {
   DEFAULT_STRIP_WIDTH,
   layoutTiles,
   minimumHeightForSlots,
+  normalizeStripWidth,
   surfacesHaveMinimumGap,
   TILE_HIT_SIZE,
   TILE_RADIUS,
@@ -50,6 +51,13 @@ function expectHitRegionsDoNotOverlap(layout: ReturnType<typeof layoutTiles>): v
 }
 
 describe('status tile geometry', () => {
+  it('normalizes narrow and non-finite strip widths once at the minimum', () => {
+    expect(normalizeStripWidth(72)).toBe(DEFAULT_STRIP_WIDTH);
+    expect(normalizeStripWidth(Number.NaN)).toBe(DEFAULT_STRIP_WIDTH);
+    expect(normalizeStripWidth(Number.POSITIVE_INFINITY)).toBe(DEFAULT_STRIP_WIDTH);
+    expect(normalizeStripWidth(120)).toBe(120);
+  });
+
   it('keeps collapsed tiles square, colored-only, and anchored to the right edge', () => {
     const layout = layoutTiles(sessions(1), { width: DEFAULT_STRIP_WIDTH, height: 480 });
     const tile = layout.tiles[0]!;

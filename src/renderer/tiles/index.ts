@@ -9,6 +9,7 @@ export {
   MAX_VISIBLE_TILES,
   minimumHeightForSlots,
   MIN_SURFACE_GAP,
+  normalizeStripWidth,
   RIGHT_EDGE_INSET,
   sessionHitRegions,
   SLOT_SPACING,

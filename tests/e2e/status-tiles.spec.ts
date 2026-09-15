@@ -98,6 +98,15 @@ test.describe('rounded-square tile fixtures', () => {
   }
 });
 
+for (const width of ['72', 'NaN', 'Infinity']) {
+  test(`normalizes ${width} strip width to the safe minimum`, async ({ page }) => {
+    await openFixture(page, 1, `&width=${width}`);
+    await expect
+      .poll(async () => (await page.locator('.status-tiles').boundingBox())?.width)
+      .toBe(88);
+  });
+}
+
 test('magnification survives a pointer sweep through transparent inter-tile gaps', async ({
   page,
 }) => {
