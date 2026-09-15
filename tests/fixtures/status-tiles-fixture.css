@@ -1,0 +1,23 @@
+html,
+body,
+#fixture-root {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  overflow: hidden;
+  background: #242424;
+}
+
+#fixture-root {
+  display: flex;
+  justify-content: flex-end;
+}
+
+#fixture-root > .status-tiles {
+  height: 480px;
+  margin: 0;
+  pointer-events: auto;
+}
