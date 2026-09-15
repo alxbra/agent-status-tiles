@@ -849,6 +849,43 @@ test('waits for stock context-menu dismissal instead of dismissing on right-clic
     .toBe('codex:fixture-0');
 });
 
+test('bounds a maximum-length single-line tooltip without changing its accessible name', async ({
+  page,
+}) => {
+  await openFixture(page, 1);
+  const maximumTitle = 'T'.repeat(256);
+  await page.evaluate((title) => {
+    window.__setFixtureSessions?.([
+      {
+        id: 'codex:fixture-long-title',
+        provider: 'codex',
+        surface: 'desktop',
+        title,
+        status: 'working',
+        updatedAt: 1,
+        lastTurnStartedAt: 1,
+        isTopLevel: true,
+        isArchived: false,
+        canOpen: true,
+      },
+    ]);
+  }, maximumTitle);
+
+  const tile = page.getByRole('option', {
+    name: `${maximumTitle}, OpenAI, working`,
+  });
+  await tile.hover();
+  const tooltip = page.locator('[data-slot="tooltip-content"]');
+  await expect(tooltip).toBeVisible();
+  const bounds = await tooltip.boundingBox();
+  if (bounds === null) throw new Error('Tooltip has no bounds');
+  const viewport = page.viewportSize();
+  if (viewport === null) throw new Error('Fixture has no viewport');
+  expect(bounds.x).toBeGreaterThanOrEqual(0);
+  expect(bounds.x + bounds.width).toBeLessThanOrEqual(viewport.width);
+  await expect(tile).toHaveAccessibleName(`${maximumTitle}, OpenAI, working`);
+});
+
 async function captureVisualEvidence(page: Page, scaleLabel: string): Promise<void> {
   for (const theme of ['light', 'dark'] as const) {
     await openFixture(page, 6, `&visual=all&theme=${theme}`);

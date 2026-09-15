@@ -17,7 +17,11 @@ import { MAX_OVERLAY_HIT_REGIONS, type OverlayHitRegion } from '../shared/overla
 export { MAX_OVERLAY_HIT_REGIONS } from '../shared/overlay-ipc';
 export type { OverlayHitRegion } from '../shared/overlay-ipc';
 
-export const OVERLAY_WINDOW_WIDTH = 88;
+/**
+ * The transparent native window includes room for the stock tooltip and
+ * context menu. StatusTiles keeps its own 88px right-aligned strip inside it.
+ */
+export const OVERLAY_WINDOW_WIDTH = 360;
 export const OVERLAY_WINDOW_HEIGHT = 480;
 export interface OverlayController {
   getWindow(): BrowserWindow | null;

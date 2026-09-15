@@ -115,7 +115,7 @@ test('creates a hidden nonactivating overlay in the primary work area', async ()
 
     const shell = await application.evaluate(({ BrowserWindow, app, screen }) => {
       const workArea = screen.getPrimaryDisplay().workArea;
-      const width = Math.max(1, Math.min(88, workArea.width));
+      const width = Math.max(1, Math.min(360, workArea.width));
       const height = Math.max(1, Math.min(480, workArea.height));
       return {
         dockVisible: app.dock?.isVisible() ?? false,
@@ -218,6 +218,89 @@ for (const testSessionCount of [0, 1, 12, 30]) {
     }
   });
 }
+
+for (const testSessionCount of [1, 12]) {
+  test(`keeps portal hit regions bounded for ${String(testSessionCount)} synthetic sessions`, async () => {
+    test.skip(process.platform !== 'darwin', 'the desktop shell targets macOS');
+    const userDataDir = await mkdtemp(join(tmpdir(), 'agent-status-tiles-portal-e2e-'));
+    let application: ElectronApplication | undefined;
+
+    try {
+      application = await launch(userDataDir, testSessionCount);
+      await settingsWindow(application);
+      const page = await overlayWindow(application);
+      await expect(page.locator('.status-tiles__tile')).toHaveCount(testSessionCount);
+
+      const firstTile = page.locator('.status-tiles__tile').first();
+      await firstTile.hover();
+      const tooltip = page.locator('[data-slot="tooltip-content"]');
+      await expect(tooltip).toBeVisible();
+      const tooltipBounds = await tooltip.boundingBox();
+      const viewport = await page.evaluate(() => ({
+        width: window.innerWidth,
+        height: window.innerHeight,
+      }));
+      if (tooltipBounds === null) throw new Error('Tooltip has no bounds');
+      expect(tooltipBounds.x).toBeGreaterThanOrEqual(0);
+      expect(tooltipBounds.y).toBeGreaterThanOrEqual(0);
+      expect(tooltipBounds.x + tooltipBounds.width).toBeLessThanOrEqual(viewport.width);
+      expect(tooltipBounds.y + tooltipBounds.height).toBeLessThanOrEqual(viewport.height);
+
+      await firstTile.click({ button: 'right' });
+      const contextMenu = page.locator('[data-slot="context-menu-content"]');
+      await expect(contextMenu).toBeVisible();
+      const contextMenuBounds = await contextMenu.boundingBox();
+      if (contextMenuBounds === null) throw new Error('Context menu has no bounds');
+      expect(contextMenuBounds.x).toBeGreaterThanOrEqual(0);
+      expect(contextMenuBounds.y).toBeGreaterThanOrEqual(0);
+      expect(contextMenuBounds.x + contextMenuBounds.width).toBeLessThanOrEqual(viewport.width);
+      expect(contextMenuBounds.y + contextMenuBounds.height).toBeLessThanOrEqual(viewport.height);
+
+      await page.mouse.move(1, 1);
+      await expect(contextMenu).toBeHidden();
+
+      const rejected = await page.evaluate(() => {
+        const invalidNegative = window.agentStatusTilesOverlay.publishHitRegions([
+          { x: -1, y: 0, width: 1, height: 1 },
+        ]);
+        const tooMany = window.agentStatusTilesOverlay.publishHitRegions(
+          Array.from({ length: 15 }, () => ({ x: 0, y: 0, width: 1, height: 1 })),
+        );
+        const outOfBounds = window.agentStatusTilesOverlay.publishHitRegions([
+          { x: window.innerWidth - 1, y: 0, width: 2, height: 1 },
+        ]);
+        return Promise.all([invalidNegative, tooMany, outOfBounds]);
+      });
+      expect(rejected).toEqual([false, false, false]);
+    } finally {
+      await closeApplication(application);
+      await rm(userDataDir, { recursive: true, force: true });
+    }
+  });
+}
+
+test('keeps an actionable native context menu reachable', async () => {
+  test.skip(process.platform !== 'darwin', 'the desktop shell targets macOS');
+  const userDataDir = await mkdtemp(join(tmpdir(), 'agent-status-tiles-menu-e2e-'));
+  let application: ElectronApplication | undefined;
+
+  try {
+    application = await launch(userDataDir, 4);
+    await settingsWindow(application);
+    const page = await overlayWindow(application);
+    const errorTile = page.locator('.status-tiles__tile[data-status="error"]');
+    await expect(errorTile).toHaveCount(1);
+
+    await errorTile.click({ button: 'right' });
+    const dismissItem = page.getByRole('menuitem', { name: 'Dismiss error' });
+    await expect(dismissItem).toBeEnabled();
+    await dismissItem.click();
+    await expect(dismissItem).toBeHidden();
+  } finally {
+    await closeApplication(application);
+    await rm(userDataDir, { recursive: true, force: true });
+  }
+});
 
 test('keeps a single application instance for one user-data directory', async () => {
   const userDataDir = await mkdtemp(join(tmpdir(), 'agent-status-tiles-e2e-'));
