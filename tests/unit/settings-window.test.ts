@@ -90,4 +90,23 @@ describe('Settings window load recovery', () => {
     expect(showSettingsWindow()).toBe(secondWindow);
     expect(electronMocks.BrowserWindow).toHaveBeenCalledTimes(2);
   });
+
+  it('refreshes native settings whenever an existing window regains focus', async () => {
+    const window = createWindowMock(false);
+    window.loadFile.mockReturnValue(new Promise(() => undefined));
+    mockBrowserWindows(window);
+    const onFocus = vi.fn();
+    const { showSettingsWindow } = await import('../../src/main/settings-window');
+
+    showSettingsWindow(onFocus);
+    const focusRegistration = window.on.mock.calls.find(([event]) => event === 'focus');
+    const focusListener = focusRegistration?.[1] as (() => void) | undefined;
+    expect(focusListener).toBeTypeOf('function');
+
+    focusListener?.();
+
+    expect(onFocus).toHaveBeenCalledOnce();
+    showSettingsWindow(onFocus);
+    expect(window.focus).toHaveBeenCalledOnce();
+  });
 });
