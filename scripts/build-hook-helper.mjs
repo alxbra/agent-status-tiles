@@ -7,13 +7,20 @@ import { fileURLToPath } from 'node:url';
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const manifestPath = join(repositoryRoot, 'crates', 'hook-helper', 'Cargo.toml');
+const targetDirectory = join(repositoryRoot, 'crates', 'hook-helper', 'target');
 const defaultOutputRoot = join(repositoryRoot, 'build', 'hook-helper');
 const logger = new Console(process.stdout, process.stderr);
+const MH_EXECUTE = 0x2;
+const MACH_HEADER_64_BYTES = 32;
 
 export const ARCHITECTURES = Object.freeze({
   arm64: Object.freeze({ target: 'aarch64-apple-darwin', cpuType: 0x0100000c }),
   x64: Object.freeze({ target: 'x86_64-apple-darwin', cpuType: 0x01000007 }),
 });
+
+function isSupportedArchitecture(arch) {
+  return typeof arch === 'string' && Object.hasOwn(ARCHITECTURES, arch);
+}
 
 const usage = `Usage: node scripts/build-hook-helper.mjs [--arch arm64|x64|both] [--cargo PATH]
 
@@ -52,11 +59,11 @@ export function parseBuildOptions(argv, environment = process.env) {
   };
 }
 
-export function resourcePath(arch) {
-  if (!(arch in ARCHITECTURES)) {
+export function helperBuildPath(arch) {
+  if (!isSupportedArchitecture(arch)) {
     throw new Error(`Unsupported helper architecture: ${arch}`);
   }
-  return join('hook-helper', arch, 'hook-helper');
+  return join(defaultOutputRoot, arch, 'hook-helper');
 }
 
 function describeCommandFailure(result, cargoPath, target) {
@@ -72,37 +79,53 @@ function describeCommandFailure(result, cargoPath, target) {
 }
 
 function runCargo(cargoPath, target) {
-  const result = spawnSync(
-    cargoPath,
-    ['build', '--manifest-path', manifestPath, '--locked', '--release', '--target', target],
-    {
-      cwd: repositoryRoot,
-      encoding: 'utf8',
-      stdio: 'pipe',
-    },
-  );
+  const result = spawnSync(cargoPath, cargoBuildArguments(target), {
+    cwd: repositoryRoot,
+    encoding: 'utf8',
+    stdio: 'pipe',
+  });
   if (result.status !== 0 || result.error) {
     throw new Error(describeCommandFailure(result, cargoPath, target));
   }
 }
 
+export function cargoBuildArguments(target) {
+  return [
+    'build',
+    '--manifest-path',
+    manifestPath,
+    '--locked',
+    '--release',
+    '--target',
+    target,
+    '--target-dir',
+    targetDirectory,
+  ];
+}
+
 export function validateMachOArchitecture(binaryPath, arch) {
-  const architecture = ARCHITECTURES[arch];
-  if (!architecture) {
+  if (!isSupportedArchitecture(arch)) {
     throw new Error(`Unsupported helper architecture: ${arch}`);
   }
+  const architecture = ARCHITECTURES[arch];
   let bytes;
   try {
     bytes = readFileSync(binaryPath);
   } catch (error) {
     throw new Error(`Unable to read built helper for ${arch}: ${error.message}`, { cause: error });
   }
-  if (bytes.length < 8 || bytes.readUInt32LE(0) !== 0xfeedfacf) {
+  if (bytes.length < MACH_HEADER_64_BYTES) {
+    throw new Error(`Built helper for ${arch} has a truncated 64-bit Mach-O header`);
+  }
+  if (bytes.readUInt32LE(0) !== 0xfeedfacf) {
     throw new Error(`Built helper for ${arch} is not a 64-bit macOS Mach-O executable`);
   }
   const cpuType = bytes.readInt32LE(4);
   if (cpuType !== architecture.cpuType) {
     throw new Error(`Built helper architecture mismatch: expected ${arch}`);
+  }
+  if (bytes.readUInt32LE(12) !== MH_EXECUTE) {
+    throw new Error(`Built helper for ${arch} is not an executable Mach-O image`);
   }
 }
 
@@ -121,7 +144,14 @@ function assertRegularExecutable(path, arch) {
   validateMachOArchitecture(path, arch);
 }
 
-function clearOutputRoot(outputRoot) {
+export function validateBuiltHelper(arch) {
+  const path = helperBuildPath(arch);
+  assertRegularExecutable(path, arch);
+  return path;
+}
+
+function clearOutputRoot() {
+  const outputRoot = defaultOutputRoot;
   try {
     if (lstatSync(outputRoot).isSymbolicLink()) {
       throw new Error(`Refusing to replace symlinked helper output: ${outputRoot}`);
@@ -135,7 +165,18 @@ function clearOutputRoot(outputRoot) {
   mkdirSync(outputRoot, { recursive: true, mode: 0o755 });
 }
 
-export function buildHookHelper({ cargoPath, architectures, outputRoot = defaultOutputRoot }) {
+function checkCargo(cargoPath) {
+  const result = spawnSync(cargoPath, ['--version'], {
+    cwd: repositoryRoot,
+    encoding: 'utf8',
+    stdio: 'pipe',
+  });
+  if (result.status !== 0 || result.error) {
+    throw new Error(describeCommandFailure(result, cargoPath, 'the configured toolchain'));
+  }
+}
+
+function buildHookHelper({ cargoPath, architectures }) {
   if (process.platform !== 'darwin') {
     throw new Error('hook-helper packaging supports macOS only');
   }
@@ -143,27 +184,20 @@ export function buildHookHelper({ cargoPath, architectures, outputRoot = default
     throw new Error(`Missing hook-helper Cargo manifest: ${manifestPath}`);
   }
   for (const arch of architectures) {
-    if (!(arch in ARCHITECTURES)) {
+    if (!isSupportedArchitecture(arch)) {
       throw new Error(`Unsupported helper architecture: ${arch}`);
     }
   }
-  clearOutputRoot(outputRoot);
+  checkCargo(cargoPath);
+  clearOutputRoot();
 
   for (const arch of architectures) {
     const architecture = ARCHITECTURES[arch];
     runCargo(cargoPath, architecture.target);
-    const cargoBinary = join(
-      repositoryRoot,
-      'crates',
-      'hook-helper',
-      'target',
-      architecture.target,
-      'release',
-      'hook-helper',
-    );
+    const cargoBinary = join(targetDirectory, architecture.target, 'release', 'hook-helper');
     assertRegularExecutable(cargoBinary, arch);
 
-    const destination = join(outputRoot, arch, 'hook-helper');
+    const destination = helperBuildPath(arch);
     mkdirSync(dirname(destination), { recursive: true, mode: 0o755 });
     copyFileSync(cargoBinary, destination);
     chmodSync(destination, 0o755);

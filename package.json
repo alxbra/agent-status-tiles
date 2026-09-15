@@ -59,6 +59,7 @@
       "out/**/*"
     ],
     "asar": true,
+    "beforePack": "./scripts/validate-hook-helper-pack.mjs",
     "mac": {
       "category": "public.app-category.utilities",
       "extraResources": [

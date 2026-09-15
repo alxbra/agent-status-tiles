@@ -9,5 +9,7 @@ export interface BuildOptions {
 }
 
 export function parseBuildOptions(argv: string[], environment?: NodeJS.ProcessEnv): BuildOptions;
-export function resourcePath(arch: string): string;
+export function helperBuildPath(arch: string): string;
+export function cargoBuildArguments(target: string): string[];
 export function validateMachOArchitecture(binaryPath: string, arch: HelperArch): void;
+export function validateBuiltHelper(arch: HelperArch): string;

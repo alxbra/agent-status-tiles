@@ -34,6 +34,9 @@ targets, build output, and architecture mismatches fail the build clearly.
 
 The helper is copied by electron-builder's `extraResources` configuration,
 which places it under macOS `Contents/Resources` rather than inside ASAR. The
+macOS `beforePack` hook validates the helper matching the selected Electron
+architecture, so direct `electron-builder --dir` packaging also fails clearly
+when that resource is missing, non-executable, truncated, or the wrong arch.
 developer package is unsigned: these checks do not establish code-signing,
 notarization, or Gatekeeper acceptance. See electron-builder's
 [application contents documentation](https://www.electron.build/docs/contents/)
