@@ -3,12 +3,26 @@ import { app, ipcMain, type IpcMainInvokeEvent } from 'electron';
 import { closeSettingsWindow, getSettingsWindow, showSettingsWindow } from './settings-window';
 import { createMenuBar, type MenuBarController } from './menu-bar';
 import { createOverlayController, type OverlayController } from './overlay-controller';
+import { registerOverlayIpcHandlers } from './overlay-ipc';
+import { createStartupOverlayState } from './test-session-source';
 import packageJson from '../../package.json';
 import { IPC_CHANNELS } from '../shared/ipc';
+import type { OverlayState } from '../shared/overlay-ipc';
+import type { SessionSnapshot } from '../shared/session';
 
 const hasSingleInstanceLock = app.requestSingleInstanceLock();
 let menuBar: MenuBarController | null = null;
 let overlayController: OverlayController | null = null;
+let removeOverlayIpcHandlers: (() => void) | null = null;
+const overlayState: OverlayState = createStartupOverlayState();
+
+function isQualifyingSession(session: SessionSnapshot): boolean {
+  return session.isTopLevel && !session.isArchived && session.status !== 'idle';
+}
+
+function qualifyingSessionCount(sessions: readonly SessionSnapshot[]): number {
+  return sessions.filter(isQualifyingSession).length;
+}
 
 function assertSettingsSender(event: IpcMainInvokeEvent): void {
   const settingsWindow = getSettingsWindow();
@@ -50,6 +64,8 @@ if (!hasSingleInstanceLock) {
   });
 
   app.on('will-quit', () => {
+    removeOverlayIpcHandlers?.();
+    removeOverlayIpcHandlers = null;
     menuBar?.destroy();
     overlayController?.destroy();
     menuBar = null;
@@ -62,6 +78,12 @@ if (!hasSingleInstanceLock) {
     }
 
     overlayController = createOverlayController();
+    overlayController.setQualifyingSessionCount(qualifyingSessionCount(overlayState.sessions));
+    removeOverlayIpcHandlers = registerOverlayIpcHandlers({
+      getWindow: () => overlayController?.getWindow() ?? null,
+      getState: () => overlayState,
+      setHitRegions: (regions) => overlayController?.setHitRegions(regions) ?? false,
+    });
     menuBar = createMenuBar({
       showOverlay: () => overlayController?.setVisible(true),
       hideOverlay: () => overlayController?.setVisible(false),

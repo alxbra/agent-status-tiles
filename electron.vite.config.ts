@@ -6,7 +6,16 @@ import { defineConfig } from 'electron-vite';
 
 export default defineConfig({
   main: {},
-  preload: {},
+  preload: {
+    build: {
+      rollupOptions: {
+        input: {
+          index: resolve(__dirname, 'src/preload/index.ts'),
+          overlay: resolve(__dirname, 'src/preload/overlay.ts'),
+        },
+      },
+    },
+  },
   renderer: {
     plugins: [react(), tailwindcss()],
     build: {

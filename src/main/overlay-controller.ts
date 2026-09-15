@@ -12,18 +12,13 @@ import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 import { protectWebContents } from './security';
+import { MAX_OVERLAY_HIT_REGIONS, type OverlayHitRegion } from '../shared/overlay-ipc';
+
+export { MAX_OVERLAY_HIT_REGIONS } from '../shared/overlay-ipc';
+export type { OverlayHitRegion } from '../shared/overlay-ipc';
 
 export const OVERLAY_WINDOW_WIDTH = 88;
 export const OVERLAY_WINDOW_HEIGHT = 480;
-export const MAX_OVERLAY_HIT_REGIONS = 12;
-
-export interface OverlayHitRegion {
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-}
-
 export interface OverlayController {
   getWindow(): BrowserWindow | null;
   setQualifyingSessionCount(count: number): void;
@@ -119,6 +114,7 @@ function createOverlayWindow(
       nodeIntegrationInSubFrames: false,
       nodeIntegrationInWorker: false,
       sandbox: true,
+      preload: join(__dirname, '../preload/overlay.js'),
     },
   });
 
