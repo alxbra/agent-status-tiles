@@ -8,14 +8,14 @@
   "packageManager": "pnpm@10.30.3",
   "main": "./out/main/index.js",
   "engines": {
-    "node": ">=20.19.0"
+    "node": "^20.19.0 || ^22.13.0 || >=24.0.0"
   },
   "scripts": {
     "dev": "electron-vite dev",
     "start": "electron-vite preview",
     "build": "electron-vite build",
-    "format": "prettier --write 'src/**/*.{ts,tsx,css,html}' 'tests/**/*.{ts,tsx}' '*.{js,mjs,json,yaml,yml}' '.github/**/*.{yml,yaml}'",
-    "format:check": "prettier --check 'src/**/*.{ts,tsx,css,html}' 'tests/**/*.{ts,tsx}' '*.{js,mjs,json,yaml,yml}' '.github/**/*.{yml,yaml}'",
+    "format": "prettier --write 'src/**/*.{ts,tsx,css,html}' 'tests/**/*.{ts,tsx}' '*.{js,mjs,ts,json,yaml,yml}' '.github/**/*.{yml,yaml}'",
+    "format:check": "prettier --check 'src/**/*.{ts,tsx,css,html}' 'tests/**/*.{ts,tsx}' '*.{js,mjs,ts,json,yaml,yml}' '.github/**/*.{yml,yaml}'",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",

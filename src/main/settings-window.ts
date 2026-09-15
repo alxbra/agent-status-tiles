@@ -89,6 +89,12 @@ export function showSettingsWindow(): BrowserWindow {
       : window.loadFile(rendererFilePath());
   void loadPromise.catch((error: unknown) => {
     console.error('Unable to load Settings window', error);
+    if (settingsWindow === window) {
+      settingsWindow = null;
+    }
+    if (!window.isDestroyed()) {
+      window.destroy();
+    }
   });
 
   return window;
