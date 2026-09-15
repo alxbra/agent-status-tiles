@@ -410,7 +410,13 @@ describe('HookJournalReader', () => {
     });
 
     await rename(active, archived);
-    await appendFile(archived, `\n${record({ event_name: 'Stop' }, 'rotating-oversized')}`);
+    await appendFile(
+      archived,
+      `${record({ event_name: 'SessionStart' }, 'rotating-oversized')}${record(
+        { event_name: 'Stop' },
+        'rotating-oversized',
+      )}`,
+    );
     const second = await reader.read([journalTarget], first.cursors);
 
     expect(second.events.map((event) => event.eventName)).toEqual(['Stop']);
