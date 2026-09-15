@@ -246,13 +246,6 @@ for (const testSessionCount of [1, 12]) {
       expect(tooltipBounds.x + tooltipBounds.width).toBeLessThanOrEqual(viewport.width);
       expect(tooltipBounds.y + tooltipBounds.height).toBeLessThanOrEqual(viewport.height);
 
-      const acceptedPortal = await page.evaluate((bounds) => {
-        return window.agentStatusTilesOverlay.publishHitRegions([
-          { x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height },
-        ]);
-      }, tooltipBounds);
-      expect(acceptedPortal).toBe(true);
-
       await firstTile.click({ button: 'right' });
       const contextMenu = page.locator('[data-slot="context-menu-content"]');
       await expect(contextMenu).toBeVisible();
@@ -262,6 +255,9 @@ for (const testSessionCount of [1, 12]) {
       expect(contextMenuBounds.y).toBeGreaterThanOrEqual(0);
       expect(contextMenuBounds.x + contextMenuBounds.width).toBeLessThanOrEqual(viewport.width);
       expect(contextMenuBounds.y + contextMenuBounds.height).toBeLessThanOrEqual(viewport.height);
+
+      await page.mouse.move(1, 1);
+      await expect(contextMenu).toBeHidden();
 
       const rejected = await page.evaluate(() => {
         const invalidNegative = window.agentStatusTilesOverlay.publishHitRegions([

@@ -2,8 +2,10 @@ import { useCallback, useEffect, useRef, useState, type ReactElement } from 'rea
 import { createRoot } from 'react-dom/client';
 
 import type { OverlayState } from '../shared/overlay-ipc';
+import { createOverlayHitRegionPublisher } from './overlay-hit-region-publisher';
 import { translateAndClipHitRegions, type OverlayPortalRect } from './overlay-hit-regions';
 import { StatusTiles } from './tiles/StatusTiles';
+import { DISMISS_TILE_PORTALS_EVENT } from './tiles/events';
 import type { TileHitRegion } from './tiles/geometry';
 import type { OpenSessionTarget } from './tiles/interaction';
 import './overlay.css';
@@ -37,9 +39,15 @@ function visiblePortalRects(): readonly OverlayPortalRect[] {
 export function OverlayApp(): ReactElement {
   const [state, setState] = useState<OverlayState>({ sessions: [], reducedMotion: false });
   const tileRegionsRef = useRef<readonly TileHitRegion[]>([]);
-  const lastPublishedRegionsRef = useRef('');
-  const pendingRegionKeysRef = useRef(new Set<string>());
-  const publicationSequenceRef = useRef(0);
+  const currentRegionsRef = useRef<ReturnType<typeof translateAndClipHitRegions>>([]);
+  const regionPublisherRef = useRef<ReturnType<typeof createOverlayHitRegionPublisher> | null>(
+    null,
+  );
+  if (regionPublisherRef.current === null) {
+    regionPublisherRef.current = createOverlayHitRegionPublisher((regions) =>
+      overlayApi.publishHitRegions(regions),
+    );
+  }
   const portalResizeObserverRef = useRef<ResizeObserver | null>(null);
   const observedPortalElementsRef = useRef(new Set<HTMLElement>());
   const animationFrameRef = useRef<number | null>(null);
@@ -70,25 +78,8 @@ export function OverlayApp(): ReactElement {
       visiblePortalRects(),
       { width: window.innerWidth, height: window.innerHeight },
     );
-    const regionsKey = JSON.stringify(regions);
-    if (
-      regionsKey === lastPublishedRegionsRef.current ||
-      pendingRegionKeysRef.current.has(regionsKey)
-    ) {
-      return;
-    }
-    const publicationSequence = publicationSequenceRef.current + 1;
-    publicationSequenceRef.current = publicationSequence;
-    pendingRegionKeysRef.current.add(regionsKey);
-    void overlayApi
-      .publishHitRegions(regions)
-      .then((accepted) => {
-        if (accepted && publicationSequence === publicationSequenceRef.current) {
-          lastPublishedRegionsRef.current = regionsKey;
-        }
-      })
-      .catch(() => undefined)
-      .finally(() => pendingRegionKeysRef.current.delete(regionsKey));
+    currentRegionsRef.current = regions;
+    regionPublisherRef.current?.update(regions);
   }, []);
 
   const schedulePortalAnimation = useCallback(() => {
@@ -171,10 +162,28 @@ export function OverlayApp(): ReactElement {
       schedulePortalAnimation();
     };
     window.addEventListener('resize', handleResize);
+    const handlePointerMove = (event: globalThis.PointerEvent): void => {
+      const hasOpenContextMenu = document.querySelector(
+        '[data-slot="context-menu-content"][data-state="open"]',
+      );
+      if (hasOpenContextMenu === null) return;
+      const isInsideInteractiveRegion = currentRegionsRef.current.some(
+        (region) =>
+          event.clientX >= region.x &&
+          event.clientX < region.x + region.width &&
+          event.clientY >= region.y &&
+          event.clientY < region.y + region.height,
+      );
+      if (!isInsideInteractiveRegion) {
+        window.dispatchEvent(new Event(DISMISS_TILE_PORTALS_EVENT));
+      }
+    };
+    window.addEventListener('pointermove', handlePointerMove);
     publishCurrentHitRegions();
 
     return () => {
       window.removeEventListener('resize', handleResize);
+      window.removeEventListener('pointermove', handlePointerMove);
       mutationObserver.disconnect();
       resizeObserver.disconnect();
       portalResizeObserverRef.current = null;
@@ -184,9 +193,8 @@ export function OverlayApp(): ReactElement {
         animationFrameRef.current = null;
       }
       tileRegionsRef.current = [];
-      lastPublishedRegionsRef.current = '';
-      pendingRegionKeysRef.current.clear();
-      publicationSequenceRef.current += 1;
+      currentRegionsRef.current = [];
+      regionPublisherRef.current?.stop();
       void overlayApi.publishHitRegions([]).catch(() => undefined);
     };
   }, [publishCurrentHitRegions, schedulePortalAnimation, syncPortalObservers]);

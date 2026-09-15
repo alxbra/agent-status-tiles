@@ -1,4 +1,4 @@
-import type { ReactElement } from 'react';
+import { useEffect, useState, type ReactElement } from 'react';
 
 import {
   ContextMenu,
@@ -7,6 +7,7 @@ import {
   ContextMenuTrigger,
 } from '../components/ui/context-menu';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../components/ui/tooltip';
+import { DISMISS_TILE_PORTALS_EVENT } from './events';
 
 interface TileContextMenuProps {
   children: ReactElement;
@@ -22,10 +23,18 @@ export function TileContextMenu({
   onDismiss,
   tooltip,
 }: TileContextMenuProps): ReactElement {
+  const [isContextMenuOpen, setIsContextMenuOpen] = useState(false);
+
+  useEffect(() => {
+    const dismiss = (): void => setIsContextMenuOpen(false);
+    window.addEventListener(DISMISS_TILE_PORTALS_EVENT, dismiss);
+    return () => window.removeEventListener(DISMISS_TILE_PORTALS_EVENT, dismiss);
+  }, []);
+
   return (
     <TooltipProvider delayDuration={350}>
       <Tooltip>
-        <ContextMenu>
+        <ContextMenu open={isContextMenuOpen} onOpenChange={setIsContextMenuOpen}>
           <TooltipTrigger asChild>
             <ContextMenuTrigger asChild>{children}</ContextMenuTrigger>
           </TooltipTrigger>
