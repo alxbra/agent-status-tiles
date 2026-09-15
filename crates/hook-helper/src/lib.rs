@@ -7,7 +7,7 @@ use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::os::fd::AsRawFd;
 use std::path::{Component, Path, PathBuf};
 use std::thread;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 pub const MAX_INPUT_BYTES: usize = 64 * 1024;
 pub const MAX_RECORD_BYTES: usize = 4 * 1024;
@@ -18,7 +18,7 @@ const MAX_ID_BYTES: usize = 256;
 const MAX_EVENT_BYTES: usize = 64;
 const MAX_PROJECT_BYTES: usize = 256;
 const MAX_NAVIGATION_BYTES: usize = 64;
-const LOCK_RETRIES: usize = 100;
+const LOCK_TIMEOUT: Duration = Duration::from_millis(500);
 const LOCK_WAIT: Duration = Duration::from_millis(5);
 
 #[derive(Debug)]
@@ -429,7 +429,11 @@ impl JournalLock {
             return Err(io::Error::other("unsafe lock path"));
         }
         set_private_file_permissions(&file)?;
-        for _ in 0..LOCK_RETRIES {
+        let deadline = Instant::now() + LOCK_TIMEOUT;
+        loop {
+            if Instant::now() >= deadline {
+                break;
+            }
             #[cfg(unix)]
             {
                 let result =
@@ -447,7 +451,11 @@ impl JournalLock {
                 let _ = file;
                 return Err(io::Error::other("advisory locking is unsupported"));
             }
-            thread::sleep(LOCK_WAIT);
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                break;
+            }
+            thread::sleep(LOCK_WAIT.min(remaining));
         }
         Err(io::Error::new(io::ErrorKind::TimedOut, "journal lock"))
     }
