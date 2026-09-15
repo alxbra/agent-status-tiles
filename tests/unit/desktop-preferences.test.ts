@@ -8,6 +8,7 @@ import {
   DEFAULT_DESKTOP_PREFERENCES,
   DesktopPreferencesStore,
   loadDesktopPreferences,
+  MAX_DESKTOP_PREFERENCES_BYTES,
   saveDesktopPreferences,
 } from '../../src/main/desktop-preferences';
 
@@ -85,5 +86,15 @@ describe('desktop preference store', () => {
 
     expect(readdirSync(directory)).toEqual([DESKTOP_PREFERENCES_FILE]);
     expect(loadDesktopPreferences(directory).preferredDisplayId).toBe('7');
+  });
+
+  it('fails closed without reading beyond the fixed preference bound', () => {
+    const directory = temporaryDirectory();
+    writeFileSync(
+      join(directory, DESKTOP_PREFERENCES_FILE),
+      Buffer.alloc(MAX_DESKTOP_PREFERENCES_BYTES + 1, 0x20),
+    );
+
+    expect(loadDesktopPreferences(directory)).toEqual(DEFAULT_DESKTOP_PREFERENCES);
   });
 });

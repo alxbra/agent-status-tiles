@@ -28,6 +28,8 @@ export interface SettingsState {
   selectedDisplayId: string;
   launchAtLogin: boolean;
   reduceMotion: boolean;
+  /** Actionable native settings failure, never diagnostic or path data. */
+  error?: string;
 }
 
 export interface DisplayPreferenceChangeRequest {
@@ -56,6 +58,7 @@ const STATE_KEYS = [
   'launchAtLogin',
   'reduceMotion',
 ] as const;
+const STATE_KEYS_WITH_ERROR = [...STATE_KEYS, 'error'] as const;
 const PROVIDER_STATE_KEYS = ['status', 'canConnect', 'canDisconnect'] as const;
 const DISPLAY_KEYS = ['id', 'label'] as const;
 const DISPLAY_REQUEST_KEYS = ['displayId'] as const;
@@ -112,7 +115,12 @@ function isSettingsDisplayOption(value: unknown): value is SettingsDisplayOption
 }
 
 export function isSettingsState(value: unknown): value is SettingsState {
-  if (!isRecord(value) || !hasExactKeys(value, STATE_KEYS)) return false;
+  if (
+    !isRecord(value) ||
+    (!hasExactKeys(value, STATE_KEYS) && !hasExactKeys(value, STATE_KEYS_WITH_ERROR))
+  ) {
+    return false;
+  }
   const providers = value.providers;
   if (!isRecord(providers)) return false;
   if (
@@ -136,7 +144,8 @@ export function isSettingsState(value: unknown): value is SettingsState {
     isSerializedDisplayId(value.selectedDisplayId) &&
     displayIds.has(value.selectedDisplayId) &&
     typeof value.launchAtLogin === 'boolean' &&
-    typeof value.reduceMotion === 'boolean'
+    typeof value.reduceMotion === 'boolean' &&
+    (value.error === undefined || isBoundedText(value.error, 512))
   );
 }
 

@@ -2,6 +2,7 @@ import { useEffect, useState, type ReactElement } from 'react';
 
 import { PRIMARY_DISPLAY_ID, type SettingsState } from '../shared/settings';
 import { SettingsView, type SettingsProviderState } from './settings';
+import { SettingsLoadSequence } from './settings-load-sequence';
 
 function useSystemAppearance(): void {
   useEffect(() => {
@@ -40,18 +41,26 @@ export function App(): ReactElement {
 
   useEffect(() => {
     let mounted = true;
-    let receivedPublishedSettings = false;
+    const loadSequence = new SettingsLoadSequence();
     const unsubscribe = window.agentStatusTiles.subscribeSettings((nextSettings) => {
-      receivedPublishedSettings = true;
-      if (mounted) setSettings(nextSettings);
+      loadSequence.markPublicationReceived();
+      if (mounted) {
+        setError(undefined);
+        setSettings(nextSettings);
+      }
     });
     void window.agentStatusTiles
       .getSettings()
       .then((nextSettings) => {
-        if (mounted && !receivedPublishedSettings) setSettings(nextSettings);
+        if (mounted && loadSequence.shouldAcceptInitialResult()) {
+          setError(undefined);
+          setSettings(nextSettings);
+        }
       })
       .catch(() => {
-        if (mounted) setError('Could not load settings. Try again.');
+        if (mounted && loadSequence.shouldAcceptInitialResult()) {
+          setError('Could not load settings. Try again.');
+        }
       });
     return () => {
       mounted = false;
@@ -63,18 +72,21 @@ export function App(): ReactElement {
     <SettingsView
       advancedDisabled
       displays={settings.displays}
-      error={error}
+      error={error ?? settings.error}
       launchAtLogin={settings.launchAtLogin}
       onDisplayChange={async (displayId) => {
         const nextSettings = await window.agentStatusTiles.setDisplayPreference(displayId);
+        setError(undefined);
         setSettings(nextSettings);
       }}
       onLaunchAtLoginChange={async (enabled) => {
         const nextSettings = await window.agentStatusTiles.setLaunchAtLogin(enabled);
+        setError(undefined);
         setSettings(nextSettings);
       }}
       onReduceMotionChange={async (enabled) => {
         const nextSettings = await window.agentStatusTiles.setReduceMotion(enabled);
+        setError(undefined);
         setSettings(nextSettings);
       }}
       providers={settings.providers}

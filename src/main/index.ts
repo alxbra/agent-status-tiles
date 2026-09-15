@@ -7,6 +7,7 @@ import { publishOverlayState, registerOverlayIpcHandlers } from './overlay-ipc';
 import { connectedDisplays, displayOptionsWithPreference, serializeDisplayId } from './display';
 import { DesktopPreferencesStore } from './desktop-preferences';
 import { publishSettingsState, registerSettingsIpcHandlers } from './settings-ipc';
+import { evaluateLoginItemSettings, shouldOpenSettingsAtStartup } from './login-item';
 import { createStartupOverlayState } from './test-session-source';
 import packageJson from '../../package.json';
 import { IPC_CHANNELS, type SettingsState } from '../shared/ipc';
@@ -22,6 +23,7 @@ let removeSettingsIpcHandlers: (() => void) | null = null;
 let removeAppIpcHandlers: (() => void) | null = null;
 let desktopPreferences: DesktopPreferencesStore | null = null;
 let overlayState: OverlayState = createStartupOverlayState(app.isPackaged);
+let requestedLoginItemState: boolean | undefined;
 
 function isQualifyingSession(session: SessionSnapshot): boolean {
   return session.isTopLevel && !session.isArchived && session.status !== 'idle';
@@ -55,6 +57,11 @@ function getSettingsState(): SettingsState {
   const preferredDisplayId = preferences?.preferredDisplayId ?? PRIMARY_DISPLAY_ID;
   const loginSettings =
     typeof app.getLoginItemSettings === 'function' ? app.getLoginItemSettings() : undefined;
+  const loginItemState =
+    loginSettings === undefined
+      ? { enabled: false }
+      : evaluateLoginItemSettings(loginSettings, requestedLoginItemState);
+  if (loginItemState.error === undefined) requestedLoginItemState = undefined;
   return {
     providers: {
       codex: unavailableProviderState(),
@@ -62,8 +69,9 @@ function getSettingsState(): SettingsState {
     },
     displays: displayOptionsWithPreference(connectedDisplays(), preferredDisplayId),
     selectedDisplayId: preferredDisplayId,
-    launchAtLogin: loginSettings?.openAtLogin === true,
+    launchAtLogin: loginItemState.enabled,
     reduceMotion: preferences?.reduceMotion ?? false,
+    ...(loginItemState.error ? { error: loginItemState.error } : {}),
   };
 }
 
@@ -131,6 +139,7 @@ if (!hasSingleInstanceLock) {
       app.dock?.hide();
     }
 
+    const startupLoginSettings = app.getLoginItemSettings();
     desktopPreferences = new DesktopPreferencesStore(app.getPath('userData'));
     const preferences = desktopPreferences.get();
     overlayState = { ...overlayState, reducedMotion: preferences.reduceMotion };
@@ -177,6 +186,7 @@ if (!hasSingleInstanceLock) {
         return state;
       },
       setLaunchAtLogin: (enabled) => {
+        requestedLoginItemState = enabled;
         app.setLoginItemSettings({ openAtLogin: enabled });
         const state = getSettingsState();
         publishSettingsState(getSettingsWindow(), state);
@@ -193,7 +203,9 @@ if (!hasSingleInstanceLock) {
       screen.off('display-removed', onDisplayTopologyChanged);
       desktopPreferences = null;
     });
-    showSettingsWindow();
+    if (shouldOpenSettingsAtStartup(startupLoginSettings)) {
+      showSettingsWindow();
+    }
     app.on('activate', () => {
       showSettingsWindow();
     });

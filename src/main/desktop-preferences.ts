@@ -7,7 +7,7 @@ import {
   lstatSync,
   mkdirSync,
   openSync,
-  readFileSync,
+  readSync,
   renameSync,
   unlinkSync,
   writeFileSync,
@@ -144,7 +144,26 @@ function readPreferencesFile(preferencesPath: string): DesktopPreferences {
         'Desktop preferences exceed the storage bound.',
       );
     }
-    payload = readFileSync(descriptor, 'utf8');
+    const buffer = Buffer.allocUnsafe(MAX_DESKTOP_PREFERENCES_BYTES + 1);
+    let bytesRead = 0;
+    while (bytesRead < buffer.byteLength) {
+      const count = readSync(
+        descriptor,
+        buffer,
+        bytesRead,
+        buffer.byteLength - bytesRead,
+        bytesRead,
+      );
+      if (count === 0) break;
+      bytesRead += count;
+    }
+    if (bytesRead > MAX_DESKTOP_PREFERENCES_BYTES) {
+      throw new DesktopPreferencesError(
+        'oversized',
+        'Desktop preferences exceed the storage bound.',
+      );
+    }
+    payload = buffer.toString('utf8', 0, bytesRead);
   } catch (error) {
     if (error instanceof DesktopPreferencesError) throw error;
     throw new DesktopPreferencesError('io', 'Unable to read desktop preferences.', error);
