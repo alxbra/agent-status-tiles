@@ -442,17 +442,24 @@ pending. Native overlay integration, portal bounds, passthrough hit testing,
 underlying-app click-through, Spaces/full-screen, and multi-display acceptance
 remain pending, so the acceptance tasks below remain unchecked.
 Formal root QA1 found and corrected the height-observer remount lifecycle,
-zero/non-finite wheel delta handling, and redundant reverse packing pass. QA2
-and merge remain pending; native overlay integration and interaction acceptance
+zero/non-finite wheel delta handling, and redundant reverse packing pass. Formal
+root QA2 found and removed the unused `TileGeometry.expanded` field; it found no
+further issues. Validation head `4130023` passed 94 unit tests and 25 E2E tests
+(3 Electron smoke tests and 22 browser fixture tests), with [CI run
+34987573632](https://github.com/alxbra/agent-status-tiles/actions/runs/34987573632).
+Merge remains pending; native overlay integration and interaction acceptance
 remain unchecked.
 
-- [ ] Implement the exact palette and rounded-square geometry at collapsed, intermediate, and expanded sizes.
-- [ ] Render provider and state icons only at expanded sizes.
-- [ ] Implement stable distance-based magnification.
-- [ ] Implement one-line tooltips, keyboard selection, and reduced motion.
-- [ ] Implement overflow scrolling and conditional overflow indicators.
-- [ ] Freeze list geometry during interaction.
-- [ ] Add visual baselines for all states, light/dark backgrounds, and display scales.
+- [x] Implement the exact palette and rounded-square geometry at collapsed, intermediate, and expanded sizes (renderer/browser verified; native integration remains pending).
+- [x] Render provider and state icons only at expanded sizes (renderer/browser verified).
+- [x] Implement stable distance-based magnification (renderer/browser verified).
+- [x] Implement one-line tooltips, keyboard selection, and reduced motion (renderer/browser verified).
+- [x] Implement overflow scrolling and conditional overflow indicators (renderer/browser verified).
+- [x] Freeze list geometry during interaction (renderer/browser verified).
+- [x] Generate browser visual fixtures/screenshots for all states, light/dark backgrounds, and 1x/2x display scales (visual evidence only; not native baseline comparison).
+- [ ] Capture and compare native visual baselines for the integrated overlay.
+- [ ] Wire the renderer into the native overlay and synchronize portal bounds and hit regions.
+- [ ] Verify native passthrough and underlying-app click-through for the integrated overlay.
 - [ ] **E2E and corrections:** exercise 1, 12, and 30 sessions; sweep the pointer across neighbors; verify no flicker, clipping, accidental activation, unexpected labels, or blocked desktop clicks; fix, rerun, harden, and merge.
 
 ### Epic 3 — Session state, ordering, and persistence
@@ -591,7 +598,7 @@ Maintain this table in the plan:
 | [#5 `feat: add atomic session persistence`](https://github.com/alxbra/agent-status-tiles/pull/5) | Atomic persisted session state and restart-safe status refresh | 1 completed CLI pass; 0 findings | 2 | 33 unit tests, 3 Electron E2E tests, format/lint/type/build checks; [CI run 34978274333](https://github.com/alxbra/agent-status-tiles/actions/runs/34978274333) | `5deb6aeb1f6dee9a5d0ab44e038102b3efb6c6fd` |
 | [#6 `feat: add bounded Codex rollout reader`](https://github.com/alxbra/agent-status-tiles/pull/6) | Codex rollout reader with bounded, causal event normalization, synthetic/source-derived fixtures, and a metadata-only installed-format check | 1 completed CLI pass; 1 valid finding fixed | 2 | 62 unit tests, 3 Electron E2E tests, format/lint/type/build checks; [CI run 34980907374](https://github.com/alxbra/agent-status-tiles/actions/runs/34980907374); [audit comment](https://github.com/alxbra/agent-status-tiles/pull/6#issuecomment-5681842281) | `3f7fa776065ca6aaf6942c1c06dd6c7e8894ab68` |
 | [#7 `feat/codex catalog`](https://github.com/alxbra/agent-status-tiles/pull/7) | Read-only Codex app-server catalog client with bounded metadata projection | 1 completed CLI pass; 2 valid findings fixed | 2 | 83 unit tests, 3 Electron smoke tests, format/lint/type/build checks; green [CI run 34986281698](https://github.com/alxbra/agent-status-tiles/actions/runs/34986281698); [audit comment](https://github.com/alxbra/agent-status-tiles/pull/7#issuecomment-5682690186) | `419322edcfd277730acd0fef669c26479352c443` |
-| [#8 `feat: add rounded-square status tile UI`](https://github.com/alxbra/agent-status-tiles/pull/8) | Isolated rounded-square tile renderer, magnification, overflow, keyboard interaction, and visual fixtures | 1 completed CLI pass; 1 valid finding fixed | 1 (QA1 complete; QA2 pending) | 72 total unit tests, 3 Electron smoke tests, 17 browser fixture tests; [CI run 34981413118](https://github.com/alxbra/agent-status-tiles/actions/runs/34981413118) | Open; no merge SHA |
+| [#8 `feat: add rounded-square status tile UI`](https://github.com/alxbra/agent-status-tiles/pull/8) | Isolated rounded-square tile renderer, magnification, overflow, keyboard interaction, and visual fixtures | 1 completed CLI pass; 1 valid finding fixed | 2 | 94 unit tests, 3 Electron smoke tests, 22 browser fixture tests; validation head `4130023`; [CI run 34987573632](https://github.com/alxbra/agent-status-tiles/actions/runs/34987573632) | Open; no merge SHA |
 | [#9 `build/helper packaging`](https://github.com/alxbra/agent-status-tiles/pull/9) | Unsigned arm64/x64 packaging for the existing native hook helper | Pending; no CodeRabbit pass claimed | Pending | Implementation complete; review/merge pending. 72 TypeScript unit tests, 11 native helper tests, 3 Electron smoke tests, format/lint/type checks, and unsigned packaging; [CI run 34982354667](https://github.com/alxbra/agent-status-tiles/actions/runs/34982354667), [native run 34982354694](https://github.com/alxbra/agent-status-tiles/actions/runs/34982354694), [package run 34982354691](https://github.com/alxbra/agent-status-tiles/actions/runs/34982354691) | Open; no merge SHA |
 
 Foundation review corrections included strict IPC sender/frame validation, same-host renderer navigation checks, supported Node engine ranges, formatter coverage, and recovery after a failed settings-window load. No signing or notarization was claimed; Apple Developer credentials remain a release dependency.

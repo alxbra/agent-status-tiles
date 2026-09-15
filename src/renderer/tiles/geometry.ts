@@ -38,7 +38,6 @@ export interface TileGeometry {
   x: number;
   y: number;
   influence: number;
-  expanded: boolean;
   hitRegion: TileHitRegion;
 }
 
@@ -257,7 +256,6 @@ export function layoutTiles(
       x,
       y: centerY - size / 2,
       influence,
-      expanded: influence > 0,
       hitRegion: {
         x: 0,
         y: 0,
