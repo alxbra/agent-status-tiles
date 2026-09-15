@@ -35,7 +35,6 @@ export interface InputRequest {
 export interface SessionRecord extends SessionSnapshot {
   nativeSessionId: string;
   activeTurnId?: string;
-  lastTurnId?: string;
   turnKey?: TurnKey;
   /** Resolved entries are retained as turn-scoped tombstones for replay safety. */
   inputRequests: Readonly<Record<string, InputRequest>>;
@@ -43,7 +42,6 @@ export interface SessionRecord extends SessionSnapshot {
   isFailed: boolean;
   isErrorDismissed: boolean;
   metadataUpdatedAt: number;
-  lastEventAt: number;
 }
 
 export interface ProviderHealthSnapshot {
@@ -151,22 +149,36 @@ function isNonEmptyString(value: unknown): value is string {
 }
 
 function isTimestamp(value: unknown): value is number {
-  return typeof value === 'number' && Number.isFinite(value) && value >= 0;
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
+}
+
+const MAX_ID_BYTES = 256;
+const MAX_SESSION_ID_BYTES = MAX_ID_BYTES + 'claude:'.length;
+const MAX_TITLE_BYTES = 256;
+const CONTROL_CHARACTER_PATTERN = /\p{Cc}/u;
+
+function isBoundedString(value: unknown, maxBytes: number): value is string {
+  return (
+    isNonEmptyString(value) &&
+    value.trim().length > 0 &&
+    !CONTROL_CHARACTER_PATTERN.test(value) &&
+    new TextEncoder().encode(value).byteLength <= maxBytes
+  );
 }
 
 /** Runtime validation for untrusted provider events before they enter the reducer. */
 export function isSessionEvent(value: unknown): value is SessionEvent {
   if (value === null || typeof value !== 'object') return false;
   const event = value as Record<string, unknown>;
-  if (typeof event.type !== 'string') return false;
+  if (!isBoundedString(event.type, 64)) return false;
 
   switch (event.type) {
     case 'upsert':
       return (
         isProvider(event.provider) &&
-        isNonEmptyString(event.nativeSessionId) &&
+        isBoundedString(event.nativeSessionId, MAX_ID_BYTES) &&
         isSurface(event.surface) &&
-        typeof event.title === 'string' &&
+        isBoundedString(event.title, MAX_TITLE_BYTES) &&
         typeof event.isTopLevel === 'boolean' &&
         typeof event.isArchived === 'boolean' &&
         typeof event.canOpen === 'boolean' &&
@@ -180,45 +192,45 @@ export function isSessionEvent(value: unknown): value is SessionEvent {
       );
     case 'turn-started':
       return (
-        isNonEmptyString(event.sessionId) &&
-        isNonEmptyString(event.turnId) &&
+        isBoundedString(event.sessionId, MAX_SESSION_ID_BYTES) &&
+        isBoundedString(event.turnId, MAX_ID_BYTES) &&
         isTimestamp(event.timestamp)
       );
     case 'activity':
       return (
-        isNonEmptyString(event.sessionId) &&
-        (event.turnId === undefined || isNonEmptyString(event.turnId)) &&
+        isBoundedString(event.sessionId, MAX_SESSION_ID_BYTES) &&
+        (event.turnId === undefined || isBoundedString(event.turnId, MAX_ID_BYTES)) &&
         isTimestamp(event.timestamp)
       );
     case 'input-requested':
     case 'input-resolved':
       return (
-        isNonEmptyString(event.sessionId) &&
-        isNonEmptyString(event.turnId) &&
-        isNonEmptyString(event.callId) &&
+        isBoundedString(event.sessionId, MAX_SESSION_ID_BYTES) &&
+        isBoundedString(event.turnId, MAX_ID_BYTES) &&
+        isBoundedString(event.callId, MAX_ID_BYTES) &&
         isTimestamp(event.timestamp)
       );
     case 'turn-completed':
       return (
-        isNonEmptyString(event.sessionId) &&
-        isNonEmptyString(event.turnId) &&
-        isNonEmptyString(event.completionId) &&
+        isBoundedString(event.sessionId, MAX_SESSION_ID_BYTES) &&
+        isBoundedString(event.turnId, MAX_ID_BYTES) &&
+        isBoundedString(event.completionId, MAX_ID_BYTES) &&
         isTimestamp(event.timestamp)
       );
     case 'turn-failed':
       return (
-        isNonEmptyString(event.sessionId) &&
-        isNonEmptyString(event.turnId) &&
+        isBoundedString(event.sessionId, MAX_SESSION_ID_BYTES) &&
+        isBoundedString(event.turnId, MAX_ID_BYTES) &&
         isTimestamp(event.timestamp)
       );
     case 'acknowledged':
       return (
-        isNonEmptyString(event.sessionId) &&
-        isNonEmptyString(event.expectedCompletionId) &&
+        isBoundedString(event.sessionId, MAX_SESSION_ID_BYTES) &&
+        isBoundedString(event.expectedCompletionId, MAX_ID_BYTES) &&
         isTimestamp(event.timestamp)
       );
     case 'dismissed-error':
-      return isNonEmptyString(event.sessionId) && isTimestamp(event.timestamp);
+      return isBoundedString(event.sessionId, MAX_SESSION_ID_BYTES) && isTimestamp(event.timestamp);
     default:
       return false;
   }

@@ -19,9 +19,27 @@ function isNewerTurn(
   record: SessionRecord,
   event: Extract<SessionEvent, { type: 'turn-started' }>,
 ): boolean {
-  if (record.lastTurnId === event.turnId) return false;
+  if (record.turnKey?.turnId === event.turnId) return false;
   if (record.turnKey === undefined) return true;
   return compareTurnKeys({ timestamp: event.timestamp, turnId: event.turnId }, record.turnKey) > 0;
+}
+
+function ownSession(
+  sessions: Readonly<Record<string, SessionRecord>>,
+  sessionId: string,
+): SessionRecord | undefined {
+  return Object.prototype.hasOwnProperty.call(sessions, sessionId)
+    ? sessions[sessionId]
+    : undefined;
+}
+
+function ownInputRequest(
+  inputRequests: Readonly<Record<string, InputRequest>>,
+  callId: string,
+): InputRequest | undefined {
+  return Object.prototype.hasOwnProperty.call(inputRequests, callId)
+    ? inputRequests[callId]
+    : undefined;
 }
 
 function hasCurrentTurn(record: SessionRecord, turnId: string, timestamp: number): boolean {
@@ -66,14 +84,8 @@ function replaceRecord(
   };
 }
 
-function withEventTime(
-  record: SessionRecord,
-  timestamp: number,
-): Pick<SessionRecord, 'updatedAt' | 'lastEventAt'> {
-  return {
-    updatedAt: Math.max(record.updatedAt, timestamp),
-    lastEventAt: Math.max(record.lastEventAt, timestamp),
-  };
+function withEventTime(record: SessionRecord, timestamp: number): Pick<SessionRecord, 'updatedAt'> {
+  return { updatedAt: Math.max(record.updatedAt, timestamp) };
 }
 
 function initialRecord(
@@ -96,7 +108,6 @@ function initialRecord(
     isFailed: false,
     isErrorDismissed: false,
     metadataUpdatedAt: event.updatedAt,
-    lastEventAt: 0,
   };
 }
 
@@ -105,7 +116,7 @@ function upsertSession(
   event: Extract<SessionEvent, { type: 'upsert' }>,
 ): SessionState {
   const id = makeSessionId(event.provider, event.nativeSessionId);
-  const previous = state.sessions[id];
+  const previous = ownSession(state.sessions, id);
   if (previous === undefined) {
     return {
       ...state,
@@ -156,7 +167,7 @@ export function reduceSessionState(state: SessionState, event: SessionEvent): Se
     };
   }
 
-  const previous = state.sessions[event.sessionId];
+  const previous = ownSession(state.sessions, event.sessionId);
   if (previous === undefined) return state;
 
   switch (event.type) {
@@ -169,7 +180,6 @@ export function reduceSessionState(state: SessionState, event: SessionEvent): Se
           ...previous,
           ...withEventTime(previous, event.timestamp),
           activeTurnId: event.turnId,
-          lastTurnId: event.turnId,
           turnKey: { timestamp: event.timestamp, turnId: event.turnId },
           lastTurnStartedAt: event.timestamp,
           completionId: undefined,
@@ -194,7 +204,7 @@ export function reduceSessionState(state: SessionState, event: SessionEvent): Se
     }
     case 'input-requested': {
       if (!hasCurrentTurn(previous, event.turnId, event.timestamp)) return state;
-      const previousRequest = previous.inputRequests[event.callId];
+      const previousRequest = ownInputRequest(previous.inputRequests, event.callId);
       if (previousRequest !== undefined) {
         // A resolved request is a tombstone: replaying the request must not
         // make a completed wait visible again. Duplicate unresolved requests
@@ -215,7 +225,7 @@ export function reduceSessionState(state: SessionState, event: SessionEvent): Se
     }
     case 'input-resolved': {
       if (!hasCurrentTurn(previous, event.turnId, event.timestamp)) return state;
-      const previousRequest = previous.inputRequests[event.callId];
+      const previousRequest = ownInputRequest(previous.inputRequests, event.callId);
       if (previousRequest !== undefined) {
         if (
           previousRequest.turnId !== event.turnId ||
@@ -296,14 +306,14 @@ export function promoteSession(order: readonly string[], sessionId: string): rea
 
 export function selectSessionSnapshots(state: SessionState): readonly SessionSnapshot[] {
   return state.order.flatMap((id) => {
-    const record = state.sessions[id];
+    const record = ownSession(state.sessions, id);
     return record === undefined ? [] : [snapshotOf(record)];
   });
 }
 
 export function selectVisibleSessionSnapshots(state: SessionState): readonly SessionSnapshot[] {
   return state.order.flatMap((id) => {
-    const record = state.sessions[id];
+    const record = ownSession(state.sessions, id);
     if (
       record === undefined ||
       !record.isTopLevel ||
@@ -322,7 +332,7 @@ export function selectVisibleSessionSnapshots(state: SessionState): readonly Ses
 }
 
 export function selectSession(state: SessionState, sessionId: string): SessionSnapshot | undefined {
-  const record = state.sessions[sessionId];
+  const record = ownSession(state.sessions, sessionId);
   return record === undefined ? undefined : snapshotOf(record);
 }
 

@@ -230,6 +230,65 @@ describe('session lifecycle', () => {
     expect(selectSession(state, codexId)?.status).toBe('working');
   });
 
+  it('uses own input keys and ignores unknown session IDs safely', () => {
+    let state = reduceAll(stateWithSession(), [
+      {
+        type: 'turn-started',
+        sessionId: codexId,
+        turnId: 'turn-a',
+        timestamp: 100,
+      },
+      {
+        type: 'input-requested',
+        sessionId: codexId,
+        turnId: 'turn-a',
+        callId: 'constructor',
+        timestamp: 110,
+      },
+      {
+        type: 'input-requested',
+        sessionId: codexId,
+        turnId: 'turn-a',
+        callId: 'toString',
+        timestamp: 111,
+      },
+      {
+        type: 'input-resolved',
+        sessionId: codexId,
+        turnId: 'turn-a',
+        callId: 'constructor',
+        timestamp: 112,
+      },
+    ]);
+
+    expect(selectSession(state, codexId)?.status).toBe('needs-input');
+    state = reduceSessionState(state, {
+      type: 'input-resolved',
+      sessionId: codexId,
+      turnId: 'turn-a',
+      callId: 'toString',
+      timestamp: 113,
+    });
+    expect(selectSession(state, codexId)?.status).toBe('working');
+
+    expect(
+      reduceSessionState(state, {
+        type: 'turn-started',
+        sessionId: 'constructor',
+        turnId: 'unknown-turn',
+        timestamp: 200,
+      }),
+    ).toBe(state);
+    expect(
+      reduceSessionState(state, {
+        type: 'turn-started',
+        sessionId: 'toString',
+        turnId: 'unknown-turn',
+        timestamp: 200,
+      }),
+    ).toBe(state);
+  });
+
   it('ignores old turn activity and completion after a newer turn starts', () => {
     let state = stateWithSession();
     state = reduceAll(state, [
@@ -611,5 +670,80 @@ describe('event validation', () => {
       }),
     ).toBe(false);
     expect(isSessionEvent(null)).toBe(false);
+  });
+
+  it('bounds identifiers and titles by UTF-8 bytes and rejects controls or invalid time', () => {
+    const maxNativeId = 'x'.repeat(256);
+    const overlongNativeId = 'x'.repeat(257);
+    const maxTurnId = 't'.repeat(256);
+    const overlongTurnId = 't'.repeat(257);
+    const validUpsert = {
+      type: 'upsert' as const,
+      provider: 'codex' as const,
+      nativeSessionId: maxNativeId,
+      surface: 'desktop' as const,
+      title: 'x'.repeat(256),
+      isTopLevel: true,
+      isArchived: false,
+      canOpen: true,
+      updatedAt: 1,
+    };
+
+    expect(isSessionEvent(validUpsert)).toBe(true);
+    expect(isSessionEvent({ ...validUpsert, nativeSessionId: overlongNativeId })).toBe(false);
+    expect(isSessionEvent({ ...validUpsert, title: 'x'.repeat(257) })).toBe(false);
+    expect(isSessionEvent({ ...validUpsert, nativeSessionId: 'é'.repeat(128) })).toBe(true);
+    expect(isSessionEvent({ ...validUpsert, nativeSessionId: 'é'.repeat(129) })).toBe(false);
+    expect(isSessionEvent({ ...validUpsert, title: 'title\nwith-control' })).toBe(false);
+
+    expect(
+      isSessionEvent({
+        type: 'turn-started',
+        sessionId: `claude:${maxNativeId}`,
+        turnId: maxTurnId,
+        timestamp: 1,
+      }),
+    ).toBe(true);
+    expect(
+      isSessionEvent({
+        type: 'turn-started',
+        sessionId: `claude:${overlongNativeId}`,
+        turnId: maxTurnId,
+        timestamp: 1,
+      }),
+    ).toBe(false);
+    expect(
+      isSessionEvent({
+        type: 'turn-started',
+        sessionId: 'codex:valid',
+        turnId: overlongTurnId,
+        timestamp: 1,
+      }),
+    ).toBe(false);
+    expect(
+      isSessionEvent({
+        type: 'turn-started',
+        sessionId: 'codex:valid',
+        turnId: `turn\u0000${maxTurnId}`,
+        timestamp: 1,
+      }),
+    ).toBe(false);
+
+    for (const timestamp of [
+      -1,
+      Number.NaN,
+      Number.POSITIVE_INFINITY,
+      1.5,
+      Number.MAX_SAFE_INTEGER + 1,
+    ]) {
+      expect(
+        isSessionEvent({
+          type: 'turn-started',
+          sessionId: 'codex:valid',
+          turnId: 'turn-1',
+          timestamp,
+        }),
+      ).toBe(false);
+    }
   });
 });
