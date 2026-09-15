@@ -5,6 +5,7 @@ export const PRIMARY_DISPLAY_ID = 'primary';
 
 export const DESKTOP_PREFERENCES_SCHEMA_VERSION = 1 as const;
 export const MAX_SETTINGS_DISPLAYS = 32;
+export const MAX_DISPLAY_LABEL_BYTES = 256;
 
 export type SettingsProviderConnectionStatus =
   'connected' | 'connecting' | 'disconnected' | 'unavailable';
@@ -61,7 +62,6 @@ const DISPLAY_REQUEST_KEYS = ['displayId'] as const;
 const BOOLEAN_REQUEST_KEYS = ['enabled'] as const;
 const CONTROL_CHARACTER_PATTERN = /\p{Cc}/u;
 const MAX_DISPLAY_ID_BYTES = 128;
-const MAX_DISPLAY_LABEL_BYTES = 256;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);

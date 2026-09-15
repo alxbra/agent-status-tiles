@@ -67,4 +67,14 @@ describe('display placement', () => {
     expect(options[0]).toEqual({ id: 'primary', label: 'Primary' });
     expect(options.at(-1)).toEqual({ id: '999', label: 'Unavailable' });
   });
+
+  it('replaces a display label that exceeds the shared UTF-8 byte bound', () => {
+    const oversizedLabel = '🖥️'.repeat(96);
+    const external = display(42, { x: 800, y: 0, width: 800, height: 600 }, oversizedLabel);
+
+    expect(displayOptionsWithPreference([external], '42')).toEqual([
+      { id: 'primary', label: 'Primary' },
+      { id: '42', label: 'Display 1' },
+    ]);
+  });
 });

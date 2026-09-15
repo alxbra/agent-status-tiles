@@ -2,6 +2,7 @@ import { screen, type Display } from 'electron';
 
 import {
   isSerializedDisplayId,
+  MAX_DISPLAY_LABEL_BYTES,
   MAX_SETTINGS_DISPLAYS,
   PRIMARY_DISPLAY_ID,
   type SettingsDisplayOption,
@@ -32,7 +33,13 @@ export function connectedDisplays(): readonly Display[] {
 
 function conciseDisplayLabel(display: Display, index: number): string {
   const label = typeof display.label === 'string' ? display.label.trim() : '';
-  if (label.length > 0 && label.length <= 96 && !/\p{Cc}/u.test(label)) return label;
+  if (
+    label.length > 0 &&
+    new TextEncoder().encode(label).byteLength <= MAX_DISPLAY_LABEL_BYTES &&
+    !/\p{Cc}/u.test(label)
+  ) {
+    return label;
+  }
   return display.internal ? 'Built-in Display' : `Display ${String(index + 1)}`;
 }
 
