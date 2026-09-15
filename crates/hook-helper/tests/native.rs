@@ -3,8 +3,9 @@ use std::collections::HashSet;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::process::{Child, Command, Output, Stdio};
+use std::thread;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 fn temp_dir(label: &str) -> PathBuf {
     let nonce = SystemTime::now()
@@ -38,7 +39,7 @@ fn invoke_provider(data_dir: &Path, provider: &str, payload: &str) {
         .unwrap()
         .write_all(payload.as_bytes())
         .unwrap();
-    let output = child.wait_with_output().unwrap();
+    let output = wait_bounded(child);
     assert!(output.status.success());
     assert!(
         output.stdout.is_empty(),
@@ -50,6 +51,22 @@ fn invoke_provider(data_dir: &Path, provider: &str, payload: &str) {
         "helper wrote stderr: {:?}",
         output.stderr
     );
+}
+
+fn wait_bounded(mut child: Child) -> Output {
+    let deadline = Instant::now() + Duration::from_secs(3);
+    loop {
+        match child.try_wait().unwrap() {
+            Some(_) => break,
+            None if Instant::now() >= deadline => {
+                let _ = child.kill();
+                let _ = child.wait();
+                panic!("hook helper subprocess exceeded test deadline");
+            }
+            None => thread::sleep(Duration::from_millis(10)),
+        }
+    }
+    child.wait_with_output().unwrap()
 }
 
 fn spawn(data_dir: &Path, payload: &str) -> Child {
@@ -204,7 +221,7 @@ fn concurrent_native_callbacks_are_complete_and_replayable() {
         children.push(spawn(&data_dir, &payload));
     }
     for child in children {
-        let output = child.wait_with_output().unwrap();
+        let output = wait_bounded(child);
         assert!(output.status.success());
         assert!(output.stdout.is_empty());
         assert!(output.stderr.is_empty());

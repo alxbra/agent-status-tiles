@@ -113,29 +113,29 @@ fn read_bounded<R: Read>(input: &mut R) -> Result<Vec<u8>, HelperError> {
 
 fn reduce_event(provider: &str, value: &Value) -> Option<ReducedEvent> {
     let object = value.as_object()?;
-    let event_name = string_field(object, &["hook_event_name"], MAX_EVENT_BYTES)?;
+    let event_name = string_field(object, "hook_event_name", MAX_EVENT_BYTES)?;
     if !is_allowed_event(&event_name) {
         return None;
     }
 
-    let session_id = string_field(object, &["session_id"], MAX_ID_BYTES)?;
-    let turn_id = string_field(object, &["turn_id"], MAX_ID_BYTES);
-    let prompt_id = string_field(object, &["prompt_id"], MAX_ID_BYTES);
+    let session_id = string_field(object, "session_id", MAX_ID_BYTES)?;
+    let turn_id = string_field(object, "turn_id", MAX_ID_BYTES);
+    let prompt_id = string_field(object, "prompt_id", MAX_ID_BYTES);
     let elicitation_id = matches!(event_name.as_str(), "Elicitation" | "ElicitationResult")
-        .then(|| string_field(object, &["elicitation_id"], MAX_ID_BYTES))
+        .then(|| string_field(object, "elicitation_id", MAX_ID_BYTES))
         .flatten();
     let tool_call_id = if provider == "codex" {
-        string_field(object, &["tool_call_id"], MAX_ID_BYTES)
+        string_field(object, "tool_call_id", MAX_ID_BYTES)
     } else {
-        string_field(object, &["tool_use_id"], MAX_ID_BYTES)
+        string_field(object, "tool_use_id", MAX_ID_BYTES)
     };
-    let tool_name = string_field(object, &["tool_name"], MAX_NAVIGATION_BYTES)
+    let tool_name = string_field(object, "tool_name", MAX_NAVIGATION_BYTES)
         .filter(|value| value == "AskUserQuestion" || value == "request_user_input");
 
     let timestamp = now_millis();
     let (project_name, project_id) = project_metadata(object);
     let notification_type = (event_name == "Notification")
-        .then(|| string_field(object, &["notification_type"], MAX_NAVIGATION_BYTES))
+        .then(|| string_field(object, "notification_type", MAX_NAVIGATION_BYTES))
         .flatten()
         .filter(|value| {
             matches!(
@@ -170,20 +170,18 @@ fn reduce_event(provider: &str, value: &Value) -> Option<ReducedEvent> {
 
 fn string_field(
     object: &serde_json::Map<String, Value>,
-    names: &[&str],
+    name: &str,
     max_bytes: usize,
 ) -> Option<String> {
-    names.iter().find_map(|name| {
-        let value = object.get(*name)?.as_str()?.trim();
-        if value.is_empty() || value.len() > max_bytes || value.chars().any(char::is_control) {
-            return None;
-        }
-        Some(value.to_owned())
-    })
+    let value = object.get(name)?.as_str()?.trim();
+    if value.is_empty() || value.len() > max_bytes || value.chars().any(char::is_control) {
+        return None;
+    }
+    Some(value.to_owned())
 }
 
 fn project_metadata(object: &serde_json::Map<String, Value>) -> (Option<String>, Option<String>) {
-    let cwd = string_field(object, &["cwd"], 4 * MAX_PROJECT_BYTES);
+    let cwd = string_field(object, "cwd", 4 * MAX_PROJECT_BYTES);
     let (cwd_name, project_id) = cwd
         .filter(|path| Path::new(path).is_absolute())
         .map(|path| {
@@ -274,9 +272,7 @@ fn append_event(data_dir: &Path, event: &ReducedEvent) -> io::Result<()> {
     }
 
     let _guard = JournalLock::acquire(&lock)?;
-    if !safe_journal_set(&journal)? {
-        return Ok(());
-    }
+    safe_journal_set(&journal)?;
     repair_unterminated_tail(&journal)?;
     let current_size = fs::symlink_metadata(&journal)
         .map(|metadata| metadata.len())
@@ -353,27 +349,23 @@ fn ensure_private_directory(path: &Path) -> io::Result<()> {
     set_private_directory_permissions(path, &metadata)
 }
 
-fn safe_journal_set(journal: &Path) -> io::Result<bool> {
-    if !safe_journal_path(journal)? {
-        return Ok(false);
-    }
+fn safe_journal_set(journal: &Path) -> io::Result<()> {
+    safe_journal_path(journal)?;
     for index in 1..=MAX_ARCHIVES {
-        if !safe_journal_path(&archive_path(journal, index))? {
-            return Ok(false);
-        }
+        safe_journal_path(&archive_path(journal, index))?;
     }
-    Ok(true)
+    Ok(())
 }
 
-fn safe_journal_path(path: &Path) -> io::Result<bool> {
+fn safe_journal_path(path: &Path) -> io::Result<()> {
     match fs::symlink_metadata(path) {
         Ok(metadata) => {
             if metadata.file_type().is_symlink() || !metadata.is_file() {
                 return Err(io::Error::other("unsafe journal path"));
             }
-            Ok(true)
+            Ok(())
         }
-        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(true),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
         Err(error) => Err(error),
     }
 }
@@ -381,9 +373,7 @@ fn safe_journal_path(path: &Path) -> io::Result<bool> {
 fn rotate(journal: &Path) -> io::Result<()> {
     // Validate every path before changing any of them. A symlink is treated as
     // an unsafe installation rather than followed or removed.
-    if !safe_journal_set(journal)? {
-        return Ok(());
-    }
+    safe_journal_set(journal)?;
     let oldest = archive_path(journal, MAX_ARCHIVES);
     if oldest.exists() {
         fs::remove_file(oldest)?;

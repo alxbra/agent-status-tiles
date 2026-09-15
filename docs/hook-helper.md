@@ -83,9 +83,10 @@ kept as a private coordination inode and the operating system releases its
 lock if a helper crashes; no stale-lock deletion race is possible. The app can
 replay archives oldest-to-newest and then tail the active file; records have no
 helper-side state mapping, so the app owns lifecycle reduction, deduplication,
-and cursor persistence. `Stop` and `StopFailure` are raw candidates only;
-`stop_hook_active` is preserved as metadata and the app must account for
-parallel hooks before declaring a turn complete. A contended lock is retried
+and cursor persistence. `Stop` is a raw completion candidate;
+`StopFailure` is a failure signal and never implies success. `stop_hook_active`
+is preserved as metadata and the app must account for parallel hooks before
+declaring a turn complete. A contended lock is retried
 for at most 500 ms before the helper fails open with a silent success.
 
 Journal directories and files are private (`0700` directories and `0600`
