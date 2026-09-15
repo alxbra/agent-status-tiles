@@ -8,15 +8,17 @@ import {
 
 describe('test-only overlay session source', () => {
   it('accepts only bounded integer counts in test mode', () => {
-    expect(parseTestSessionCount([`${TEST_SESSION_COUNT_FLAG}0`], 'test')).toBe(0);
-    expect(parseTestSessionCount([`${TEST_SESSION_COUNT_FLAG}30`], 'test')).toBe(30);
-    expect(parseTestSessionCount([`${TEST_SESSION_COUNT_FLAG}31`], 'test')).toBe(0);
-    expect(parseTestSessionCount([`${TEST_SESSION_COUNT_FLAG}-1`], 'test')).toBe(0);
-    expect(parseTestSessionCount([`${TEST_SESSION_COUNT_FLAG}1.5`], 'test')).toBe(0);
+    expect(parseTestSessionCount([`${TEST_SESSION_COUNT_FLAG}0`], 'test', false)).toBe(0);
+    expect(parseTestSessionCount([`${TEST_SESSION_COUNT_FLAG}30`], 'test', false)).toBe(30);
+    expect(parseTestSessionCount([`${TEST_SESSION_COUNT_FLAG}31`], 'test', false)).toBe(0);
+    expect(parseTestSessionCount([`${TEST_SESSION_COUNT_FLAG}-1`], 'test', false)).toBe(0);
+    expect(parseTestSessionCount([`${TEST_SESSION_COUNT_FLAG}1.5`], 'test', false)).toBe(0);
   });
 
   it('is disabled outside test mode and generates only sanitized snapshots', () => {
-    expect(parseTestSessionCount([`${TEST_SESSION_COUNT_FLAG}12`], 'production')).toBe(0);
+    expect(parseTestSessionCount([`${TEST_SESSION_COUNT_FLAG}12`], 'production', false)).toBe(0);
+    expect(parseTestSessionCount([`${TEST_SESSION_COUNT_FLAG}12`], 'test', true)).toBe(0);
+    expect(parseTestSessionCount([`${TEST_SESSION_COUNT_FLAG}12`], 'test')).toBe(0);
     const snapshots = createTestSessionSnapshots(30);
     expect(snapshots).toHaveLength(30);
     expect(snapshots[0]).toMatchObject({

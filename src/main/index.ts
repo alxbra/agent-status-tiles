@@ -14,7 +14,7 @@ const hasSingleInstanceLock = app.requestSingleInstanceLock();
 let menuBar: MenuBarController | null = null;
 let overlayController: OverlayController | null = null;
 let removeOverlayIpcHandlers: (() => void) | null = null;
-const overlayState: OverlayState = createStartupOverlayState();
+const overlayState: OverlayState = createStartupOverlayState(app.isPackaged);
 
 function isQualifyingSession(session: SessionSnapshot): boolean {
   return session.isTopLevel && !session.isArchived && session.status !== 'idle';

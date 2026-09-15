@@ -9,8 +9,9 @@ const TEST_STATUSES: readonly SessionStatus[] = ['working', 'needs-input', 'unre
 export function parseTestSessionCount(
   argv: readonly string[] = process.argv,
   nodeEnvironment: string | undefined = process.env.NODE_ENV,
+  isPackaged = true,
 ): number {
-  if (nodeEnvironment !== 'test') return 0;
+  if (isPackaged || nodeEnvironment !== 'test') return 0;
   const argument = argv.find((value) => value.startsWith(TEST_SESSION_COUNT_FLAG));
   if (argument === undefined) return 0;
   const rawCount = argument.slice(TEST_SESSION_COUNT_FLAG.length);
@@ -43,11 +44,11 @@ export function createTestSessionSnapshots(count: number): readonly SessionSnaps
   });
 }
 
-export function createStartupOverlayState(): {
+export function createStartupOverlayState(isPackaged: boolean): {
   sessions: readonly SessionSnapshot[];
   reducedMotion: boolean;
 } {
-  const count = parseTestSessionCount();
+  const count = parseTestSessionCount(process.argv, process.env.NODE_ENV, isPackaged);
   return {
     sessions: createTestSessionSnapshots(count),
     reducedMotion: false,
