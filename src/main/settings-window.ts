@@ -26,7 +26,7 @@ export function getSettingsWindow(): BrowserWindow | null {
   return settingsWindow;
 }
 
-export function showSettingsWindow(): BrowserWindow {
+export function showSettingsWindow(onFocus?: () => void): BrowserWindow {
   const existingWindow = getSettingsWindow();
   if (existingWindow) {
     if (existingWindow.isMinimized()) {
@@ -60,6 +60,7 @@ export function showSettingsWindow(): BrowserWindow {
   settingsWindow = window;
   protectWebContents(window, allowedUrl);
   window.once('ready-to-show', () => window.show());
+  window.on('focus', () => onFocus?.());
   window.on('closed', () => {
     if (settingsWindow === window) {
       settingsWindow = null;

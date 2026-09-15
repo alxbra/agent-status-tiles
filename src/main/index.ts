@@ -79,6 +79,10 @@ function publishCurrentSettings(): void {
   publishSettingsState(getSettingsWindow(), getSettingsState());
 }
 
+function openSettingsWindow(): void {
+  showSettingsWindow(publishCurrentSettings);
+}
+
 function registerIpcHandlers(): () => void {
   ipcMain.handle(IPC_CHANNELS.version, (event) => {
     assertSettingsSender(event);
@@ -87,7 +91,7 @@ function registerIpcHandlers(): () => void {
   ipcMain.handle(IPC_CHANNELS.settingsOpen, (event, payload?: unknown) => {
     assertSettingsSender(event);
     if (payload !== undefined) throw new Error('Settings open request does not accept a payload');
-    showSettingsWindow();
+    openSettingsWindow();
   });
   ipcMain.handle(IPC_CHANNELS.settingsClose, (event, payload?: unknown) => {
     assertSettingsSender(event);
@@ -112,7 +116,7 @@ if (!hasSingleInstanceLock) {
   app.quit();
 } else {
   app.on('second-instance', () => {
-    showSettingsWindow();
+    openSettingsWindow();
   });
 
   app.on('window-all-closed', () => {
@@ -155,7 +159,7 @@ if (!hasSingleInstanceLock) {
     menuBar = createMenuBar({
       showOverlay: () => overlayController?.setVisible(true),
       hideOverlay: () => overlayController?.setVisible(false),
-      openSettings: showSettingsWindow,
+      openSettings: openSettingsWindow,
       quit: () => app.quit(),
     });
     removeAppIpcHandlers = registerIpcHandlers();
@@ -204,10 +208,10 @@ if (!hasSingleInstanceLock) {
       desktopPreferences = null;
     });
     if (shouldOpenSettingsAtStartup(startupLoginSettings)) {
-      showSettingsWindow();
+      openSettingsWindow();
     }
     app.on('activate', () => {
-      showSettingsWindow();
+      openSettingsWindow();
     });
   });
 }
