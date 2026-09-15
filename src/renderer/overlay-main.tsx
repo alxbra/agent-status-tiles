@@ -4,6 +4,7 @@ import { createRoot } from 'react-dom/client';
 import type { OverlayState } from '../shared/overlay-ipc';
 import { createOverlayHitRegionPublisher } from './overlay-hit-region-publisher';
 import { translateAndClipHitRegions, type OverlayPortalRect } from './overlay-hit-regions';
+import { retryOverlayHandshake } from './overlay-readiness';
 import { StatusTiles } from './tiles/StatusTiles';
 import { DISMISS_TILE_PORTALS_EVENT } from './tiles/events';
 import type { TileHitRegion } from './tiles/geometry';
@@ -102,23 +103,33 @@ export function OverlayApp(): ReactElement {
   useEffect(() => {
     let mounted = true;
     let receivedPublishedState = false;
+    let readinessStarted = false;
+    let readinessRetryGroups = 0;
+    const announceRendererReady = (): void => {
+      if (!mounted || readinessStarted || readinessRetryGroups >= 2) return;
+      readinessStarted = true;
+      readinessRetryGroups += 1;
+      void retryOverlayHandshake(() => overlayApi.rendererReady()).then((ready) => {
+        if (!mounted || ready) return;
+        readinessStarted = false;
+        announceRendererReady();
+      });
+    };
     const unsubscribe = overlayApi.subscribe((nextState) => {
       receivedPublishedState = true;
       if (mounted) setState(nextState);
+      announceRendererReady();
     });
-    const initialState = overlayApi.getState().then((nextState) => {
-      if (mounted && !receivedPublishedState) setState(nextState);
+    void retryOverlayHandshake(async () => {
+      const nextState = await overlayApi.getState();
+      if (!mounted) return;
+      if (!receivedPublishedState) setState(nextState);
+      announceRendererReady();
     });
 
     const unsubscribeKeyboardEntry = overlayApi.subscribeKeyboardEntry(() => {
       setKeyboardEntryRevision((revision) => revision + 1);
     });
-    // Do not advertise readiness until the initial state request has settled;
-    // replacement windows remain hidden until both paths are durable.
-    void initialState
-      .catch(() => undefined)
-      .then(() => overlayApi.rendererReady())
-      .catch(() => undefined);
 
     return () => {
       mounted = false;

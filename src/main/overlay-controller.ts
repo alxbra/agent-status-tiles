@@ -141,6 +141,18 @@ function createOverlayWindow(
 
   protectWebContents(window, allowedUrl);
   window.webContents.on('did-start-loading', () => onRendererInvalidated(window));
+  window.webContents.on(
+    'did-fail-load',
+    (_event, _errorCode, _errorDescription, _validatedUrl, isMainFrame) => {
+      if (isMainFrame) onRendererLoadFailed(window);
+    },
+  );
+  window.webContents.on(
+    'did-fail-provisional-load',
+    (_event, _errorCode, _errorDescription, _validatedUrl, isMainFrame) => {
+      if (isMainFrame) onRendererLoadFailed(window);
+    },
+  );
   window.webContents.on('render-process-gone', () => onRendererGone(window));
   window.webContents.on('input-event', (_event, inputEvent) => onPointerInput(inputEvent));
   window.on('closed', () => onClosed(window));
@@ -163,8 +175,6 @@ function createOverlayWindow(
 export interface OverlayControllerOptions {
   preferredDisplayId?: string;
   onKeyboardEntry?: () => boolean;
-  /** Called before app.hide()/app.show() restores the previous application. */
-  onApplicationActivationExpected?: () => void;
 }
 
 export function createOverlayController(options: OverlayControllerOptions = {}): OverlayController {
@@ -176,6 +186,7 @@ export function createOverlayController(options: OverlayControllerOptions = {}):
   let keyboardEntryNotified = false;
   let keyboardWindowActivated = false;
   let rendererReady = false;
+  let rendererWasReady = false;
   let preferredDisplayId = options.preferredDisplayId ?? PRIMARY_DISPLAY_ID;
   let hitRegions: readonly OverlayHitRegion[] = [];
   let ignoringMouseEvents = true;
@@ -187,6 +198,7 @@ export function createOverlayController(options: OverlayControllerOptions = {}):
   const resetRendererState = (): void => {
     readyToShow = false;
     rendererReady = false;
+    rendererWasReady = false;
     ignoringMouseEvents = true;
     hitRegions = [];
   };
@@ -325,7 +337,6 @@ export function createOverlayController(options: OverlayControllerOptions = {}):
     keepOverlayVisible: boolean,
   ): void => {
     if (!shouldDeactivate || process.platform !== 'darwin') return;
-    options.onApplicationActivationExpected?.();
     app.hide();
     app.show();
     if (keepOverlayVisible && overlayWindow && !overlayWindow.isDestroyed()) {
@@ -409,11 +420,17 @@ export function createOverlayController(options: OverlayControllerOptions = {}):
         (callbackGeneration !== overlayGeneration || callbackGeneration !== generation))
     )
       return;
+    if (rendererWasReady) {
+      onRendererGone(window, callbackGeneration);
+      return;
+    }
     rendererLoadFailures.add(window);
     rendererReady = false;
     keyboardEntryNotified = false;
     hitRegions = [];
     reapplyMousePassthrough();
+    if (!window.isDestroyed()) window.destroy();
+    onClosed(window, callbackGeneration);
   };
 
   const onRendererGone = (window: BrowserWindow, callbackGeneration?: number): void => {
@@ -482,6 +499,7 @@ export function createOverlayController(options: OverlayControllerOptions = {}):
     setRendererReady: () => {
       if (isDestroyed || !overlayWindow || overlayWindow.isDestroyed() || rendererReady) return;
       rendererReady = true;
+      rendererWasReady = true;
       syncVisibility();
     },
     setPreferredDisplayId: (displayId) => {

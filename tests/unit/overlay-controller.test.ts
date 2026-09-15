@@ -34,6 +34,7 @@ type OverlayWindowMock = {
   readyListener?: () => void;
   closedListener?: () => void;
   loadingListener?: () => void;
+  failedLoadListener?: () => void;
   rendererGoneListener?: () => void;
   pointerListener?: (inputEvent: PointerEvent) => void;
   markDestroyed: () => void;
@@ -69,7 +70,9 @@ function createOverlayWindowMock(
   let bounds = initialBounds;
   const mock: OverlayWindowMock = {
     blur: vi.fn(),
-    destroy: vi.fn(),
+    destroy: vi.fn(() => {
+      destroyed = true;
+    }),
     focus: vi.fn(),
     hide: vi.fn(() => {
       visible = false;
@@ -110,6 +113,17 @@ function createOverlayWindowMock(
         }
         if (event === 'render-process-gone') {
           mock.rendererGoneListener = callback as () => void;
+        }
+        if (event === 'did-fail-load' || event === 'did-fail-provisional-load') {
+          const failedLoadCallback = callback as (
+            event: unknown,
+            errorCode: number,
+            errorDescription: string,
+            validatedUrl: string,
+            isMainFrame: boolean,
+          ) => void;
+          mock.failedLoadListener = () =>
+            failedLoadCallback(undefined, -3, 'aborted', 'file:///overlay.html', true);
         }
       }),
       setWindowOpenHandler: vi.fn(),
@@ -621,6 +635,43 @@ describe('overlay controller', () => {
     firstWindow.rendererGoneListener?.();
     firstWindow.closedListener?.();
     expect(electronMocks.BrowserWindow).toHaveBeenCalledTimes(2);
+    secondWindow.readyListener?.();
+    expect(secondWindow.showInactive).not.toHaveBeenCalled();
+    controller.setRendererReady();
+    expect(secondWindow.showInactive).toHaveBeenCalledOnce();
+    controller.destroy();
+  });
+
+  it('replaces a live window after a failed main-frame reload', async () => {
+    const firstWindow = createOverlayWindowMock();
+    const secondWindow = createOverlayWindowMock();
+    electronMocks.BrowserWindow.mockImplementationOnce(
+      class BrowserWindowMock {
+        constructor() {
+          return firstWindow;
+        }
+      } as unknown as typeof electronMocks.BrowserWindow,
+    ).mockImplementationOnce(
+      class BrowserWindowMock {
+        constructor() {
+          return secondWindow;
+        }
+      } as unknown as typeof electronMocks.BrowserWindow,
+    );
+    const { createOverlayController } = await import('../../src/main/overlay-controller');
+    const controller = createOverlayController({ onKeyboardEntry: () => true });
+    controller.setQualifyingSessionCount(1);
+    controller.setRendererReady();
+    firstWindow.readyListener?.();
+    controller.enterKeyboardMode();
+
+    firstWindow.loadingListener?.();
+    firstWindow.failedLoadListener?.();
+
+    expect(firstWindow.destroy).toHaveBeenCalledOnce();
+    expect(controller.getWindow()).toBe(secondWindow);
+    expect(electronMocks.app.hide).toHaveBeenCalledOnce();
+    expect(electronMocks.app.show).toHaveBeenCalledOnce();
     secondWindow.readyListener?.();
     expect(secondWindow.showInactive).not.toHaveBeenCalled();
     controller.setRendererReady();

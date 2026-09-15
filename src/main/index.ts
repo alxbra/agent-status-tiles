@@ -180,7 +180,6 @@ if (!hasSingleInstanceLock) {
     overlayController = createOverlayController({
       preferredDisplayId: preferences.preferredDisplayId,
       onKeyboardEntry: () => publishOverlayKeyboardEntry(overlayController?.getWindow() ?? null),
-      onApplicationActivationExpected: lifecycle.expectOverlayRestoreActivation,
     });
     overlayController.setQualifyingSessionCount(qualifyingSessionCount(overlayState.sessions));
     removeOverlayIpcHandlers = registerOverlayIpcHandlers({
