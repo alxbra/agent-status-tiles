@@ -19,3 +19,12 @@ only establishes the repository foundation.
 
 `main` is reserved for the eventual release promotion. See `AGENTS.md` for the
 full contribution and review requirements.
+
+## Development commands
+
+Install dependencies with `pnpm install`, then use `pnpm dev` for the Electron
+development shell. The foundation checks are `pnpm format:check`, `pnpm lint`,
+`pnpm typecheck`, and `pnpm test`. Run `pnpm test:e2e` to build and exercise
+the packaged Electron entry point with an isolated temporary user-data
+directory. `pnpm run pack` creates an unsigned unpacked application under
+`release/`.
