@@ -185,10 +185,16 @@ for (const testSessionCount of [0, 1, 12, 30]) {
             const overlay = BrowserWindow.getAllWindows().find((window) =>
               window.webContents.getURL().includes('/renderer/overlay.html'),
             );
-            return overlay?.isVisible() ?? false;
+            return {
+              isLoadingMainFrame: overlay?.webContents.isLoadingMainFrame() ?? true,
+              isVisible: overlay?.isVisible() ?? false,
+            };
           }),
         )
-        .toBe(testSessionCount > 0);
+        .toEqual({
+          isLoadingMainFrame: false,
+          isVisible: testSessionCount > 0,
+        });
 
       const tiles = page.locator('.status-tiles__tile');
       await expect(tiles).toHaveCount(Math.min(testSessionCount, 12));
