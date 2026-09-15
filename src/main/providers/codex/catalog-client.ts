@@ -19,6 +19,24 @@ const DIRECT_SOURCE_KINDS = new Set(['cli', 'vscode', 'exec', 'appServer', 'unkn
 
 const SUBAGENT_STRING_KINDS = new Set(['review', 'compact', 'memory_consolidation']);
 
+// The installed 0.154.0 protocol defaults an omitted/empty filter to
+// interactive sources. Request every bounded enum value so discovery does not
+// silently narrow the catalog before the later source qualifier runs. Custom
+// session sources have no separate sourceKinds enum; their bounded discriminator
+// remains in sourceEvidence and the qualifier decides how to handle it.
+const DISCOVERY_SOURCE_KINDS = [
+  'cli',
+  'vscode',
+  'exec',
+  'appServer',
+  'subAgent',
+  'subAgentReview',
+  'subAgentCompact',
+  'subAgentThreadSpawn',
+  'subAgentOther',
+  'unknown',
+] as const;
+
 const SUBAGENT_THREAD_SOURCE_KINDS = new Set([
   'subAgent',
   'subAgentReview',
@@ -445,6 +463,7 @@ export class CodexCatalogClient {
         sortDirection: 'desc',
         archived: false,
         modelProviders: [],
+        sourceKinds: [...DISCOVERY_SOURCE_KINDS],
       });
       const page = parseListPage(raw);
       if (page === undefined || page.data.length > limit) {

@@ -73,6 +73,7 @@ const pages = ${pages};
 let carry = '';
 let initializeResponseSent = false;
 if (mode === 'ignore-term') process.on('SIGTERM', () => {});
+const expectedSourceKinds = ['cli', 'vscode', 'exec', 'appServer', 'subAgent', 'subAgentReview', 'subAgentCompact', 'subAgentThreadSpawn', 'subAgentOther', 'unknown'];
 process.stdin.setEncoding('utf8');
 process.stdin.on('data', (chunk) => {
   carry += chunk;
@@ -105,6 +106,7 @@ process.stdin.on('data', (chunk) => {
     }
     if (request.method !== 'thread/list') continue;
     if (mode === 'slow-start' && !initializeResponseSent) process.exit(3);
+    if (mode === 'require-source-kinds' && JSON.stringify(request.params.sourceKinds) !== JSON.stringify(expectedSourceKinds)) process.exit(4);
     if (mode === 'delay') continue;
     if (mode === 'oversized') {
       process.stdout.write('x'.repeat(1024 * 1024 + 1) + '\\n');
@@ -224,6 +226,17 @@ describe('Codex catalog client', () => {
 
     await client.stop();
     expect(client.connected).toBe(false);
+  });
+
+  it('requests every current bounded source kind for catalog discovery', async () => {
+    const diagnostics: CodexCatalogDiagnosticCode[] = [];
+    const client = createClient(await createFakeBinary('require-source-kinds'), diagnostics);
+
+    const result = await client.listThreads({ maxPages: 1 });
+
+    expect(result.records).toHaveLength(2);
+    expect(diagnostics).toEqual([]);
+    await client.stop();
   });
 
   it('returns a bounded continuation cursor when page or record limits are reached', async () => {
@@ -392,11 +405,14 @@ describe('Codex catalog client', () => {
     const client = createClient(await createFakeBinary('slow-start'), diagnostics, 1_000);
     const firstStart = client.start();
     const secondStart = client.start();
-    await Promise.all([firstStart, secondStart]);
-
     const first = client.listThreads({ maxPages: 1 });
     const second = client.listThreads({ maxPages: 1 });
-    const [firstResult, secondResult] = await Promise.all([first, second]);
+    const [, , firstResult, secondResult] = await Promise.all([
+      firstStart,
+      secondStart,
+      first,
+      second,
+    ]);
 
     expect(firstResult.records).toHaveLength(2);
     expect(secondResult.records).toHaveLength(2);
