@@ -1,7 +1,7 @@
 # Agent Status Tiles — MVP Implementation Plan
 
 **Document:** `MVP_PLAN.md` in the project root.  
-**Document status:** Implementation in progress; repository bootstrap, the Epic 0 application foundation, session state/persistence, the bounded Codex rollout reader, the Codex catalog (PR #7), the rounded-square tile renderer (PR #8), and unsigned helper packaging (PR #9) are merged. The presentational Settings view (PR #10) is implementation-complete on an open branch awaiting final merge. Native integration, live provider wiring, and later release gates remain pending.
+**Document status:** Implementation in progress; PRs #1–#11 are merged, and PR #12’s implementation and review are complete pending the final GitHub merge record. Native integration, live provider wiring, and later release gates remain pending.
 **Repository:** [alxbra/agent-status-tiles](https://github.com/alxbra/agent-status-tiles)
 
 ## 1. Product and release target
@@ -518,7 +518,7 @@ a signing/notarization claim.
 - [x] Build the native hook-helper executable (merged PR #2).
 - [x] Package the native helper as unsigned arm64/x64 application resources (merged PR #9; signing and notarization remain pending).
 - [x] Implement reduced local event journal writing, concurrency handling, bounded rotation, and silent malformed-input behavior in the merged native helper (PR #2).
-- [x] Implement the bounded standalone hook-journal reader (open PR #12; replay contract, privacy projection, inode rotation, and cursor continuation are verified; coordinator wiring remains pending).
+- [x] Implement the bounded standalone hook-journal reader (PR #12 implementation/review complete; replay contract, privacy projection, inode rotation, and cursor continuation are verified; final merge status is tracked by the [PR12 audit record](https://github.com/alxbra/agent-status-tiles/pull/12#issuecomment-5684450834); coordinator wiring remains pending).
 - [ ] Replay helper journals through companion app state; the app reader/replay path remains pending.
 - [ ] Install only owned hooks into shared user settings.
 - [ ] Detect local Desktop and terminal ownership.
@@ -532,20 +532,20 @@ a signing/notarization claim.
 
 **PRs:** `feat/session-navigation`.
 
-- [ ] Add validated Codex task navigation.
-- [ ] Add Claude Desktop activation.
-- [ ] Resolve and activate owning terminal apps.
-- [ ] Add the one-time terminal selection fallback for unknown ownership.
+- [x] Add validated Codex task navigation (PR #11 main-process primitive; live task selection remains pending).
+- [x] Add Claude Desktop activation (PR #11 fixed bundle activation; live harness validation remains pending).
+- [x] Resolve and activate qualified terminal apps (PR #11 fixed bundle activation; ownership discovery remains pending).
+- [x] Return the one-time terminal selection-required result for unknown ownership (PR #11; selection UI remains pending).
 - [ ] Connect successful dispatch to completion acknowledgement.
 - [ ] Preserve unread state on launch failure.
-- [ ] Prevent duplicate launches from rapid repeated clicks.
+- [x] Prevent duplicate launches from rapid repeated clicks (PR #11 single-flight guard).
 - [ ] **E2E and corrections:** verify real harness activation, exact Codex task selection, terminal app fallback, missing-app errors, rapid clicks, and completion races; confirm no new agent session or prompt is created; fix, rerun, harden, and merge.
 
 ### Epic 7 — Minimal settings and setup
 
 **PRs:** `feat/integration-settings`, `feat/desktop-preferences`.
 
-Implementation progress (not an acceptance checkoff): PR #10 provides the
+Implementation progress (not an acceptance checkoff): PR #10 merged the
 controlled, presentational Settings view using stock shadcn controls. Its
 renderer-only callbacks and browser fixture do not perform provider startup,
 IPC, filesystem, persistence, or native settings changes; those integration
@@ -611,12 +611,13 @@ Maintain this table in the plan:
 | [#7 `feat/codex catalog`](https://github.com/alxbra/agent-status-tiles/pull/7) | Read-only Codex app-server catalog client with bounded metadata projection | 1 completed CLI pass; 2 valid findings fixed | 2 | 83 unit tests, 3 Electron smoke tests, format/lint/type/build checks; green [CI run 34986281698](https://github.com/alxbra/agent-status-tiles/actions/runs/34986281698); [audit comment](https://github.com/alxbra/agent-status-tiles/pull/7#issuecomment-5682690186) | `419322edcfd277730acd0fef669c26479352c443` |
 | [#8 `feat: add rounded-square status tile UI`](https://github.com/alxbra/agent-status-tiles/pull/8) | Isolated rounded-square tile renderer, magnification, overflow, keyboard interaction, and visual fixtures | 1 completed CLI pass; 1 valid finding fixed | 2 | 94 unit tests, 3 Electron smoke tests, 22 browser fixture tests; final head `febe543d76a4e8d052b85c8e044bf612f471a1d3`; [CI run 34987937805](https://github.com/alxbra/agent-status-tiles/actions/runs/34987937805); [audit comment](https://github.com/alxbra/agent-status-tiles/pull/8#issuecomment-5682973864) | `1f3c523465de0cff9eb2cbafb65a04cb347ce301` |
 | [#9 `build/helper packaging`](https://github.com/alxbra/agent-status-tiles/pull/9) | Unsigned arm64/x64 packaging for the existing native hook helper | 1 completed CLI pass; 1 valid documentation finding fixed | 2 | 104 TypeScript unit tests, 11 native helper tests, 25 E2E tests (3 Electron and 22 browser), format/lint/type/build checks, and unsigned arm64/x64 resource validation; [CI run 34991704461](https://github.com/alxbra/agent-status-tiles/actions/runs/34991704461), [native run 34991704642](https://github.com/alxbra/agent-status-tiles/actions/runs/34991704642), [package run 34991704417](https://github.com/alxbra/agent-status-tiles/actions/runs/34991704417); [audit comment](https://github.com/alxbra/agent-status-tiles/pull/9#issuecomment-5683519994) | `c9905833628a533f7aadaf93ff82dfd0d8c9c94f` |
-| [#10 `feat: add presentational settings view`](https://github.com/alxbra/agent-status-tiles/pull/10) | Renderer-only stock-shadcn Settings view, controlled provider/display/preferences presentation, and browser fixture | 1 completed CLI pass; 0 findings | 2 | Final local validation at `d07b3a3`: 104 unit tests, 3 Electron smoke tests, 29 browser fixture tests, format/lint/type/build checks; prior green [CI run 34991670989](https://github.com/alxbra/agent-status-tiles/actions/runs/34991670989) at `6fd75f1`; post-sync CI pending | Open; no merge SHA |
-| [#12 `feat/hook-journal-reader`](https://github.com/alxbra/agent-status-tiles/pull/12) | Provider-neutral bounded hook-journal replay reader with privacy projection, inode-aware rotation, cursor continuation, and fixed diagnostics | 1 completed CLI pass; 2 findings (1 documentation fixed, 1 Windows-test-skip request rejected for the macOS-first target) | 2 | Final local validation at `f555e4b`: 122 unit tests, 3 Electron smoke tests, 29 browser fixture tests, format/lint/type/build checks; final PR #11 synchronization and CI pending | Open; no merge SHA |
+| [#10 `feat: add presentational settings view`](https://github.com/alxbra/agent-status-tiles/pull/10) | Renderer-only stock-shadcn Settings view, controlled provider/display/preferences presentation, and browser fixture | 1 completed CLI pass; 0 findings | 2 | Final local validation at `d07b3a3`: 104 unit tests, 3 Electron smoke tests, 29 browser fixture tests, format/lint/type/build checks; [CI run 34992343659](https://github.com/alxbra/agent-status-tiles/actions/runs/34992343659); [package run 34992343684](https://github.com/alxbra/agent-status-tiles/actions/runs/34992343684); [audit comment](https://github.com/alxbra/agent-status-tiles/pull/10#issuecomment-5683612055) | `07b399fb5d6b8b8bac696f599860a02797bd464b` |
+| [#11 `feat: add application navigation`](https://github.com/alxbra/agent-status-tiles/pull/11) | Main-only macOS navigation primitive for validated Codex, Claude Desktop, qualified terminal, and unknown-owner selection results | 1 completed CLI pass; 0 findings (2 rate-limited attempts were not passes) | 2 | 121 unit tests, 32 E2E tests (3 Electron and 29 browser), format/lint/type/build checks; standalone process, target-validation, single-flight, and dispatch tests; live activation and native acceptance pending; [CI run 34997982330](https://github.com/alxbra/agent-status-tiles/actions/runs/34997982330); [audit comment](https://github.com/alxbra/agent-status-tiles/pull/11#issuecomment-5684446594) | `8f368b6872317755039a4599a94a898048db1ac1` |
+| [#12 `feat/hook-journal-reader`](https://github.com/alxbra/agent-status-tiles/pull/12) | Provider-neutral bounded hook-journal replay reader with privacy projection, inode-aware rotation, cursor continuation, and fixed diagnostics | 1 completed CLI pass; 2 findings (1 documentation fixed, 1 Windows-test-skip request rejected for the macOS-first target) | 2 | Final combined validation: 139 unit tests, 32 E2E tests (3 Electron and 29 browser), format/lint/type/build checks; final PR #11 synchronization included | [Final audit and merge record](https://github.com/alxbra/agent-status-tiles/pull/12#issuecomment-5684450834) |
 
 Foundation review corrections included strict IPC sender/frame validation, same-host renderer navigation checks, supported Node engine ranges, formatter coverage, and recovery after a failed settings-window load. No signing or notarization was claimed; Apple Developer credentials remain a release dependency.
 
-Hook helper PR #2 merged into `staging` at `b536b6c4a6246e6e31650304ea10c94b1f87963f`. Its CodeRabbit and QA corrections were partial-tail recovery, safe lock-path handling, canonical payload fields, private paths, bounded subprocess tests, and a monotonic 500 ms lock deadline. Helper packaging, app replay, hook installation, and the full Claude epic remain incomplete.
+Hook helper PR #2 merged into `staging` at `b536b6c4a6246e6e31650304ea10c94b1f87963f`. Its CodeRabbit and QA corrections were partial-tail recovery, safe lock-path handling, canonical payload fields, private paths, bounded subprocess tests, and a monotonic 500 ms lock deadline. App replay, hook installation, and the full Claude epic remain incomplete; unsigned helper packaging is covered by PR #9 below.
 
 Session-state PR #3 merged into `staging` at `33657030eff342466aa9bb8f4ffc001bce8212d4`. It completed one CodeRabbit CLI pass with zero findings and two root QA passes, including fixes for out-of-order waits, health overlays, safe identifier lookup, bounded UTF-8 fields, redundant state, and active child/archive filter coverage. The pure reducer, identity, ordering/filter, lifecycle, provider-health, and race-safe acknowledgement tasks above are verified; persistence and real-app replay remain pending.
 
@@ -650,25 +651,42 @@ and the [audit comment](https://github.com/alxbra/agent-status-tiles/pull/9#issu
 Signing/notarization, startup and hook installation, journal replay, and live
 provider integration remain unchecked.
 
-Settings presentation PR #10 is implementation-complete on its open branch at
+Settings presentation PR #10 merged into `staging` at
+`07b399fb5d6b8b8bac696f599860a02797bd464b` from implementation head
 `d07b3a3`. It completed exactly one CodeRabbit pass with zero findings and two
 root QA passes; QA1 requested only internal naming cleanup and fixture
 simplification, and QA2 found no further issues. Final post-sync local
 validation has 104 unit tests, 3 Electron smoke tests, 29 browser fixture tests,
-format/lint/type/build checks, and no live provider or native settings wiring.
-Merge remains pending.
+format/lint/type/build checks, and no live provider or native settings wiring;
+see [CI run 34992343659](https://github.com/alxbra/agent-status-tiles/actions/runs/34992343659),
+[package run 34992343684](https://github.com/alxbra/agent-status-tiles/actions/runs/34992343684),
+and the [audit comment](https://github.com/alxbra/agent-status-tiles/pull/10#issuecomment-5683612055).
 
-Hook-journal-reader PR #12 is implementation-complete on its open branch at
-`f555e4b`. It completed exactly one CodeRabbit pass with two findings: one
-documentation wrapping finding was fixed, and a Windows-test-skip request was
-rejected because this is a macOS-first target with no Windows support claim and
-the existing security test must remain active. Two root QA passes are complete;
-QA1 made only internal naming, `Object.hasOwn`, and redundant-assignment cleanup
-and QA2 found no further issues. Final local validation has 122 unit tests, 32
-E2E tests (3 Electron and 29 browser), format/lint/type/build checks, and no
-live journal coordinator, lifecycle reduction, first-run baseline, provider
-wiring, or surface acceptance. PR #11 remains pending before final PR #12
-sync/merge; no PR #12 merge SHA is recorded yet.
+Application-navigation PR #11 merged into `staging` at
+`8f368b6872317755039a4599a94a898048db1ac1`. It completed one CodeRabbit CLI
+pass with zero findings; two earlier rate-limited attempts were not counted as
+passes. It completed two root QA passes covering process ownership and cleanup,
+validated Codex task-link dispatch, Claude Desktop activation, qualified
+terminal activation, the unknown-owner selection-required result, and
+single-flight behavior. Final validation passed 121 unit tests and 32 E2E tests
+(3 Electron and 29 browser), plus format/lint/type/build checks; see [CI run
+34997982330](https://github.com/alxbra/agent-status-tiles/actions/runs/34997982330)
+and the [audit comment](https://github.com/alxbra/agent-status-tiles/pull/11#issuecomment-5684446594).
+Live harness activation, task selection confirmation, terminal ownership
+discovery, fallback UI, acknowledgement wiring, and native acceptance remain
+unchecked.
+
+Hook-journal-reader PR #12 is implementation- and review-complete on its open
+branch at `f555e4b`, pending the final GitHub merge record. It completed exactly
+one CodeRabbit pass with two findings: one documentation wrapping finding was
+fixed, and a Windows-test-skip request was rejected because this is a macOS-first
+target with no Windows support claim and the existing security test must remain
+active. Two root QA passes are complete; QA1 made only internal naming,
+`Object.hasOwn`, and redundant-assignment cleanup and QA2 found no further
+issues. Final combined validation has 139 unit tests, 32 E2E tests (3 Electron
+and 29 browser), format/lint/type/build checks, and no live journal coordinator,
+lifecycle reduction, first-run baseline, provider wiring, or surface acceptance.
+The final merge status is tracked by the [PR12 final audit and merge record](https://github.com/alxbra/agent-status-tiles/pull/12#issuecomment-5684450834); no merge SHA is recorded here.
 
 Record corrections made after review and the commit used for final validation.
 
