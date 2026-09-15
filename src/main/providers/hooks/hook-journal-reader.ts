@@ -4,6 +4,7 @@ import { lstat, open } from 'node:fs/promises';
 import { isAbsolute, join, relative, resolve } from 'node:path';
 
 import { makeCursorKey, type FileCursor, type FileCursorMap } from '../../../shared/cursor';
+import { isProvider, type Provider } from '../../../shared/session';
 
 const MAX_TARGETS = 128;
 const MAX_CURSOR_ENTRIES = 512;
@@ -17,6 +18,7 @@ const MAX_LABEL_BYTES = 256;
 const MAX_PATH_BYTES = 4_096;
 const MAX_CURSOR_IDENTITY_BYTES = 256;
 const READ_CHUNK_BYTES = 16 * 1024;
+const MAX_SNAPSHOT_ATTEMPTS = 3;
 const NO_FOLLOW = constants.O_NOFOLLOW ?? 0;
 const NONBLOCK = constants.O_NONBLOCK ?? 0;
 
@@ -45,9 +47,6 @@ const NOTIFICATION_TYPES = new Set([
 ]);
 const TOOL_NAMES = new Set(['AskUserQuestion', 'request_user_input']);
 
-type JournalProvider = 'codex' | 'claude';
-type JournalSuffix = (typeof JOURNAL_SUFFIXES)[number];
-
 export type HookJournalEventName =
   | 'SessionStart'
   | 'SessionEnd'
@@ -64,7 +63,7 @@ export type HookJournalEventName =
 
 /** A coordinator-qualified journal name; no directory scanning is performed. */
 export interface HookJournalTarget {
-  provider: JournalProvider;
+  provider: Provider;
   nativeSessionId: string;
   /** Hash basename without `.jsonl` or archive suffix. */
   baseName: string;
@@ -73,7 +72,7 @@ export interface HookJournalTarget {
 export interface HookJournalEvent {
   schemaVersion: 1;
   eventIdentity: string;
-  provider: JournalProvider;
+  provider: Provider;
   eventName: HookJournalEventName;
   sessionId: string;
   turnId?: string;
@@ -106,11 +105,13 @@ export type HookJournalDiagnosticCode =
   | 'possible-retention-gap'
   | 'cursor-truncated'
   | 'read-limit'
+  | 'cursor-limit'
+  | 'source-unstable'
   | 'diagnostics-truncated';
 
 export interface HookJournalDiagnostic {
   code: HookJournalDiagnosticCode;
-  provider: JournalProvider;
+  provider: Provider;
   sourceId: string;
 }
 
@@ -118,6 +119,8 @@ export interface HookJournalReadResult {
   events: readonly HookJournalEvent[];
   cursors: FileCursorMap;
   diagnostics: readonly HookJournalDiagnostic[];
+  /** Target index to pass back to read() when bounded work remains. */
+  nextTargetIndex?: number;
 }
 
 export type HookJournalReaderErrorCode = 'invalid-options' | 'invalid-cursor';
@@ -130,7 +133,7 @@ export class HookJournalReaderError extends Error {
 }
 
 interface SourceSnapshot {
-  suffix: JournalSuffix;
+  path: string;
   identity: string;
   size: number;
   handle: Awaited<ReturnType<typeof open>>;
@@ -144,6 +147,10 @@ interface MutableDiagnostics {
 interface ConsumedFile {
   events: HookJournalEvent[];
   cursor: FileCursor;
+  bytesRead: number;
+  byteLimitReached: boolean;
+  recordLimitReached: boolean;
+  hasMore: boolean;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -195,7 +202,7 @@ function validCursor(value: unknown): value is FileCursor {
         key === 'baselineUntilOffset' ||
         key === 'isDiscardingOversizedLine',
     ) &&
-    safeString(value.identity, MAX_CURSOR_IDENTITY_BYTES) &&
+    (value.identity === '' || safeString(value.identity, MAX_CURSOR_IDENTITY_BYTES)) &&
     validTimestamp(value.offset) &&
     (value.baselineUntilOffset === undefined || validTimestamp(value.baselineUntilOffset)) &&
     (value.isDiscardingOversizedLine === undefined ||
@@ -209,7 +216,7 @@ function validCursorKey(value: string): boolean {
   const provider = value.slice(0, separator);
   const sourceId = value.slice(separator + 1);
   return (
-    (provider === 'codex' || provider === 'claude') &&
+    isProvider(provider) &&
     safeString(sourceId, MAX_ID_BYTES) &&
     !isAbsolute(sourceId) &&
     !sourceId.includes('\\') &&
@@ -325,10 +332,7 @@ function eventFromRecord(
   };
 }
 
-export function makeHookJournalBaseName(
-  provider: JournalProvider,
-  nativeSessionId: string,
-): string {
+export function makeHookJournalBaseName(provider: Provider, nativeSessionId: string): string {
   return createHash('sha256')
     .update(provider)
     .update(Buffer.from([0]))
@@ -349,39 +353,67 @@ export class HookJournalReader {
   async read(
     targets: readonly HookJournalTarget[],
     cursors: FileCursorMap = {},
+    options: { startTargetIndex?: number } = {},
   ): Promise<HookJournalReadResult> {
     this.validateTargets(targets);
     this.validateCursorInput(cursors);
+    const startTargetIndex = options.startTargetIndex ?? 0;
+    if (
+      !Number.isSafeInteger(startTargetIndex) ||
+      startTargetIndex < 0 ||
+      startTargetIndex > targets.length
+    ) {
+      throw new HookJournalReaderError('invalid-options');
+    }
 
     const diagnostics: MutableDiagnostics = { values: [], truncated: false };
     const events: HookJournalEvent[] = [];
     const updatedCursors: Record<string, FileCursor> = { ...cursors };
     let totalBytes = 0;
     let totalRecords = 0;
-    let limitTarget: HookJournalTarget | undefined;
+    let nextTargetIndex: number | undefined;
 
-    for (const target of targets) {
+    for (let targetIndex = startTargetIndex; targetIndex < targets.length; targetIndex += 1) {
+      const target = targets[targetIndex];
       const key = makeCursorKey(target.provider, target.baseName);
-      const previous = cursors[key];
+      const previous = hasOwn(cursors, key) ? cursors[key] : undefined;
+      if (
+        !hasOwn(updatedCursors, key) &&
+        Object.keys(updatedCursors).length >= MAX_CURSOR_ENTRIES
+      ) {
+        addDiagnostic(diagnostics, 'cursor-limit', target);
+        nextTargetIndex = targetIndex;
+        break;
+      }
       const result = await this.readTarget(
         target,
         previous,
         diagnostics,
-        totalBytes,
         MAX_RECORDS - totalRecords,
+        MAX_TOTAL_BYTES - totalBytes,
       );
       totalBytes += result.bytesRead;
       totalRecords += result.events.length;
       events.push(...result.events);
       if (result.cursor !== undefined) updatedCursors[key] = result.cursor;
-      if (totalBytes >= MAX_TOTAL_BYTES || totalRecords >= MAX_RECORDS) {
-        limitTarget = target;
+      const bounded =
+        result.bounded || totalBytes >= MAX_TOTAL_BYTES || totalRecords >= MAX_RECORDS;
+      if (bounded) addDiagnostic(diagnostics, 'read-limit', target);
+      if (result.hasMore || bounded) {
+        nextTargetIndex = result.hasMore ? targetIndex : targetIndex + 1;
         break;
       }
     }
 
-    if (limitTarget !== undefined) addDiagnostic(diagnostics, 'read-limit', limitTarget);
-    return { events, cursors: updatedCursors, diagnostics: diagnostics.values };
+    if (nextTargetIndex !== undefined && nextTargetIndex >= targets.length) {
+      nextTargetIndex = undefined;
+    }
+    return {
+      events,
+      cursors: updatedCursors,
+      diagnostics: diagnostics.values,
+      ...(nextTargetIndex === undefined ? {} : { nextTargetIndex }),
+    };
   }
 
   private validateTargets(targets: readonly HookJournalTarget[]): void {
@@ -392,7 +424,7 @@ export class HookJournalReader {
     for (const target of targets) {
       if (
         !isRecord(target) ||
-        (target.provider !== 'codex' && target.provider !== 'claude') ||
+        !isProvider(target.provider) ||
         !safeString(target.nativeSessionId, MAX_ID_BYTES) ||
         !safeString(target.baseName, MAX_ID_BYTES) ||
         !/^[a-f0-9]{64}$/u.test(target.baseName) ||
@@ -421,13 +453,19 @@ export class HookJournalReader {
     target: HookJournalTarget,
     previous: FileCursor | undefined,
     diagnostics: MutableDiagnostics,
-    bytesAlreadyRead: number,
     recordsRemaining: number,
-  ): Promise<{ events: HookJournalEvent[]; cursor?: FileCursor; bytesRead: number }> {
+    byteBudget: number,
+  ): Promise<{
+    events: HookJournalEvent[];
+    cursor?: FileCursor;
+    bytesRead: number;
+    hasMore: boolean;
+    bounded: boolean;
+  }> {
     const providerDirectory = join(this.appDataPath, 'journals', target.provider);
     if (!isContained(resolve(this.appDataPath, 'journals'), providerDirectory)) {
       addDiagnostic(diagnostics, 'unsafe-source', target);
-      return { events: [], bytesRead: 0 };
+      return { events: [], bytesRead: 0, hasMore: false, bounded: false };
     }
 
     const directoryReady = await this.isSafeProviderDirectory(
@@ -435,39 +473,56 @@ export class HookJournalReader {
       target,
       diagnostics,
     );
-    if (!directoryReady) return { events: [], bytesRead: 0 };
+    if (!directoryReady) return { events: [], bytesRead: 0, hasMore: false, bounded: false };
 
-    const snapshots: SourceSnapshot[] = [];
-    for (const suffix of JOURNAL_SUFFIXES) {
-      if (bytesAlreadyRead >= MAX_TOTAL_BYTES) break;
-      const path = join(providerDirectory, `${target.baseName}${suffix}`);
-      if (!isContained(providerDirectory, path)) {
-        addDiagnostic(diagnostics, 'unsafe-source', target);
-        continue;
+    let snapshots: SourceSnapshot[] = [];
+    let stable = false;
+    for (let attempt = 0; attempt < MAX_SNAPSHOT_ATTEMPTS; attempt += 1) {
+      const attemptSnapshots: SourceSnapshot[] = [];
+      for (const suffix of JOURNAL_SUFFIXES) {
+        const path = join(providerDirectory, `${target.baseName}${suffix}`);
+        if (!isContained(providerDirectory, path)) {
+          addDiagnostic(diagnostics, 'unsafe-source', target);
+          continue;
+        }
+        const snapshot = await this.openSnapshot(path, target, diagnostics);
+        if (snapshot !== undefined) attemptSnapshots.push(snapshot);
       }
-      const snapshot = await this.openSnapshot(path, suffix, target, diagnostics);
-      if (snapshot !== undefined) snapshots.push(snapshot);
+      if (attemptSnapshots.length === 0 || (await this.isStableSnapshotSet(attemptSnapshots))) {
+        snapshots = attemptSnapshots;
+        stable = true;
+        break;
+      }
+      await this.closeSnapshots(attemptSnapshots);
+    }
+    if (!stable) {
+      addDiagnostic(diagnostics, 'source-unstable', target);
+      return { events: [], bytesRead: 0, hasMore: true, bounded: false };
     }
     if (snapshots.length === 0) {
       // A prior inode disappearing without any retained file may indicate
       // loss, but the cursor cannot establish whether unread bytes existed.
-      if (previous !== undefined) addDiagnostic(diagnostics, 'possible-retention-gap', target);
-      return { events: [], bytesRead: 0 };
+      if (previous !== undefined && previous.identity !== '') {
+        addDiagnostic(diagnostics, 'possible-retention-gap', target);
+      }
+      return { events: [], bytesRead: 0, hasMore: false, bounded: false };
     }
 
-    const cursorIndex =
-      previous === undefined
-        ? -1
-        : snapshots.findIndex((snapshot) => snapshot.identity === previous.identity);
-    if (previous !== undefined && cursorIndex < 0) {
+    const hasTrustedPrevious = previous !== undefined && previous.identity !== '';
+    const cursorIndex = !hasTrustedPrevious
+      ? -1
+      : snapshots.findIndex((snapshot) => snapshot.identity === previous.identity);
+    if (hasTrustedPrevious && cursorIndex < 0) {
       addDiagnostic(diagnostics, 'possible-retention-gap', target);
     }
 
     const events: HookJournalEvent[] = [];
     let cursor: FileCursor | undefined;
-    let started = previous === undefined || cursorIndex < 0;
+    let started = !hasTrustedPrevious || cursorIndex < 0;
     const seenIdentities = new Set<string>();
     let bytesRead = 0;
+    let hasMore = false;
+    let bounded = false;
     try {
       for (let index = 0; index < snapshots.length; index += 1) {
         const snapshot = snapshots[index];
@@ -477,28 +532,51 @@ export class HookJournalReader {
           if (snapshot.identity !== previous?.identity) continue;
           started = true;
         }
-        const initialOffset = snapshot.identity === previous?.identity ? previous.offset : 0;
+        const initialOffset =
+          hasTrustedPrevious && snapshot.identity === previous?.identity ? previous.offset : 0;
         const consumed = await this.consumeSnapshot(
           snapshot,
           initialOffset,
-          snapshot.identity === previous?.identity ? previous : undefined,
+          hasTrustedPrevious && snapshot.identity === previous?.identity ? previous : undefined,
           target,
           diagnostics,
           recordsRemaining - events.length,
+          byteBudget - bytesRead,
         );
         bytesRead += consumed.bytesRead;
         events.push(...consumed.events);
         cursor = consumed.cursor;
-        if (bytesAlreadyRead + bytesRead >= MAX_TOTAL_BYTES || events.length >= recordsRemaining) {
+        if (
+          consumed.hasMore ||
+          consumed.recordLimitReached ||
+          bytesRead >= byteBudget ||
+          index + 1 >= snapshots.length
+        ) {
+          bounded = consumed.byteLimitReached || consumed.recordLimitReached;
+          hasMore = consumed.hasMore || index + 1 < snapshots.length;
           break;
         }
       }
     } finally {
-      await Promise.all(
-        snapshots.map((snapshot) => snapshot.handle.close().catch(() => undefined)),
-      );
+      await this.closeSnapshots(snapshots);
     }
-    return { events, cursor, bytesRead };
+    return { events, cursor, bytesRead, hasMore, bounded };
+  }
+
+  private async isStableSnapshotSet(snapshots: readonly SourceSnapshot[]): Promise<boolean> {
+    for (const snapshot of snapshots) {
+      try {
+        const current = await lstat(snapshot.path, { bigint: true });
+        if (!current.isFile() || sourceIdentity(current) !== snapshot.identity) return false;
+      } catch {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  private async closeSnapshots(snapshots: readonly SourceSnapshot[]): Promise<void> {
+    await Promise.all(snapshots.map((snapshot) => snapshot.handle.close().catch(() => undefined)));
   }
 
   private async isSafeProviderDirectory(
@@ -542,7 +620,6 @@ export class HookJournalReader {
 
   private async openSnapshot(
     path: string,
-    suffix: JournalSuffix,
     target: HookJournalTarget,
     diagnostics: MutableDiagnostics,
   ): Promise<SourceSnapshot | undefined> {
@@ -583,7 +660,7 @@ export class HookJournalReader {
       }
       const size = Number(stats.size);
       return {
-        suffix,
+        path,
         identity: sourceIdentity(stats),
         size,
         handle,
@@ -608,7 +685,8 @@ export class HookJournalReader {
     target: HookJournalTarget,
     diagnostics: MutableDiagnostics,
     recordsRemaining: number,
-  ): Promise<ConsumedFile & { bytesRead: number }> {
+    byteBudget: number,
+  ): Promise<ConsumedFile> {
     let offset = requestedOffset;
     let discarding = previous?.isDiscardingOversizedLine ?? false;
     if (offset > snapshot.size) {
@@ -616,12 +694,25 @@ export class HookJournalReader {
       offset = 0;
       discarding = false;
     }
-    const bytes = await this.readSnapshotBytes(snapshot, offset, target, diagnostics);
+    const readResult = await this.readSnapshotBytes(
+      snapshot,
+      offset,
+      byteBudget,
+      target,
+      diagnostics,
+    );
+    const bytes = readResult.bytes;
     const events: HookJournalEvent[] = [];
     let cursorOffset = offset;
     let lineStart = offset;
     let index = 0;
+    let recordLimitReached = false;
     while (index < bytes.length) {
+      if (events.length >= recordsRemaining) {
+        recordLimitReached = true;
+        cursorOffset = offset + index;
+        break;
+      }
       const newline = bytes.indexOf(0x0a, index);
       if (newline < 0) {
         const partialLength = bytes.length - index;
@@ -653,21 +744,29 @@ export class HookJournalReader {
         if (raw !== undefined) {
           const event = eventFromRecord(raw, target, `${snapshot.identity}:${lineStart}`);
           if (event === undefined) addDiagnostic(diagnostics, 'record-malformed', target);
-          else if (events.length < recordsRemaining) events.push(event);
+          else events.push(event);
         }
         cursorOffset = recordEnd;
       }
       lineStart = recordEnd;
       index = newline + 1;
+      if (events.length >= recordsRemaining) {
+        recordLimitReached = true;
+        break;
+      }
     }
-    if (index === bytes.length) {
+    if (!recordLimitReached && index === bytes.length) {
       cursorOffset = offset + bytes.length;
       if (bytes.length === 0 && offset === snapshot.size) cursorOffset = snapshot.size;
       if (discarding && bytes.length > 0 && bytes[bytes.length - 1] === 0x0a) discarding = false;
     }
+    const hasUnconsumedTail = discarding || cursorOffset < snapshot.size;
     return {
       events,
       bytesRead: bytes.length,
+      byteLimitReached: readResult.byteLimitReached,
+      recordLimitReached,
+      hasMore: hasUnconsumedTail || readResult.byteLimitReached,
       cursor: {
         identity: snapshot.identity,
         offset: cursorOffset,
@@ -686,15 +785,17 @@ export class HookJournalReader {
   private async readSnapshotBytes(
     snapshot: SourceSnapshot,
     offset: number,
+    byteBudget: number,
     target: HookJournalTarget,
     diagnostics: MutableDiagnostics,
-  ): Promise<Buffer> {
+  ): Promise<{ bytes: Buffer; byteLimitReached: boolean }> {
     const remaining = snapshot.size - offset;
-    if (remaining <= 0) return Buffer.alloc(0);
-    const bytes = Buffer.allocUnsafe(remaining);
+    if (remaining <= 0) return { bytes: Buffer.alloc(0), byteLimitReached: false };
+    const readLimit = Math.min(remaining, Math.max(0, byteBudget));
+    const bytes = Buffer.allocUnsafe(readLimit);
     let total = 0;
-    while (total < remaining) {
-      const length = Math.min(READ_CHUNK_BYTES, remaining - total);
+    while (total < readLimit) {
+      const length = Math.min(READ_CHUNK_BYTES, readLimit - total);
       try {
         const result = await snapshot.handle.read(bytes, total, length, offset + total);
         if (result.bytesRead === 0) {
@@ -707,6 +808,9 @@ export class HookJournalReader {
         break;
       }
     }
-    return bytes.subarray(0, total);
+    return {
+      bytes: bytes.subarray(0, total),
+      byteLimitReached: readLimit < remaining,
+    };
   }
 }

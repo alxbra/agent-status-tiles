@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   appendFile,
   mkdir,
@@ -12,11 +12,31 @@ import {
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
+const journalOpenHook = vi.hoisted(() => ({
+  current: undefined as ((path: string) => Promise<void>) | undefined,
+}));
+
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs/promises')>();
+  return {
+    ...actual,
+    open: async (
+      path: Parameters<typeof actual.open>[0],
+      flags?: Parameters<typeof actual.open>[1],
+      mode?: Parameters<typeof actual.open>[2],
+    ) => {
+      const handle = await actual.open(path, flags, mode);
+      if (journalOpenHook.current !== undefined) await journalOpenHook.current(String(path));
+      return handle;
+    },
+  };
+});
+
 import {
   HookJournalReader,
   makeHookJournalBaseName,
   type HookJournalTarget,
-} from '../../src/main/providers/claude/hook-journal-reader';
+} from '../../src/main/providers/hooks/hook-journal-reader';
 import { makeCursorKey, type FileCursorMap } from '../../src/shared/cursor';
 
 const MAX_RECORD_BYTES = 4 * 1024;
@@ -105,6 +125,87 @@ describe('HookJournalReader', () => {
     expect(second.events[0]?.eventIdentity).not.toBe(first.events[0]?.eventIdentity);
     expect(cursorFor(journalTarget, second.cursors)?.offset).toBe(Buffer.byteLength(secondLine));
     expect(second.diagnostics).toEqual([]);
+  });
+
+  it('retries when rotation changes a path after its inode was opened', async () => {
+    const root = await isolatedJournalRoot();
+    const journalTarget = target('unstable-rotation');
+    const active = activePath(root, journalTarget);
+    const archivedThree = archivePath(root, journalTarget, 3);
+    const archivedTwo = archivePath(root, journalTarget, 2);
+    const archivedOne = archivePath(root, journalTarget, 1);
+    await writeFile(archivedThree, record({ event_name: 'UserPromptSubmit' }, 'unstable-rotation'));
+    await writeFile(archivedTwo, record({ event_name: 'SessionStart' }, 'unstable-rotation'));
+    await writeFile(archivedOne, record({ event_name: 'SessionEnd' }, 'unstable-rotation'));
+    await writeFile(active, record({ event_name: 'Stop' }, 'unstable-rotation'));
+
+    let rotated = false;
+    journalOpenHook.current = async (path) => {
+      if (!rotated && path === archivedThree) {
+        rotated = true;
+        await rename(archivedThree, join(root, 'discarded.jsonl'));
+        await rename(archivedTwo, archivedThree);
+        await rename(archivedOne, archivedTwo);
+        await rename(active, archivedOne);
+        await writeFile(
+          active,
+          record(
+            { event_name: 'Notification', notification_type: 'idle_prompt' },
+            'unstable-rotation',
+          ),
+        );
+      }
+    };
+    try {
+      const result = await new HookJournalReader({ appDataPath: root }).read([journalTarget]);
+      expect(rotated).toBe(true);
+      expect(result.diagnostics).toEqual([]);
+      expect(result.events.map((event) => event.eventName)).toEqual([
+        'SessionStart',
+        'SessionEnd',
+        'Stop',
+        'Notification',
+      ]);
+    } finally {
+      journalOpenHook.current = undefined;
+    }
+  });
+
+  it('reports persistent rotation instability without advancing a cursor', async () => {
+    const root = await isolatedJournalRoot();
+    const journalTarget = target('persistent-instability');
+    const active = activePath(root, journalTarget);
+    const archivedThree = archivePath(root, journalTarget, 3);
+    const archivedTwo = archivePath(root, journalTarget, 2);
+    const archivedOne = archivePath(root, journalTarget, 1);
+    await writeFile(
+      archivedThree,
+      record({ event_name: 'SessionStart' }, 'persistent-instability'),
+    );
+    await writeFile(archivedTwo, record({ event_name: 'SessionStart' }, 'persistent-instability'));
+    await writeFile(archivedOne, record({ event_name: 'SessionStart' }, 'persistent-instability'));
+    await writeFile(active, record({ event_name: 'SessionStart' }, 'persistent-instability'));
+
+    let rotations = 0;
+    journalOpenHook.current = async (path) => {
+      if (path !== archivedThree) return;
+      rotations += 1;
+      await rename(archivedThree, join(root, `discarded-${rotations}.jsonl`));
+      await rename(archivedTwo, archivedThree);
+      await rename(archivedOne, archivedTwo);
+      await rename(active, archivedOne);
+      await writeFile(active, record({ event_name: 'SessionStart' }, 'persistent-instability'));
+    };
+    try {
+      const result = await new HookJournalReader({ appDataPath: root }).read([journalTarget]);
+      expect(rotations).toBe(3);
+      expect(result.events).toEqual([]);
+      expect(result.cursors).toEqual({});
+      expect(result.diagnostics.map((diagnostic) => diagnostic.code)).toEqual(['source-unstable']);
+      expect(result.nextTargetIndex).toBe(0);
+    } finally {
+      journalOpenHook.current = undefined;
+    }
   });
 
   it('replays only appended complete records after a reader restart', async () => {
@@ -352,14 +453,24 @@ describe('HookJournalReader', () => {
   it('bounds total bytes, projected records, and diagnostics', async () => {
     const bytesRoot = await isolatedJournalRoot();
     const byteTargets = Array.from({ length: 33 }, (_, index) => target(`bytes-${index}`));
+    const boundedBytes = Buffer.concat([Buffer.alloc(MAX_FILE_BYTES - 1, 0x78), Buffer.from('\n')]);
     await Promise.all(
       byteTargets.map((journalTarget) =>
-        writeFile(activePath(bytesRoot, journalTarget), Buffer.alloc(MAX_FILE_BYTES, 0x78)),
+        writeFile(activePath(bytesRoot, journalTarget), boundedBytes),
       ),
     );
     const byteResult = await new HookJournalReader({ appDataPath: bytesRoot }).read(byteTargets);
     expect(byteResult.events).toEqual([]);
     expect(byteResult.diagnostics.map((diagnostic) => diagnostic.code)).toContain('read-limit');
+    expect(Object.keys(byteResult.cursors)).toHaveLength(32);
+    expect(byteResult.nextTargetIndex).toBe(32);
+    const byteResume = await new HookJournalReader({ appDataPath: bytesRoot }).read(
+      byteTargets,
+      byteResult.cursors,
+      { startTargetIndex: byteResult.nextTargetIndex },
+    );
+    expect(Object.keys(byteResume.cursors)).toHaveLength(33);
+    expect(byteResume.nextTargetIndex).toBeUndefined();
 
     const recordRoot = await isolatedJournalRoot();
     const recordTarget = target('record-limit');
@@ -375,6 +486,18 @@ describe('HookJournalReader', () => {
     ]);
     expect(recordResult.events).toHaveLength(4096);
     expect(recordResult.diagnostics.map((diagnostic) => diagnostic.code)).toContain('read-limit');
+    expect(recordResult.nextTargetIndex).toBe(0);
+    const recordResume = await new HookJournalReader({ appDataPath: recordRoot }).read(
+      [recordTarget],
+      recordResult.cursors,
+      { startTargetIndex: recordResult.nextTargetIndex },
+    );
+    expect(recordResume.events).toHaveLength(4096);
+    expect(
+      new Set([...recordResult.events, ...recordResume.events].map((event) => event.eventIdentity))
+        .size,
+    ).toBe(8192);
+    expect(recordResume.nextTargetIndex).toBeUndefined();
 
     const diagnosticRoot = await isolatedJournalRoot();
     const diagnosticTarget = target('diagnostic-limit');
@@ -385,5 +508,31 @@ describe('HookJournalReader', () => {
     expect(diagnosticResult.events).toEqual([]);
     expect(diagnosticResult.diagnostics).toHaveLength(128);
     expect(diagnosticResult.diagnostics.at(-1)?.code).toBe('diagnostics-truncated');
+  });
+
+  it('preserves mixed-provider empty-identity cursors and refuses to overfill the map', async () => {
+    const root = await isolatedJournalRoot();
+    const journalTarget = target('cursor-cap');
+    await writeFile(activePath(root, journalTarget), record({}, 'cursor-cap'));
+    const codexCursorKey = makeCursorKey('codex', 'rollout.jsonl');
+    const mixedCursors: FileCursorMap = {
+      [codexCursorKey]: { identity: '', offset: 0 },
+    };
+    const reader = new HookJournalReader({ appDataPath: root });
+    const mixed = await reader.read([journalTarget], mixedCursors);
+    expect(mixed.events).toHaveLength(1);
+    expect(mixed.cursors[codexCursorKey]).toEqual({ identity: '', offset: 0 });
+
+    const fullCursors: FileCursorMap = Object.fromEntries(
+      Array.from({ length: 512 }, (_, index) => [
+        makeCursorKey('codex', `source-${index}`),
+        { identity: '', offset: 0 },
+      ]),
+    );
+    const full = await reader.read([journalTarget], fullCursors);
+    expect(full.events).toEqual([]);
+    expect(Object.keys(full.cursors)).toHaveLength(512);
+    expect(full.diagnostics.map((diagnostic) => diagnostic.code)).toContain('cursor-limit');
+    expect(full.nextTargetIndex).toBe(0);
   });
 });
