@@ -20,6 +20,8 @@ import {
   MAX_READ_BYTES,
   cursorKeyForPath,
 } from '../../src/main/providers/codex';
+import { reduceSessionState, selectSession } from '../../src/main/sessions/reducer';
+import { createInitialSessionState } from '../../src/shared/session';
 import type { FileCursor } from '../../src/shared/cursor';
 import type {
   CodexRolloutEvent,
@@ -402,6 +404,56 @@ describe('CodexRolloutReader', () => {
       'input-requested',
       'input-resolved',
     ]);
+  });
+
+  it('keeps output-before-request resolution ordered for the shared reducer', async () => {
+    const root = await testRoot();
+    const file = path.join(root, `rollout-${SESSION_ID}.jsonl`);
+    await writeLines(file, [
+      sessionMeta(),
+      record(
+        'event_msg',
+        { type: 'task_started', turn_id: 'turn-reordered' },
+        '2026-09-15T10:00:01Z',
+      ),
+      response('function_call_output', { call_id: 'reordered-call', turn_id: 'turn-reordered' }),
+      record(
+        'response_item',
+        {
+          type: 'function_call',
+          name: 'request_user_input',
+          call_id: 'reordered-call',
+          turn_id: 'turn-reordered',
+        },
+        '2026-09-15T10:00:02Z',
+      ),
+    ]);
+
+    const result = await new CodexRolloutReader(root).read([sourceFor(file)]);
+    let state = reduceSessionState(createInitialSessionState(), {
+      type: 'upsert',
+      provider: 'codex',
+      nativeSessionId: SESSION_ID,
+      surface: 'cli',
+      title: 'Qualified session',
+      isTopLevel: true,
+      isArchived: false,
+      canOpen: true,
+      updatedAt: 0,
+    });
+    for (const { event: emitted } of result.events) {
+      state = reduceSessionState(state, emitted);
+    }
+
+    expect(state.sessions[`codex:${SESSION_ID}`]).toMatchObject({
+      inputRequests: {
+        'reordered-call': {
+          requestedAt: Date.parse('2026-09-15T10:00:02Z'),
+          resolvedAt: Date.parse('2026-09-15T10:00:02Z'),
+        },
+      },
+    });
+    expect(selectSession(state, `codex:${SESSION_ID}`)?.status).not.toBe('needs-input');
   });
 
   it('seeds unresolved input correlation from the qualified session record', async () => {

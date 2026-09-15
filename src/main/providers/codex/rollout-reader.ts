@@ -704,7 +704,10 @@ export class CodexRolloutReader {
           sessionId: this.sessionId(context),
           turnId,
           callId,
-          timestamp: pendingOutput.timestamp,
+          // A response item can precede its request in a replayed rollout.
+          // The shared reducer rejects a resolution that predates its request,
+          // so preserve the causal order of the correlated pair.
+          timestamp: Math.max(pendingOutput.timestamp, timestamp),
         },
         context,
         baseline,
