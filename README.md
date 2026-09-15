@@ -5,9 +5,9 @@ Code sessions are doing without keeping their harness windows visible.
 
 The product and implementation contract lives in [MVP_PLAN.md](MVP_PLAN.md).
 The plan is the source of truth for scope, privacy, native macOS behavior, and
-the exact overlay geometry. The current foundation provides a minimal secure
-Electron Settings shell; overlay and provider integrations remain subsequent
-bounded PRs.
+the exact overlay geometry. The current desktop shell provides secure Settings,
+a hidden-until-needed transparent overlay window, and a native menu-bar entry;
+provider integrations and tile rendering remain subsequent bounded PRs.
 
 ## Development workflow
 
