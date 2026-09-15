@@ -1,3 +1,5 @@
+import type { BrowserWindow } from 'electron';
+
 export function isAllowedRendererNavigation(targetUrl: string, rendererUrl: string): boolean {
   try {
     const target = new URL(targetUrl);
@@ -15,4 +17,22 @@ export function isAllowedRendererNavigation(targetUrl: string, rendererUrl: stri
   } catch {
     return false;
   }
+}
+
+/** Apply the renderer's navigation and window-creation boundary to a window. */
+export function protectWebContents(window: BrowserWindow, allowedUrl: string): void {
+  window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  window.webContents.on('will-navigate', (event, targetUrl) => {
+    if (!isAllowedRendererNavigation(targetUrl, allowedUrl)) {
+      event.preventDefault();
+    }
+  });
+  window.webContents.on('will-redirect', (event, targetUrl) => {
+    if (!isAllowedRendererNavigation(targetUrl, allowedUrl)) {
+      event.preventDefault();
+    }
+  });
+  window.webContents.on('will-attach-webview', (event) => {
+    event.preventDefault();
+  });
 }
