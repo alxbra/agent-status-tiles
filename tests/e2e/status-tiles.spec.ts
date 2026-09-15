@@ -508,6 +508,99 @@ test('expanded surfaces remain owned by their session at edges and during motion
   );
 });
 
+test('keeps every neighbor target separate and correctly owned across a hover sweep', async ({
+  page,
+}) => {
+  await openFixture(page, 5);
+  const tiles = page.locator('.status-tiles__tile');
+  const stableCenters = await tiles.evaluateAll((elements) =>
+    elements.map((element) => {
+      const bounds = element.getBoundingClientRect();
+      return { x: bounds.x + bounds.width / 2, y: bounds.y + bounds.height / 2 };
+    }),
+  );
+  const cdp = await page.context().newCDPSession(page);
+  for (const [index, stableCenter] of stableCenters.entries()) {
+    await page.mouse.move(stableCenter.x, stableCenter.y);
+    const hovered = tiles.nth(index);
+    await expect
+      .poll(async () =>
+        Number(
+          await hovered
+            .locator('.status-tiles__tile-surface')
+            .evaluate((node) => node.getBoundingClientRect().width),
+        ),
+      )
+      .toBeGreaterThan(39);
+
+    const metrics = await page.locator('.status-tiles__tile').evaluateAll((elements) =>
+      elements.map((element) => {
+        const target = element.getBoundingClientRect();
+        const surface = element
+          .querySelector<HTMLElement>('.status-tiles__tile-surface')!
+          .getBoundingClientRect();
+        return {
+          target: {
+            x: target.x,
+            y: target.y,
+            right: target.right,
+            bottom: target.bottom,
+            width: target.width,
+            height: target.height,
+          },
+          surface: {
+            x: surface.x,
+            y: surface.y,
+            right: surface.right,
+            bottom: surface.bottom,
+          },
+        };
+      }),
+    );
+    for (const metric of metrics) {
+      expect(metric.target.width).toBeGreaterThanOrEqual(24);
+      expect(metric.target.height).toBeGreaterThanOrEqual(24);
+      expect(metric.target.x).toBeLessThanOrEqual(metric.surface.x + 0.1);
+      expect(metric.target.right).toBeGreaterThanOrEqual(metric.surface.right - 0.1);
+      expect(metric.target.y).toBeLessThanOrEqual(metric.surface.y + 0.1);
+      expect(metric.target.bottom).toBeGreaterThanOrEqual(metric.surface.bottom - 0.1);
+    }
+    const sortedTargets = [...metrics].sort((left, right) => left.target.y - right.target.y);
+    const sortedSurfaces = [...metrics].sort((left, right) => left.surface.y - right.surface.y);
+    for (let neighbor = 1; neighbor < metrics.length; neighbor += 1) {
+      expect(sortedTargets[neighbor]!.target.y).toBeGreaterThanOrEqual(
+        sortedTargets[neighbor - 1]!.target.bottom - 0.01,
+      );
+      expect(sortedSurfaces[neighbor]!.surface.y).toBeGreaterThanOrEqual(
+        sortedSurfaces[neighbor - 1]!.surface.bottom + 5.99,
+      );
+    }
+
+    const surface = await hovered.locator('.status-tiles__tile-surface').boundingBox();
+    if (surface === null) throw new Error('Hovered surface has no bounds');
+    await page.evaluate(() => {
+      window.__fixtureOpenTarget = undefined;
+    });
+    await cdp.send('Input.dispatchMouseEvent', {
+      type: 'mousePressed',
+      x: surface.x + 1,
+      y: surface.y + surface.height / 2,
+      button: 'left',
+      clickCount: 1,
+    });
+    await cdp.send('Input.dispatchMouseEvent', {
+      type: 'mouseReleased',
+      x: surface.x + 1,
+      y: surface.y + surface.height / 2,
+      button: 'left',
+      clickCount: 1,
+    });
+    await expect
+      .poll(() => page.evaluate(() => window.__fixtureOpenTarget?.sessionId))
+      .toBe(`${index % 2 === 0 ? 'codex' : 'claude'}:fixture-${String(index)}`);
+  }
+});
+
 test('keyboard navigation reaches sessions beyond the twelve-slot viewport', async ({ page }) => {
   await openFixture(page, 30);
   const first = page.locator('.status-tiles__tile').first();

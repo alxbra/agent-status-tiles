@@ -40,6 +40,15 @@ function expectRegionsInside(layout: ReturnType<typeof layoutTiles>, height: num
   }
 }
 
+function expectHitRegionsDoNotOverlap(layout: ReturnType<typeof layoutTiles>): void {
+  const regions = [...layout.hitRegions].sort((left, right) => left.y - right.y);
+  for (let index = 1; index < regions.length; index += 1) {
+    expect(regions[index]!.y).toBeGreaterThanOrEqual(
+      regions[index - 1]!.y + regions[index - 1]!.height,
+    );
+  }
+}
+
 describe('status tile geometry', () => {
   it('keeps collapsed tiles square, colored-only, and anchored to the right edge', () => {
     const layout = layoutTiles(sessions(1), { width: DEFAULT_STRIP_WIDTH, height: 480 });
@@ -66,6 +75,7 @@ describe('status tile geometry', () => {
     expect(hovered.hitRegion.width).toBe(40);
     expect(hovered.hitRegion.height).toBe(40);
     expect(surfacesHaveMinimumGap(layout.tiles)).toBe(true);
+    expectHitRegionsDoNotOverlap(layout);
   });
 
   it('reserves enough room for top and bottom hover at short heights', () => {
