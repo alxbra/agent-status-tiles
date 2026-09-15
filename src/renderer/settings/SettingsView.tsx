@@ -65,7 +65,7 @@ function ProviderAction({
   onDisconnect: (provider: Provider) => void | Promise<void>;
 }): ReactElement {
   const label = PROVIDER_LABEL[provider];
-  const providerPending = isPending(`provider:${provider}`);
+  const isProviderPending = isPending(`provider:${provider}`);
   if (state.status === 'connected') {
     return (
       <div className="flex items-center gap-2">
@@ -83,10 +83,10 @@ function ProviderAction({
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end">
             <DropdownMenuItem
-              disabled={!state.canDisconnect || providerPending}
+              disabled={!state.canDisconnect || isProviderPending}
               onSelect={() => void onDisconnect(provider)}
             >
-              {providerPending ? 'Working…' : 'Disconnect'}
+              {isProviderPending ? 'Working…' : 'Disconnect'}
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
@@ -94,16 +94,16 @@ function ProviderAction({
     );
   }
 
-  const pending = state.status === 'connecting' || providerPending;
+  const isConnecting = state.status === 'connecting' || isProviderPending;
   return (
     <Button
-      disabled={pending || !state.canConnect}
+      disabled={isConnecting || !state.canConnect}
       onClick={() => void onConnect(provider)}
       size="sm"
       type="button"
       variant="outline"
     >
-      {pending ? 'Connecting…' : 'Connect'}
+      {isConnecting ? 'Connecting…' : 'Connect'}
     </Button>
   );
 }

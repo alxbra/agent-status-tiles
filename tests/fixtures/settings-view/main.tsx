@@ -43,17 +43,17 @@ type FixtureWindow = Window & {
 
 function SettingsFixture(): ReactElement {
   const [state, setState] = useState(initialState);
-  const [advancedOpen, setAdvancedOpen] = useState(false);
-  const deferNext = useRef(false);
+  const [isAdvancedOpen, setIsAdvancedOpen] = useState(false);
+  const hasDeferredNextAction = useRef(false);
   const deferredAction = useRef<(() => void) | undefined>(undefined);
   const providerActionCalls = useRef<Record<Provider, number>>({ codex: 0, claude: 0 });
-  const rejectNext = useRef(false);
+  const hasRejectedNextAction = useRef(false);
 
   const update = (change: (current: FixtureState) => FixtureState): Promise<void> =>
     new Promise((resolve, reject) => {
       const complete = (): void => {
-        if (rejectNext.current) {
-          rejectNext.current = false;
+        if (hasRejectedNextAction.current) {
+          hasRejectedNextAction.current = false;
           reject(new Error('fixture action failed'));
           return;
         }
@@ -61,8 +61,8 @@ function SettingsFixture(): ReactElement {
         resolve();
       };
 
-      if (deferNext.current) {
-        deferNext.current = false;
+      if (hasDeferredNextAction.current) {
+        hasDeferredNextAction.current = false;
         deferredAction.current = complete;
       } else {
         window.setTimeout(complete, 20);
@@ -85,12 +85,12 @@ function SettingsFixture(): ReactElement {
 
   (window as FixtureWindow).__settingsFixture = {
     deferNextAction: () => {
-      deferNext.current = true;
+      hasDeferredNextAction.current = true;
     },
     getProviderActionCalls: (provider) => providerActionCalls.current[provider],
     markProviderConnected: (provider) => setProviderStatus(provider, 'connected'),
     rejectNextAction: () => {
-      rejectNext.current = true;
+      hasRejectedNextAction.current = true;
     },
     resolveDeferredAction: () => {
       const complete = deferredAction.current;
@@ -104,43 +104,39 @@ function SettingsFixture(): ReactElement {
       <SettingsView
         displays={displays}
         launchAtLogin={state.launchAtLogin}
-        onConnect={(provider) =>
-          (() => {
-            providerActionCalls.current[provider] += 1;
-            return update((current) => ({
-              ...current,
-              providers: {
-                ...current.providers,
-                [provider]: { status: 'connected', canConnect: false, canDisconnect: true },
-              },
-            }));
-          })()
-        }
-        onDisconnect={(provider) =>
-          (() => {
-            providerActionCalls.current[provider] += 1;
-            return update((current) => ({
-              ...current,
-              providers: {
-                ...current.providers,
-                [provider]: { status: 'disconnected', canConnect: true, canDisconnect: false },
-              },
-            }));
-          })()
-        }
+        onConnect={(provider) => {
+          providerActionCalls.current[provider] += 1;
+          return update((current) => ({
+            ...current,
+            providers: {
+              ...current.providers,
+              [provider]: { status: 'connected', canConnect: false, canDisconnect: true },
+            },
+          }));
+        }}
+        onDisconnect={(provider) => {
+          providerActionCalls.current[provider] += 1;
+          return update((current) => ({
+            ...current,
+            providers: {
+              ...current.providers,
+              [provider]: { status: 'disconnected', canConnect: true, canDisconnect: false },
+            },
+          }));
+        }}
         onDisplayChange={(selectedDisplayId) =>
           update((current) => ({ ...current, selectedDisplayId }))
         }
         onLaunchAtLoginChange={(launchAtLogin) =>
           update((current) => ({ ...current, launchAtLogin }))
         }
-        onOpenAdvanced={() => setAdvancedOpen(true)}
+        onOpenAdvanced={() => setIsAdvancedOpen(true)}
         onReduceMotionChange={(reduceMotion) => update((current) => ({ ...current, reduceMotion }))}
         providers={state.providers}
         reduceMotion={state.reduceMotion}
         selectedDisplayId={state.selectedDisplayId}
       />
-      {advancedOpen ? <span data-testid="advanced-opened">Advanced opened</span> : null}
+      {isAdvancedOpen ? <span data-testid="advanced-opened">Advanced opened</span> : null}
     </>
   );
 }
