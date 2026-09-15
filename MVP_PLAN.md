@@ -1,7 +1,7 @@
 # Agent Status Tiles — MVP Implementation Plan
 
 **Document:** `MVP_PLAN.md` in the project root.  
-**Document status:** Implementation in progress; repository bootstrap, the Epic 0 application foundation, session state/persistence, the bounded Codex rollout reader, and the Codex catalog (PR #7) are merged. The rounded-square tile renderer (PR #8) and unsigned helper packaging (PR #9) are implementation-complete on open branches awaiting review and merge. Native integration, live provider wiring, and later release gates remain pending.
+**Document status:** Implementation in progress; repository bootstrap, the Epic 0 application foundation, session state/persistence, the bounded Codex rollout reader, and the Codex catalog (PR #7) are merged. The rounded-square tile renderer (PR #8) is reviewed and implementation-complete on an open branch awaiting merge; unsigned helper packaging (PR #9) remains implementation-complete on an open branch awaiting review and merge. Native integration, live provider wiring, and later release gates remain pending.
 **Repository:** [alxbra/agent-status-tiles](https://github.com/alxbra/agent-status-tiles)
 
 ## 1. Product and release target
@@ -434,13 +434,14 @@ The synthetic/source-derived Codex rollout fixtures under `tests/fixtures/codex/
 
 Implementation progress (not an acceptance checkoff): PR #8 implements the
 rounded-square renderer, magnification, overflow and keyboard behavior, stock
-tooltip/context-menu composition, and browser visual fixtures. Its 72 total
-unit tests, 3 Electron smoke tests, and 17 browser fixture tests pass in CI
-[run 34981413118](https://github.com/alxbra/agent-status-tiles/actions/runs/34981413118).
-The implementation is complete on the open branch; review and merge are
-pending. Native overlay integration, portal bounds, passthrough hit testing,
-underlying-app click-through, Spaces/full-screen, and multi-display acceptance
-remain pending, so the acceptance tasks below remain unchecked.
+tooltip/context-menu composition, and browser visual fixtures. Its 94 total
+unit tests, 3 Electron smoke tests, and 22 browser fixture tests pass at
+validation head `4130023` in [CI run
+34987573632](https://github.com/alxbra/agent-status-tiles/actions/runs/34987573632).
+Renderer/browser review is complete and merge is pending. Native overlay
+integration, portal bounds, passthrough hit testing, underlying-app
+click-through, Spaces/full-screen, and multi-display acceptance remain
+pending; those native acceptance tasks below remain unchecked.
 Formal root QA1 found and corrected the height-observer remount lifecycle,
 zero/non-finite wheel delta handling, and redundant reverse packing pass. Formal
 root QA2 found and removed the unused `TileGeometry.expanded` field; it found no
