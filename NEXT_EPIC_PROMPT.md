@@ -11,6 +11,9 @@ bootstrap checkout; do not use it as the plan or source baseline. You orchestrat
 architecture, review, validation, integration, and merge only. Delegate all
 implementation edits to Luna xhigh subagents; do not create descendants from
 those subagents, edit another worktree, or work directly on `main`/`staging`.
+Repository: [alxbra/agent-status-tiles](https://github.com/alxbra/agent-status-tiles).
+The scope is Epic 1 macOS overlay/menu-bar lifecycle with only the minimum Epic
+2 renderer/native bridge dependency needed to mount the existing tile renderer.
 
 ## Baseline and current boundary
 
@@ -116,6 +119,7 @@ Electron tests. Root owns exactly one completed `coderabbit review --agent
 latest green CI, safe squash/merge, and plan evidence. Leave live provider wiring,
 cross-file baseline acceptance, real harness lifecycle tests, signing,
 notarization, main promotion, release, and any blocked acceptance checkbox
-unchecked until their evidence exists. This handoff does not resume implementation
-or start a later epic; finish this overlay epic, then stop before provider/live-
-harness work, main promotion, or release work.
+unchecked until their evidence exists. Creating this handoff did not start
+implementation. When the user supplies this prompt for execution, complete only
+this overlay epic and stop before provider/live-harness work, main promotion, or
+release work.

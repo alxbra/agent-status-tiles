@@ -30,7 +30,7 @@ The main interface is a vertical row of tiny colored rounded-square tiles on the
 - Deliver signed, notarized macOS installers ready for publication.
 - Integrate completed work continuously through small PRs targeting `staging`.
 
-## Current runtime readiness after PR #12
+### Current runtime readiness after PR #12
 
 The merged work is still a set of independently tested slices, not an
 end-to-end provider-connected companion. The main entry currently provides the
@@ -636,7 +636,7 @@ Foundation review corrections included strict IPC sender/frame validation, same-
 
 Hook helper PR #2 merged into `staging` at `b536b6c4a6246e6e31650304ea10c94b1f87963f`. Its CodeRabbit and QA corrections were partial-tail recovery, safe lock-path handling, canonical payload fields, private paths, bounded subprocess tests, and a monotonic 500 ms lock deadline. App replay, hook installation, and the full Claude epic remain incomplete; unsigned helper packaging is covered by PR #9 below.
 
-Session-state PR #3 merged into `staging` at `33657030eff342466aa9bb8f4ffc001bce8212d4`. It completed one CodeRabbit CLI pass with zero findings and two root QA passes, including fixes for out-of-order waits, health overlays, safe identifier lookup, bounded UTF-8 fields, redundant state, and active child/archive filter coverage. The pure reducer, identity, ordering/filter, lifecycle, provider-health, and race-safe acknowledgement tasks above are verified; persistence and real-app replay remain pending.
+Session-state PR #3 merged into `staging` at `33657030eff342466aa9bb8f4ffc001bce8212d4`. It completed one CodeRabbit CLI pass with zero findings and two root QA passes, including fixes for out-of-order waits, health overlays, safe identifier lookup, bounded UTF-8 fields, redundant state, and active child/archive filter coverage. The pure reducer, identity, ordering/filter, lifecycle, provider-health, and race-safe acknowledgement tasks above are verified; standalone persistence merged in PR #5, while live-app persistence replay and the cross-file baseline gate remain pending.
 
 Desktop-shell PR #4 merged into `staging` at `a454bf22a8c9521eeefb9db87845fd438d44e7c9`. It completed one CodeRabbit CLI pass with one invalid fake-session finding rejected and two root QA passes. The frameless strip/settings windows, menu-bar actions, Dock hiding, and default placement scaffolding are verified. Selected-display persistence, native click-through, Spaces/full-screen, multi-display, sleep/wake, and real desktop interaction acceptance remain pending.
 
@@ -665,8 +665,8 @@ resource validation; see [CI run
 [native run 34991704642](https://github.com/alxbra/agent-status-tiles/actions/runs/34991704642),
 [package run 34991704417](https://github.com/alxbra/agent-status-tiles/actions/runs/34991704417),
 and the [audit comment](https://github.com/alxbra/agent-status-tiles/pull/9#issuecomment-5683519994).
-Signing/notarization, startup and hook installation, journal replay, and live
-provider integration remain unchecked.
+Signing/notarization, startup and hook installation, app coordination/replay of
+the standalone journal reader, and live provider integration remain unchecked.
 
 Settings presentation PR #10 merged into `staging` at
 `07b399fb5d6b8b8bac696f599860a02797bd464b` from implementation head
@@ -716,6 +716,10 @@ promote to `main`, or start release work. The remaining integration, acceptance,
 and release gates stay pending.
 
 Record corrections made after review and the commit used for final validation.
+
+### Historical merged implementation batch
+
+- [x] PRs #1–#12 have verified merge SHAs, recorded CodeRabbit outcomes, two root QA passes, and final validation evidence in the per-PR record above. This historical implementation/review record is not the final native/live/release acceptance.
 
 ### Final acceptance checklist
 
