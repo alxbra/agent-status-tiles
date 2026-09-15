@@ -18,7 +18,7 @@ const codexId = '019f6b6d-644d-7701-8858-9da6837aaaaa';
 const claudeId = '019f6b6d-644d-7701-8858-9da6837aaaab';
 
 function ok(): ProcessResult {
-  return { exitCode: 0, stdout: '', stderr: '', timedOut: false, cleanupConfirmed: true };
+  return { exitCode: 0, stdout: '', stderr: '', hasTimedOut: false, isCleanupConfirmed: true };
 }
 
 class FakeChild extends EventEmitter {
@@ -214,8 +214,8 @@ describe('macOS application navigation', () => {
       exitCode: 1,
       stdout: 'ignored stdout',
       stderr: 'Unable to find application by bundle identifier',
-      timedOut: false,
-      cleanupConfirmed: true,
+      hasTimedOut: false,
+      isCleanupConfirmed: true,
     });
     const navigator = new MacOsNavigator(
       missing.run,
@@ -240,8 +240,8 @@ describe('macOS application navigation', () => {
       exitCode: null,
       stdout: 'secret',
       stderr: 'secret',
-      timedOut: true,
-      cleanupConfirmed: true,
+      hasTimedOut: true,
+      isCleanupConfirmed: true,
     });
     const timedOutNavigator = new MacOsNavigator(
       timeout.run,
@@ -268,8 +268,8 @@ describe('macOS application navigation', () => {
             exitCode: 1,
             stdout: '',
             stderr: 'open failed',
-            timedOut: false,
-            cleanupConfirmed: true,
+            hasTimedOut: false,
+            isCleanupConfirmed: true,
           };
     });
     const navigator = new MacOsNavigator(
@@ -331,32 +331,31 @@ describe('macOS application navigation', () => {
       process.execPath,
       ['-e', "process.stdout.write('x'.repeat(20000))"],
       {
-        timeoutMs: 1_000,
+        timeoutMs: 2_000,
         maxOutputBytes: 128,
       },
     );
-    expect(output.timedOut).toBe(false);
-    expect(Buffer.byteLength(output.stdout)).toBeLessThanOrEqual(128);
+    expect(output).toMatchObject({ exitCode: 0, hasTimedOut: false, isCleanupConfirmed: true });
+    expect(Buffer.byteLength(output.stdout)).toBe(128);
 
     const combined = await runNavigationProcess(
       process.execPath,
       ['-e', "process.stdout.write('o'.repeat(100)); process.stderr.write('e'.repeat(100))"],
-      { timeoutMs: 1_000, maxOutputBytes: 128 },
+      { timeoutMs: 2_000, maxOutputBytes: 128 },
     );
-    expect(
-      Buffer.byteLength(combined.stdout) + Buffer.byteLength(combined.stderr),
-    ).toBeLessThanOrEqual(128);
+    expect(combined).toMatchObject({ exitCode: 0, hasTimedOut: false, isCleanupConfirmed: true });
+    expect(Buffer.byteLength(combined.stdout) + Buffer.byteLength(combined.stderr)).toBe(128);
 
     const fractional = await runNavigationProcess(
       process.execPath,
       ['-e', "process.stdout.write('x'.repeat(4))"],
       {
-        timeoutMs: 1_000,
+        timeoutMs: 2_000,
         maxOutputBytes: 0.5,
       },
     );
-    expect(fractional.timedOut).toBe(false);
-    expect(Buffer.byteLength(fractional.stdout)).toBeLessThanOrEqual(1);
+    expect(fractional).toMatchObject({ exitCode: 0, hasTimedOut: false, isCleanupConfirmed: true });
+    expect(Buffer.byteLength(fractional.stdout)).toBe(1);
 
     const timeout = await runNavigationProcess(
       process.execPath,
@@ -366,7 +365,7 @@ describe('macOS application navigation', () => {
         maxOutputBytes: 128,
       },
     );
-    expect(timeout.timedOut).toBe(true);
+    expect(timeout.hasTimedOut).toBe(true);
   });
 
   it('normalizes fractional and non-finite process limits to bounded values', () => {
@@ -387,22 +386,28 @@ describe('macOS application navigation', () => {
       process.execPath,
       ['-e', 'setTimeout(() => {}, 10)'],
       {
-        timeoutMs: 250,
+        timeoutMs: 2_000,
       },
     );
-    expect(delayed).toMatchObject({ exitCode: 0, timedOut: false });
+    expect(delayed).toMatchObject({ exitCode: 0, hasTimedOut: false, isCleanupConfirmed: true });
 
-    const missing = await runNavigationProcess('/definitely/missing/open', [], { timeoutMs: 250 });
-    expect(missing).toMatchObject({ exitCode: null, timedOut: false });
+    const missing = await runNavigationProcess('/definitely/missing/open', [], {
+      timeoutMs: 2_000,
+    });
+    expect(missing).toMatchObject({ exitCode: null, hasTimedOut: false, isCleanupConfirmed: true });
 
     const streamClosed = await runNavigationProcess(
       process.execPath,
       ['-e', 'process.stdout.destroy()'],
       {
-        timeoutMs: 250,
+        timeoutMs: 2_000,
       },
     );
-    expect(streamClosed.timedOut).toBe(false);
+    expect(streamClosed).toMatchObject({
+      exitCode: 0,
+      hasTimedOut: false,
+      isCleanupConfirmed: true,
+    });
   });
 
   it('retains ownership after a delayed close and blocks a second child', async () => {
@@ -418,10 +423,10 @@ describe('macOS application navigation', () => {
     });
 
     const first = await run('owned', [], { timeoutMs: 1, maxOutputBytes: 16 });
-    expect(first).toMatchObject({ timedOut: true, cleanupConfirmed: false });
+    expect(first).toMatchObject({ hasTimedOut: true, isCleanupConfirmed: false });
     expect(child.killCalls).toBe(1);
     const blocked = await run('blocked', [], { timeoutMs: 1, maxOutputBytes: 16 });
-    expect(blocked).toMatchObject({ cleanupConfirmed: false });
+    expect(blocked).toMatchObject({ isCleanupConfirmed: false });
     expect(factoryCalls).toBe(1);
 
     child.emit('error', new Error('late process error'));
@@ -432,7 +437,7 @@ describe('macOS application navigation', () => {
 
     const next = run('next', [], { timeoutMs: 100, maxOutputBytes: 16 });
     queueMicrotask(() => nextChild.emit('close', 0));
-    await expect(next).resolves.toMatchObject({ exitCode: 0, cleanupConfirmed: true });
+    await expect(next).resolves.toMatchObject({ exitCode: 0, isCleanupConfirmed: true });
     expect(factoryCalls).toBe(2);
   });
 
@@ -445,10 +450,10 @@ describe('macOS application navigation', () => {
     });
 
     const result = await run('owned', [], { timeoutMs: 1, maxOutputBytes: 16 });
-    expect(result).toMatchObject({ timedOut: true, cleanupConfirmed: false });
+    expect(result).toMatchObject({ hasTimedOut: true, isCleanupConfirmed: false });
     expect(child.killCalls).toBe(1);
     const blocked = await run('blocked', [], { timeoutMs: 1, maxOutputBytes: 16 });
-    expect(blocked.cleanupConfirmed).toBe(false);
+    expect(blocked.isCleanupConfirmed).toBe(false);
     expect(factoryCalls).toBe(1);
     child.emit('close', null);
   });

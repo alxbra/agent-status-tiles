@@ -72,8 +72,8 @@ export interface ProcessResult {
   exitCode: number | null;
   stdout: string;
   stderr: string;
-  timedOut: boolean;
-  cleanupConfirmed: boolean;
+  hasTimedOut: boolean;
+  isCleanupConfirmed: boolean;
 }
 
 export type ProcessRunner = (
@@ -127,7 +127,7 @@ export function isCodexTaskId(value: unknown): value is string {
   return typeof value === 'string' && CODEX_UUID_PATTERN.test(value);
 }
 
-export function codexTaskLink(nativeSessionId: string): string {
+export function createCodexTaskLink(nativeSessionId: string): string {
   if (!isCodexTaskId(nativeSessionId)) throw new Error('Invalid Codex task identifier');
   return `codex://threads/${nativeSessionId}`;
 }
@@ -149,7 +149,7 @@ function isTerminalApplication(value: unknown): value is TerminalApplication {
   return value === 'terminal' || value === 'ghostty' || value === 'warp' || value === 'iterm2';
 }
 
-function targetIsValid(value: unknown): value is QualifiedNavigationTarget {
+function isValidTarget(value: unknown): value is QualifiedNavigationTarget {
   if (!isRecord(value)) return false;
   try {
     if (
@@ -177,19 +177,19 @@ function targetIsValid(value: unknown): value is QualifiedNavigationTarget {
   }
 }
 
-function boundedOption(value: number, fallback: number, maximum: number): number {
+function getBoundedOption(value: number, fallback: number, maximum: number): number {
   if (!Number.isFinite(value) || value <= 0) return fallback;
   return Math.min(Math.max(1, Math.floor(value)), maximum);
 }
 
 export function normalizeProcessOptions(options: Partial<ProcessOptions> = {}): ProcessOptions {
   return {
-    timeoutMs: boundedOption(
+    timeoutMs: getBoundedOption(
       options.timeoutMs ?? DEFAULT_TIMEOUT_MS,
       DEFAULT_TIMEOUT_MS,
       MAX_TIMEOUT_MS,
     ),
-    maxOutputBytes: boundedOption(
+    maxOutputBytes: getBoundedOption(
       options.maxOutputBytes ?? DEFAULT_MAX_OUTPUT_BYTES,
       DEFAULT_MAX_OUTPUT_BYTES,
       MAX_OUTPUT_BYTES,
@@ -231,8 +231,8 @@ export function createNavigationProcessRunner(
         exitCode: null,
         stdout: '',
         stderr: '',
-        timedOut: false,
-        cleanupConfirmed: false,
+        hasTimedOut: false,
+        isCleanupConfirmed: false,
       });
     }
     return new Promise((resolve) => {
@@ -244,8 +244,8 @@ export function createNavigationProcessRunner(
           exitCode: null,
           stdout: '',
           stderr: '',
-          timedOut: false,
-          cleanupConfirmed: true,
+          hasTimedOut: false,
+          isCleanupConfirmed: true,
         });
         return;
       }
@@ -253,24 +253,23 @@ export function createNavigationProcessRunner(
       const stdout: Buffer[] = [];
       const stderr: Buffer[] = [];
       const outputBytes = { value: 0 };
-      let settled = false;
-      let terminationStarted = false;
-      let terminationTimedOut = false;
+      let hasDeliveredResult = false;
+      let hasTerminationStarted = false;
+      let hasTerminationTimedOut = false;
       let terminationTimer: NodeJS.Timeout | undefined;
-      let resultDelivered = false;
-      let ownershipReleased = false;
+      let hasOwnershipReleased = false;
       const timer = setTimeout(() => {
         terminate(true);
       }, timeoutMs);
 
-      const capturedOutput = (): Pick<ProcessResult, 'stdout' | 'stderr'> => ({
+      const getCapturedOutput = (): Pick<ProcessResult, 'stdout' | 'stderr'> => ({
         stdout: Buffer.concat(stdout).toString('utf8'),
         stderr: Buffer.concat(stderr).toString('utf8'),
       });
 
       const releaseOwnership = (): void => {
-        if (ownershipReleased) return;
-        ownershipReleased = true;
+        if (hasOwnershipReleased) return;
+        hasOwnershipReleased = true;
         clearTimeout(timer);
         if (terminationTimer !== undefined) clearTimeout(terminationTimer);
         ownedChildren.delete(child);
@@ -282,9 +281,8 @@ export function createNavigationProcessRunner(
       };
 
       const deliver = (result: ProcessResult): void => {
-        if (resultDelivered) return;
-        resultDelivered = true;
-        settled = true;
+        if (hasDeliveredResult) return;
+        hasDeliveredResult = true;
         resolve(result);
       };
 
@@ -293,10 +291,10 @@ export function createNavigationProcessRunner(
         deliver(result);
       };
 
-      const terminate = (timedOut: boolean): void => {
-        if (terminationStarted || settled) return;
-        terminationStarted = true;
-        terminationTimedOut = timedOut;
+      const terminate = (hasTimedOut: boolean): void => {
+        if (hasTerminationStarted || hasDeliveredResult) return;
+        hasTerminationStarted = true;
+        hasTerminationTimedOut = hasTimedOut;
         try {
           child.kill('SIGKILL');
         } catch {
@@ -304,10 +302,10 @@ export function createNavigationProcessRunner(
         }
         terminationTimer = setTimeout(() => {
           deliver({
-            ...capturedOutput(),
+            ...getCapturedOutput(),
             exitCode: null,
-            timedOut,
-            cleanupConfirmed: false,
+            hasTimedOut,
+            isCleanupConfirmed: false,
           });
         }, TERMINATION_GRACE_MS);
       };
@@ -322,12 +320,12 @@ export function createNavigationProcessRunner(
       child.stderr?.on('error', () => terminate(false));
       child.on('error', () => terminate(false));
       child.once('close', (exitCode) => {
-        const captured = capturedOutput();
+        const captured = getCapturedOutput();
         finish({
           ...captured,
-          exitCode: terminationStarted ? null : exitCode,
-          timedOut: terminationTimedOut,
-          cleanupConfirmed: true,
+          exitCode: hasTerminationStarted ? null : exitCode,
+          hasTimedOut: hasTerminationTimedOut,
+          isCleanupConfirmed: true,
         });
       });
     });
@@ -348,8 +346,8 @@ function wait(milliseconds: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 
-function failureReason(result: ProcessResult): NavigationFailureReason {
-  if (result.timedOut) return 'timeout';
+function getFailureReason(result: ProcessResult): NavigationFailureReason {
+  if (result.hasTimedOut) return 'timeout';
   if (
     /unable to find|application isn.?t running|does not exist|bundle identifier/i.test(
       result.stderr,
@@ -360,12 +358,8 @@ function failureReason(result: ProcessResult): NavigationFailureReason {
   return 'command-failed';
 }
 
-function appForTerminal(application: TerminalApplication) {
-  return MACOS_APPLICATIONS[application];
-}
-
 export class MacOsNavigator {
-  private inFlight = false;
+  private isInFlight = false;
 
   constructor(
     private readonly run: ProcessRunner = runNavigationProcess,
@@ -374,7 +368,7 @@ export class MacOsNavigator {
   ) {}
 
   async navigate(target: unknown): Promise<NavigationResult> {
-    if (!targetIsValid(target)) {
+    if (!isValidTarget(target)) {
       return { status: 'failed', target: 'application', reason: 'invalid-target' };
     }
     if (this.platform !== 'darwin') {
@@ -393,7 +387,7 @@ export class MacOsNavigator {
         options: TERMINAL_SELECTION_OPTIONS,
       };
     }
-    if (this.inFlight) {
+    if (this.isInFlight) {
       return {
         status: 'failed',
         target:
@@ -402,7 +396,7 @@ export class MacOsNavigator {
       };
     }
 
-    this.inFlight = true;
+    this.isInFlight = true;
     try {
       if (target.provider === 'codex' && target.surface === 'desktop') {
         return await this.navigateCodex(target.nativeSessionId);
@@ -410,7 +404,7 @@ export class MacOsNavigator {
       const application =
         target.provider === 'claude' && target.surface === 'desktop'
           ? MACOS_APPLICATIONS.claudeDesktop
-          : appForTerminal(target.owner as TerminalApplication);
+          : MACOS_APPLICATIONS[target.owner as TerminalApplication];
       const activation = await this.activate(application.bundleId);
       if (activation !== undefined) {
         return {
@@ -422,7 +416,7 @@ export class MacOsNavigator {
       }
       return { status: 'dispatched', target: 'application', application: application.application };
     } finally {
-      this.inFlight = false;
+      this.isInFlight = false;
     }
   }
 
@@ -442,7 +436,7 @@ export class MacOsNavigator {
       '-g',
       '-b',
       MACOS_APPLICATIONS.codexDesktop.bundleId,
-      codexTaskLink(nativeSessionId),
+      createCodexTaskLink(nativeSessionId),
     ]);
     if (linkResult !== undefined) {
       return {
@@ -470,8 +464,8 @@ export class MacOsNavigator {
         timeoutMs: DEFAULT_TIMEOUT_MS,
         maxOutputBytes: DEFAULT_MAX_OUTPUT_BYTES,
       });
-      if (!result.cleanupConfirmed) return { reason: 'cleanup-unconfirmed' };
-      if (result.exitCode !== 0 || result.timedOut) return { reason: failureReason(result) };
+      if (!result.isCleanupConfirmed) return { reason: 'cleanup-unconfirmed' };
+      if (result.exitCode !== 0 || result.hasTimedOut) return { reason: getFailureReason(result) };
       return undefined;
     } catch (error) {
       if (error instanceof Error && /timed out/i.test(error.message)) {
