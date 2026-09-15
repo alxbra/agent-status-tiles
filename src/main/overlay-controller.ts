@@ -27,6 +27,7 @@ export const OVERLAY_WINDOW_WIDTH = 360;
 export const OVERLAY_WINDOW_HEIGHT = 480;
 export interface OverlayController {
   getWindow(): BrowserWindow | null;
+  recover(): void;
   enterKeyboardMode(): void;
   exitKeyboardMode(): void;
   setRendererReady(): void;
@@ -103,6 +104,8 @@ function createOverlayWindow(
   display: Display,
   onClosed: (window: BrowserWindow) => void,
   onRendererInvalidated: (window: BrowserWindow) => void,
+  onRendererLoadFailed: (window: BrowserWindow) => void,
+  onRendererGone: (window: BrowserWindow) => void,
   onPointerInput: (inputEvent: InputEvent) => void,
 ): BrowserWindow {
   const allowedUrl = rendererUrl();
@@ -138,6 +141,19 @@ function createOverlayWindow(
 
   protectWebContents(window, allowedUrl);
   window.webContents.on('did-start-loading', () => onRendererInvalidated(window));
+  window.webContents.on(
+    'did-fail-load',
+    (_event, _errorCode, _errorDescription, _validatedUrl, isMainFrame) => {
+      if (isMainFrame) onRendererLoadFailed(window);
+    },
+  );
+  window.webContents.on(
+    'did-fail-provisional-load',
+    (_event, _errorCode, _errorDescription, _validatedUrl, isMainFrame) => {
+      if (isMainFrame) onRendererLoadFailed(window);
+    },
+  );
+  window.webContents.on('render-process-gone', () => onRendererGone(window));
   window.webContents.on('input-event', (_event, inputEvent) => onPointerInput(inputEvent));
   window.on('closed', () => onClosed(window));
 
@@ -146,6 +162,7 @@ function createOverlayWindow(
     : window.loadFile(rendererFilePath());
   void loadPromise.catch((error: unknown) => {
     console.error('Unable to load overlay window', error);
+    onRendererLoadFailed(window);
     if (!window.isDestroyed()) {
       window.destroy();
     }
@@ -169,27 +186,47 @@ export function createOverlayController(options: OverlayControllerOptions = {}):
   let keyboardEntryNotified = false;
   let keyboardWindowActivated = false;
   let rendererReady = false;
+  let rendererWasReady = false;
   let preferredDisplayId = options.preferredDisplayId ?? PRIMARY_DISPLAY_ID;
   let hitRegions: readonly OverlayHitRegion[] = [];
   let ignoringMouseEvents = true;
   let isDestroyed = false;
+  let generation = 0;
+  let overlayGeneration = 0;
+  const rendererLoadFailures = new WeakSet<BrowserWindow>();
+
+  const resetRendererState = (): void => {
+    readyToShow = false;
+    rendererReady = false;
+    rendererWasReady = false;
+    ignoringMouseEvents = true;
+    hitRegions = [];
+  };
 
   const createWindow = (): void => {
     if (isDestroyed || overlayWindow) return;
 
-    readyToShow = false;
-    rendererReady = false;
-    ignoringMouseEvents = true;
-    hitRegions = [];
+    const nextGeneration = generation + 1;
+    generation = nextGeneration;
+    overlayGeneration = nextGeneration;
+    resetRendererState();
     const window = createOverlayWindow(
       selectPreferredDisplay(preferredDisplayId, connectedDisplays(), screen.getPrimaryDisplay()),
-      onClosed,
-      onRendererInvalidated,
-      onPointerInput,
+      (closedWindow) => onClosed(closedWindow, nextGeneration),
+      (invalidatedWindow) => onRendererInvalidated(invalidatedWindow, nextGeneration),
+      (failedWindow) => onRendererLoadFailed(failedWindow, nextGeneration),
+      (goneWindow) => onRendererGone(goneWindow, nextGeneration),
+      (inputEvent) => onPointerInput(inputEvent, nextGeneration),
     );
     overlayWindow = window;
     window.once('ready-to-show', () => {
-      if (isDestroyed || overlayWindow !== window || window.isDestroyed()) return;
+      if (
+        isDestroyed ||
+        overlayWindow !== window ||
+        overlayGeneration !== nextGeneration ||
+        window.isDestroyed()
+      )
+        return;
       readyToShow = true;
       syncVisibility();
     });
@@ -219,7 +256,7 @@ export function createOverlayController(options: OverlayControllerOptions = {}):
       return;
     }
 
-    const shouldShow = requestedVisible && hasQualifyingSessions && readyToShow;
+    const shouldShow = requestedVisible && hasQualifyingSessions && readyToShow && rendererReady;
     if (shouldShow) {
       if (keyboardMode) {
         overlayWindow.setFocusable(true);
@@ -307,7 +344,13 @@ export function createOverlayController(options: OverlayControllerOptions = {}):
     }
   };
 
-  const onPointerInput = (inputEvent: InputEvent): void => {
+  const onPointerInput = (inputEvent: InputEvent, callbackGeneration?: number): void => {
+    if (
+      callbackGeneration !== undefined &&
+      (callbackGeneration !== overlayGeneration || callbackGeneration !== generation)
+    ) {
+      return;
+    }
     if (!overlayWindow || overlayWindow.isDestroyed()) {
       return;
     }
@@ -330,30 +373,107 @@ export function createOverlayController(options: OverlayControllerOptions = {}):
     setMouseIgnoring(!isPointInOverlayHitRegion(mouseInput.x, mouseInput.y, hitRegions));
   };
 
-  const onClosed = (window: BrowserWindow): void => {
-    if (overlayWindow === window) {
-      const shouldDeactivate = isDestroyed ? false : leaveKeyboardMode();
-      overlayWindow = null;
-      readyToShow = false;
-      rendererReady = false;
-      ignoringMouseEvents = true;
-      hitRegions = [];
-      restorePreviousApplication(shouldDeactivate, false);
+  const onClosed = (window: BrowserWindow, callbackGeneration?: number): void => {
+    if (
+      isDestroyed ||
+      overlayWindow !== window ||
+      (callbackGeneration !== undefined &&
+        (callbackGeneration !== overlayGeneration || callbackGeneration !== generation))
+    ) {
+      return;
+    }
+
+    const failedToLoad = rendererLoadFailures.has(window);
+    const shouldDeactivate = leaveKeyboardMode();
+    overlayWindow = null;
+    overlayGeneration = 0;
+    resetRendererState();
+    restorePreviousApplication(shouldDeactivate, false);
+    if (!failedToLoad) {
+      recoverOverlay();
     }
   };
 
-  const onRendererInvalidated = (window: BrowserWindow): void => {
-    if (overlayWindow !== window) return;
+  const onRendererInvalidated = (window: BrowserWindow, callbackGeneration?: number): void => {
+    if (
+      isDestroyed ||
+      overlayWindow !== window ||
+      (callbackGeneration !== undefined &&
+        (callbackGeneration !== overlayGeneration || callbackGeneration !== generation))
+    )
+      return;
     rendererReady = false;
     keyboardEntryNotified = false;
+    hitRegions = [];
+    if (overlayWindow.isVisible()) {
+      overlayWindow.hide();
+      overlayWindow.setFocusable(false);
+    }
+    reapplyMousePassthrough();
   };
+
+  const onRendererLoadFailed = (window: BrowserWindow, callbackGeneration?: number): void => {
+    if (
+      isDestroyed ||
+      overlayWindow !== window ||
+      (callbackGeneration !== undefined &&
+        (callbackGeneration !== overlayGeneration || callbackGeneration !== generation))
+    )
+      return;
+    if (rendererWasReady) {
+      onRendererGone(window, callbackGeneration);
+      return;
+    }
+    rendererLoadFailures.add(window);
+    rendererReady = false;
+    keyboardEntryNotified = false;
+    hitRegions = [];
+    reapplyMousePassthrough();
+    if (!window.isDestroyed()) window.destroy();
+    onClosed(window, callbackGeneration);
+  };
+
+  const onRendererGone = (window: BrowserWindow, callbackGeneration?: number): void => {
+    if (
+      isDestroyed ||
+      overlayWindow !== window ||
+      (callbackGeneration !== undefined &&
+        (callbackGeneration !== overlayGeneration || callbackGeneration !== generation))
+    )
+      return;
+    rendererReady = false;
+    keyboardEntryNotified = false;
+    hitRegions = [];
+    reapplyMousePassthrough();
+    if (!window.isDestroyed()) window.destroy();
+    onClosed(window, callbackGeneration);
+  };
+
+  const recoverOverlay = (repositionExisting = true): void => {
+    if (isDestroyed) return;
+    if (overlayWindow?.isDestroyed()) {
+      onClosed(overlayWindow, overlayGeneration);
+      return;
+    }
+    if (overlayWindow?.webContents.isCrashed()) {
+      onRendererGone(overlayWindow, overlayGeneration);
+      return;
+    }
+    if (overlayWindow && !overlayWindow.isDestroyed()) {
+      if (repositionExisting) reposition();
+      return;
+    }
+    if (!requestedVisible || !hasQualifyingSessions) return;
+    createWindow();
+  };
+  const recoverFromLifecycle = (): void => recoverOverlay();
 
   createWindow();
 
-  screen.on('display-metrics-changed', reposition);
-  screen.on('display-added', reposition);
-  screen.on('display-removed', reposition);
-  powerMonitor.on('resume', reposition);
+  screen.on('display-metrics-changed', recoverFromLifecycle);
+  screen.on('display-added', recoverFromLifecycle);
+  screen.on('display-removed', recoverFromLifecycle);
+  powerMonitor.on('resume', recoverFromLifecycle);
 
   return {
     getWindow: () => {
@@ -377,8 +497,9 @@ export function createOverlayController(options: OverlayControllerOptions = {}):
       restorePreviousApplication(shouldDeactivate, overlayWindow?.isVisible() ?? false);
     },
     setRendererReady: () => {
-      if (rendererReady) return;
+      if (isDestroyed || !overlayWindow || overlayWindow.isDestroyed() || rendererReady) return;
       rendererReady = true;
+      rendererWasReady = true;
       syncVisibility();
     },
     setPreferredDisplayId: (displayId) => {
@@ -389,7 +510,7 @@ export function createOverlayController(options: OverlayControllerOptions = {}):
       hasQualifyingSessions = Number.isFinite(count) && count > 0;
       let shouldDeactivate = false;
       if (hasQualifyingSessions) {
-        createWindow();
+        recoverOverlay(false);
       } else {
         shouldDeactivate = leaveKeyboardMode();
       }
@@ -403,7 +524,7 @@ export function createOverlayController(options: OverlayControllerOptions = {}):
         keyboardEntryNotified = false;
       }
       requestedVisible = visible;
-      if (requestedVisible) createWindow();
+      if (requestedVisible) recoverOverlay(false);
       syncVisibility();
       if (!visible) reapplyMousePassthrough();
       restorePreviousApplication(shouldDeactivate, false);
@@ -427,10 +548,10 @@ export function createOverlayController(options: OverlayControllerOptions = {}):
       isDestroyed = true;
       keyboardMode = false;
       keyboardWindowActivated = false;
-      screen.off('display-metrics-changed', reposition);
-      screen.off('display-added', reposition);
-      screen.off('display-removed', reposition);
-      powerMonitor.off('resume', reposition);
+      screen.off('display-added', recoverFromLifecycle);
+      screen.off('display-removed', recoverFromLifecycle);
+      screen.off('display-metrics-changed', recoverFromLifecycle);
+      powerMonitor.off('resume', recoverFromLifecycle);
       if (overlayWindow && !overlayWindow.isDestroyed()) {
         overlayWindow.destroy();
       }
@@ -441,5 +562,6 @@ export function createOverlayController(options: OverlayControllerOptions = {}):
       ignoringMouseEvents = true;
       hitRegions = [];
     },
+    recover: recoverOverlay,
   };
 }
