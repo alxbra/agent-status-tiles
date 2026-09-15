@@ -1,9 +1,15 @@
+import type { ChildProcess } from 'node:child_process';
+import { EventEmitter } from 'node:events';
+import { PassThrough } from 'node:stream';
+
 import { describe, expect, it, vi } from 'vitest';
 
 import {
   MACOS_APPLICATIONS,
   MacOsNavigator,
+  createNavigationProcessRunner,
   normalizeProcessOptions,
+  type ProcessFactory,
   type ProcessResult,
   runNavigationProcess,
 } from '../../src/main/navigation/macos-navigator';
@@ -12,7 +18,28 @@ const codexId = '019f6b6d-644d-7701-8858-9da6837aaaaa';
 const claudeId = '019f6b6d-644d-7701-8858-9da6837aaaab';
 
 function ok(): ProcessResult {
-  return { exitCode: 0, stdout: '', stderr: '', timedOut: false };
+  return { exitCode: 0, stdout: '', stderr: '', timedOut: false, cleanupConfirmed: true };
+}
+
+class FakeChild extends EventEmitter {
+  readonly stdout = new PassThrough();
+  readonly stderr = new PassThrough();
+  exitCode: number | null = null;
+  killCalls = 0;
+
+  constructor(private readonly killResult: 'false' | 'throw' | 'true') {
+    super();
+  }
+
+  kill(): boolean {
+    this.killCalls += 1;
+    if (this.killResult === 'throw') throw new Error('kill failed');
+    return this.killResult === 'true';
+  }
+}
+
+function fakeFactory(child: FakeChild): ProcessFactory {
+  return () => child as unknown as ChildProcess;
 }
 
 function runnerFor(result: ProcessResult = ok()) {
@@ -188,6 +215,7 @@ describe('macOS application navigation', () => {
       stdout: 'ignored stdout',
       stderr: 'Unable to find application by bundle identifier',
       timedOut: false,
+      cleanupConfirmed: true,
     });
     const navigator = new MacOsNavigator(
       missing.run,
@@ -213,6 +241,7 @@ describe('macOS application navigation', () => {
       stdout: 'secret',
       stderr: 'secret',
       timedOut: true,
+      cleanupConfirmed: true,
     });
     const timedOutNavigator = new MacOsNavigator(
       timeout.run,
@@ -235,7 +264,13 @@ describe('macOS application navigation', () => {
       calls.push({ executable, args: [...args] });
       return calls.length === 1
         ? ok()
-        : { exitCode: 1, stdout: '', stderr: 'open failed', timedOut: false };
+        : {
+            exitCode: 1,
+            stdout: '',
+            stderr: 'open failed',
+            timedOut: false,
+            cleanupConfirmed: true,
+          };
     });
     const navigator = new MacOsNavigator(
       run,
@@ -368,5 +403,77 @@ describe('macOS application navigation', () => {
       },
     );
     expect(streamClosed.timedOut).toBe(false);
+  });
+
+  it('retains ownership after a delayed close and blocks a second child', async () => {
+    const child = new FakeChild('true');
+    const nextChild = new FakeChild('false');
+    const children = [child, nextChild];
+    let factoryCalls = 0;
+    const run = createNavigationProcessRunner(() => {
+      factoryCalls += 1;
+      const next = children.shift();
+      if (next === undefined) throw new Error('unexpected extra child');
+      return next as unknown as ChildProcess;
+    });
+
+    const first = await run('owned', [], { timeoutMs: 1, maxOutputBytes: 16 });
+    expect(first).toMatchObject({ timedOut: true, cleanupConfirmed: false });
+    expect(child.killCalls).toBe(1);
+    const blocked = await run('blocked', [], { timeoutMs: 1, maxOutputBytes: 16 });
+    expect(blocked).toMatchObject({ cleanupConfirmed: false });
+    expect(factoryCalls).toBe(1);
+
+    child.emit('error', new Error('late process error'));
+    child.emit('error', new Error('repeated late process error'));
+    child.stdout.emit('error', new Error('late stream error'));
+    child.stderr.emit('error', new Error('repeated late stream error'));
+    child.emit('close', null);
+
+    const next = run('next', [], { timeoutMs: 100, maxOutputBytes: 16 });
+    queueMicrotask(() => nextChild.emit('close', 0));
+    await expect(next).resolves.toMatchObject({ exitCode: 0, cleanupConfirmed: true });
+    expect(factoryCalls).toBe(2);
+  });
+
+  it.each(['false', 'throw'] as const)('keeps ownership when child kill %s', async (killResult) => {
+    const child = new FakeChild(killResult);
+    let factoryCalls = 0;
+    const run = createNavigationProcessRunner(() => {
+      factoryCalls += 1;
+      return child as unknown as ChildProcess;
+    });
+
+    const result = await run('owned', [], { timeoutMs: 1, maxOutputBytes: 16 });
+    expect(result).toMatchObject({ timedOut: true, cleanupConfirmed: false });
+    expect(child.killCalls).toBe(1);
+    const blocked = await run('blocked', [], { timeoutMs: 1, maxOutputBytes: 16 });
+    expect(blocked.cleanupConfirmed).toBe(false);
+    expect(factoryCalls).toBe(1);
+    child.emit('close', null);
+  });
+
+  it('maps an unconfirmed process cleanup to an explicit navigation failure', async () => {
+    const child = new FakeChild('false');
+    const navigator = new MacOsNavigator(
+      createNavigationProcessRunner(fakeFactory(child)),
+      vi.fn(() => Promise.resolve()),
+      'darwin',
+    );
+    const target = {
+      provider: 'claude' as const,
+      surface: 'desktop' as const,
+      nativeSessionId: claudeId,
+      owner: 'claude-desktop' as const,
+    };
+    await expect(navigator.navigate(target)).resolves.toMatchObject({
+      status: 'failed',
+      reason: 'cleanup-unconfirmed',
+    });
+    await expect(navigator.navigate(target)).resolves.toMatchObject({
+      status: 'failed',
+      reason: 'cleanup-unconfirmed',
+    });
+    child.emit('close', null);
   });
 });

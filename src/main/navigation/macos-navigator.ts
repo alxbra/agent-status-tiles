@@ -1,4 +1,4 @@
-import { spawn } from 'node:child_process';
+import { spawn, type ChildProcess } from 'node:child_process';
 
 import type { Provider } from '../../shared/session';
 
@@ -73,6 +73,7 @@ export interface ProcessResult {
   stdout: string;
   stderr: string;
   timedOut: boolean;
+  cleanupConfirmed: boolean;
 }
 
 export type ProcessRunner = (
@@ -87,6 +88,7 @@ export type NavigationFailureReason =
   | 'missing-application'
   | 'timeout'
   | 'command-failed'
+  | 'cleanup-unconfirmed'
   | 'busy';
 
 export type NavigationResult =
@@ -195,6 +197,8 @@ export function normalizeProcessOptions(options: Partial<ProcessOptions> = {}): 
   };
 }
 
+export type ProcessFactory = (executable: string, args: readonly string[]) => ChildProcess;
+
 function appendOutput(
   chunks: Buffer[],
   byteCount: { value: number },
@@ -212,75 +216,132 @@ function appendOutput(
  * The navigator only uses this for /usr/bin/open; it deliberately does not
  * expose a shell command escape hatch.
  */
+function spawnNavigationProcess(executable: string, args: readonly string[]): ChildProcess {
+  return spawn(executable, [...args], { stdio: ['ignore', 'pipe', 'pipe'] });
+}
+
+export function createNavigationProcessRunner(
+  factory: ProcessFactory = spawnNavigationProcess,
+): ProcessRunner {
+  const ownedChildren = new Set<ChildProcess>();
+  return (executable, args, options) => {
+    const { timeoutMs, maxOutputBytes } = normalizeProcessOptions(options);
+    if (ownedChildren.size > 0) {
+      return Promise.resolve({
+        exitCode: null,
+        stdout: '',
+        stderr: '',
+        timedOut: false,
+        cleanupConfirmed: false,
+      });
+    }
+    return new Promise((resolve) => {
+      let child: ChildProcess;
+      try {
+        child = factory(executable, args);
+      } catch {
+        resolve({
+          exitCode: null,
+          stdout: '',
+          stderr: '',
+          timedOut: false,
+          cleanupConfirmed: true,
+        });
+        return;
+      }
+      ownedChildren.add(child);
+      const stdout: Buffer[] = [];
+      const stderr: Buffer[] = [];
+      const outputBytes = { value: 0 };
+      let settled = false;
+      let terminationStarted = false;
+      let terminationTimedOut = false;
+      let terminationTimer: NodeJS.Timeout | undefined;
+      let resultDelivered = false;
+      let ownershipReleased = false;
+      const timer = setTimeout(() => {
+        terminate(true);
+      }, timeoutMs);
+
+      const capturedOutput = (): Pick<ProcessResult, 'stdout' | 'stderr'> => ({
+        stdout: Buffer.concat(stdout).toString('utf8'),
+        stderr: Buffer.concat(stderr).toString('utf8'),
+      });
+
+      const releaseOwnership = (): void => {
+        if (ownershipReleased) return;
+        ownershipReleased = true;
+        clearTimeout(timer);
+        if (terminationTimer !== undefined) clearTimeout(terminationTimer);
+        ownedChildren.delete(child);
+        child.removeAllListeners();
+        child.stdout?.removeAllListeners();
+        child.stderr?.removeAllListeners();
+        child.stdout?.destroy();
+        child.stderr?.destroy();
+      };
+
+      const deliver = (result: ProcessResult): void => {
+        if (resultDelivered) return;
+        resultDelivered = true;
+        settled = true;
+        resolve(result);
+      };
+
+      const finish = (result: ProcessResult): void => {
+        releaseOwnership();
+        deliver(result);
+      };
+
+      const terminate = (timedOut: boolean): void => {
+        if (terminationStarted || settled) return;
+        terminationStarted = true;
+        terminationTimedOut = timedOut;
+        try {
+          child.kill('SIGKILL');
+        } catch {
+          // The close/error handlers below still determine the bounded result.
+        }
+        terminationTimer = setTimeout(() => {
+          deliver({
+            ...capturedOutput(),
+            exitCode: null,
+            timedOut,
+            cleanupConfirmed: false,
+          });
+        }, TERMINATION_GRACE_MS);
+      };
+
+      child.stdout?.on('data', (chunk: Buffer) =>
+        appendOutput(stdout, outputBytes, chunk, maxOutputBytes),
+      );
+      child.stderr?.on('data', (chunk: Buffer) =>
+        appendOutput(stderr, outputBytes, chunk, maxOutputBytes),
+      );
+      child.stdout?.on('error', () => terminate(false));
+      child.stderr?.on('error', () => terminate(false));
+      child.on('error', () => terminate(false));
+      child.once('close', (exitCode) => {
+        const captured = capturedOutput();
+        finish({
+          ...captured,
+          exitCode: terminationStarted ? null : exitCode,
+          timedOut: terminationTimedOut,
+          cleanupConfirmed: true,
+        });
+      });
+    });
+  };
+}
+
+const defaultNavigationProcessRunner = createNavigationProcessRunner();
+
 export function runNavigationProcess(
   executable: string,
   args: readonly string[],
   options: Partial<ProcessOptions> = {},
 ): Promise<ProcessResult> {
-  const { timeoutMs, maxOutputBytes } = normalizeProcessOptions(options);
-  return new Promise((resolve) => {
-    const child = spawn(executable, [...args], { stdio: ['ignore', 'pipe', 'pipe'] });
-    const stdout: Buffer[] = [];
-    const stderr: Buffer[] = [];
-    const outputBytes = { value: 0 };
-    let settled = false;
-    let terminationStarted = false;
-    let terminationTimedOut = false;
-    let terminationTimer: NodeJS.Timeout | undefined;
-    const timer = setTimeout(() => {
-      terminate(true);
-    }, timeoutMs);
-
-    const capturedOutput = (): Pick<ProcessResult, 'stdout' | 'stderr'> => ({
-      stdout: Buffer.concat(stdout).toString('utf8'),
-      stderr: Buffer.concat(stderr).toString('utf8'),
-    });
-
-    const finish = (result: ProcessResult): void => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      if (terminationTimer !== undefined) clearTimeout(terminationTimer);
-      child.removeAllListeners();
-      child.stdout?.removeAllListeners();
-      child.stderr?.removeAllListeners();
-      child.stdout?.destroy();
-      child.stderr?.destroy();
-      resolve(result);
-    };
-
-    const terminate = (timedOut: boolean): void => {
-      if (terminationStarted || settled) return;
-      terminationStarted = true;
-      terminationTimedOut = timedOut;
-      try {
-        child.kill('SIGKILL');
-      } catch {
-        // The close/error handlers below still determine the bounded result.
-      }
-      terminationTimer = setTimeout(() => {
-        finish({ ...capturedOutput(), exitCode: null, timedOut });
-      }, TERMINATION_GRACE_MS);
-    };
-
-    child.stdout?.on('data', (chunk: Buffer) =>
-      appendOutput(stdout, outputBytes, chunk, maxOutputBytes),
-    );
-    child.stderr?.on('data', (chunk: Buffer) =>
-      appendOutput(stderr, outputBytes, chunk, maxOutputBytes),
-    );
-    child.stdout?.on('error', () => terminate(false));
-    child.stderr?.on('error', () => terminate(false));
-    child.once('error', () => terminate(false));
-    child.once('close', (exitCode) => {
-      const captured = capturedOutput();
-      finish({
-        ...captured,
-        exitCode: terminationStarted ? null : exitCode,
-        timedOut: terminationTimedOut,
-      });
-    });
-  });
+  return defaultNavigationProcessRunner(executable, args, normalizeProcessOptions(options));
 }
 
 function wait(milliseconds: number): Promise<void> {
@@ -409,6 +470,7 @@ export class MacOsNavigator {
         timeoutMs: DEFAULT_TIMEOUT_MS,
         maxOutputBytes: DEFAULT_MAX_OUTPUT_BYTES,
       });
+      if (!result.cleanupConfirmed) return { reason: 'cleanup-unconfirmed' };
       if (result.exitCode !== 0 || result.timedOut) return { reason: failureReason(result) };
       return undefined;
     } catch (error) {

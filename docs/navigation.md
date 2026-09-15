@@ -40,5 +40,9 @@ activation claim. Bundle absence and `/usr/bin/open` failures are returned as
 typed failures without guessing another owner.
 
 Process execution has a 2-second per-command timeout and retains at most 8 KiB
-of output internally. One navigation runs at a time; a concurrent request is a
-typed `busy` failure. No process output is returned in navigation results.
+of combined output internally. One navigation runs at a time; a concurrent
+request is a typed `busy` failure. If a timed-out or errored child does not
+emit `close` within the bounded termination grace period, the result is the
+explicit `cleanup-unconfirmed` failure and the runner retains ownership and
+refuses to spawn another child until that close is observed. No process output
+is returned in navigation results.
