@@ -292,6 +292,7 @@ async function sampleTransition(page: Page): Promise<
       icons: readonly { left: number; right: number; opacity: string; visibility: string }[];
     }[];
     rootRight: number;
+    trackedSurfaceWidth: number;
   }[]
 > {
   return page.evaluate(async () => {
@@ -308,9 +309,33 @@ async function sampleTransition(page: Page): Promise<
         icons: readonly { left: number; right: number; opacity: string; visibility: string }[];
       }[];
       rootRight: number;
+      trackedSurfaceWidth: number;
     }[] = [];
-    const startedAt = performance.now();
-    while (performance.now() - startedAt <= 220) {
+    const transitions = root
+      .getAnimations({ subtree: true })
+      .filter((animation) => animation.constructor.name === 'CSSTransition');
+    if (transitions.length === 0) throw new Error('No tile CSS transitions are running');
+
+    // Freeze each real CSS transition at deterministic points. Sampling with
+    // requestAnimationFrame alone is frame-rate dependent and can produce too
+    // few samples on a busy CI runner, while this still exercises the pointer-
+    // triggered transition and verifies its actual rendered geometry.
+    const pausedTransitions = await Promise.all(
+      transitions.map(async (transition) => {
+        transition.pause();
+        await transition.ready;
+        const duration = transition.effect?.getTiming().duration;
+        if (duration !== 160) {
+          throw new Error(`Expected 160ms tile transition, received ${String(duration)}`);
+        }
+        return { duration, transition };
+      }),
+    );
+    for (const currentTime of [0, 80, 160]) {
+      for (const { duration, transition } of pausedTransitions) {
+        transition.currentTime = Math.min(currentTime, duration);
+      }
+      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
       const rootBounds = root.getBoundingClientRect();
       samples.push({
         targets: [...root.querySelectorAll<HTMLElement>('.status-tiles__tile')].map((target) => {
@@ -340,9 +365,12 @@ async function sampleTransition(page: Page): Promise<
           },
         ),
         rootRight: rootBounds.right,
+        trackedSurfaceWidth:
+          root.querySelector<HTMLElement>('.status-tiles__tile-surface')?.getBoundingClientRect()
+            .width ?? Number.NaN,
       });
-      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
     }
+    for (const { transition } of pausedTransitions) transition.play();
     return samples;
   });
 }
@@ -359,9 +387,23 @@ function expectTransitionGeometry(
       icons: readonly { left: number; right: number; opacity: string; visibility: string }[];
     }[];
     rootRight: number;
+    trackedSurfaceWidth: number;
   }[],
+  direction: 'expand' | 'collapse',
 ): void {
-  expect(samples.length).toBeGreaterThan(4);
+  expect(samples).toHaveLength(3);
+  const trackedWidths = samples.map((sample) => sample.trackedSurfaceWidth);
+  if (direction === 'expand') {
+    expect(trackedWidths[0]).toBeLessThanOrEqual(10.01);
+    expect(trackedWidths[1]).toBeGreaterThan(10.01);
+    expect(trackedWidths[1]).toBeLessThan(39.99);
+    expect(trackedWidths[2]).toBeGreaterThanOrEqual(39.99);
+  } else {
+    expect(trackedWidths[0]).toBeGreaterThanOrEqual(39.99);
+    expect(trackedWidths[1]).toBeGreaterThan(10.01);
+    expect(trackedWidths[1]).toBeLessThan(39.99);
+    expect(trackedWidths[2]).toBeLessThanOrEqual(10.01);
+  }
   for (const sample of samples) {
     expect(sample.targets).toHaveLength(sample.surfaces.length);
     for (const [index, target] of sample.targets.entries()) {
@@ -407,10 +449,13 @@ test('animates anchored surfaces while hit targets and gaps stay valid', async (
     initialTarget.x + initialTarget.width / 2,
     initialTarget.y + initialTarget.height / 2,
   );
-  expectTransitionGeometry(await sampleTransition(page));
+  const samples = await sampleTransition(page);
+  expectTransitionGeometry(samples, 'expand');
 
+  await expect(first.locator('.status-tiles__tile-surface')).toHaveCSS('width', '40px');
   await page.mouse.move(rootBox.x - 8, rootBox.y + rootBox.height / 2);
-  expectTransitionGeometry(await sampleTransition(page));
+  const collapseSamples = await sampleTransition(page);
+  expectTransitionGeometry(collapseSamples, 'collapse');
 });
 
 test('waits for enough expanded surface room before revealing both icons', async ({ page }) => {
