@@ -8,14 +8,13 @@ maps raw hook records to session status.
 
 The reader opens only the target's `<baseName>.jsonl.3`, `.2`, `.1`, and active
 `.jsonl` files under the caller-supplied app-data directory. It accepts regular
-files only, rejects symlinks and escaping paths, and revalidates the path-to-
-inode mapping after opening the bounded snapshot. A moving journal is retried
+files only, rejects symlinks and escaping paths, and revalidates the
+path-to-inode mapping after opening the bounded snapshot. A moving journal is retried
 three times; persistent instability returns `source-unstable` and no cursor
 advance.
 
-Each returned event is a reduced allowlist projection of helper schema version
-
-1. It contains lifecycle identity, bounded correlation IDs, receipt timestamp,
+Each returned event is a reduced allowlist projection of helper schema version 1.
+It contains lifecycle identity, bounded correlation IDs, receipt timestamp,
    approved project metadata, approved notification/tool names, and
    `stopHookActive` when present. Unknown keys, prompts, answers, transcript/tool
    bodies, credentials, and raw paths are never returned. `Stop` remains a raw
