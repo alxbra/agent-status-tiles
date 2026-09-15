@@ -1,10 +1,14 @@
 import { app, ipcMain, type IpcMainInvokeEvent } from 'electron';
 
 import { closeSettingsWindow, getSettingsWindow, showSettingsWindow } from './settings-window';
+import { createMenuBar, type MenuBarController } from './menu-bar';
+import { createOverlayController, type OverlayController } from './overlay-controller';
 import packageJson from '../../package.json';
 import { IPC_CHANNELS } from '../shared/ipc';
 
 const hasSingleInstanceLock = app.requestSingleInstanceLock();
+let menuBar: MenuBarController | null = null;
+let overlayController: OverlayController | null = null;
 
 function assertSettingsSender(event: IpcMainInvokeEvent): void {
   const settingsWindow = getSettingsWindow();
@@ -45,7 +49,25 @@ if (!hasSingleInstanceLock) {
     }
   });
 
+  app.on('will-quit', () => {
+    menuBar?.destroy();
+    overlayController?.destroy();
+    menuBar = null;
+    overlayController = null;
+  });
+
   void app.whenReady().then(() => {
+    if (process.platform === 'darwin') {
+      app.dock?.hide();
+    }
+
+    overlayController = createOverlayController();
+    menuBar = createMenuBar({
+      showOverlay: () => overlayController?.setVisible(true),
+      hideOverlay: () => overlayController?.setVisible(false),
+      openSettings: showSettingsWindow,
+      quit: () => app.quit(),
+    });
     registerIpcHandlers();
     showSettingsWindow();
     app.on('activate', () => {
