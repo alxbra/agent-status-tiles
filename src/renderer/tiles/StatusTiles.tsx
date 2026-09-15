@@ -27,7 +27,13 @@ import {
 } from './interaction';
 import { TileContextMenu } from './context-menu';
 import { ProviderIcon, StatusIcon } from './icons';
-import { PROVIDER_LABEL, sessionDisplayTitle, STATUS_COLOR, statusLabel } from './theme';
+import {
+  PROVIDER_LABEL,
+  sessionDisplayTitle,
+  STATUS_COLOR,
+  statusLabel,
+  TILE_COLORS,
+} from './theme';
 import './tiles.css';
 
 export interface StatusTilesProps {
@@ -40,6 +46,8 @@ export interface StatusTilesProps {
   /** Tests and the future overlay controller can provide a measured viewport. */
   width?: number;
   height?: number;
+  /** The transparent strip's current backdrop tone, used for indicator contrast. */
+  backgroundTone?: 'light' | 'dark';
 }
 
 function usePrefersReducedMotion(): boolean {
@@ -113,6 +121,7 @@ export function StatusTiles({
   reducedMotion,
   width = DEFAULT_STRIP_WIDTH,
   height,
+  backgroundTone = 'light',
 }: StatusTilesProps): ReactElement | null {
   const rootRef = useRef<HTMLDivElement>(null);
   const tileRefs = useRef<(HTMLButtonElement | null)[]>([]);
@@ -339,6 +348,9 @@ export function StatusTiles({
   if (displayedSessions.length === 0 && visibleSessions.length === 0) return null;
 
   const rootStyle = { width: `${width}px` } satisfies CSSProperties;
+  const indicatorStyle = {
+    color: backgroundTone === 'dark' ? TILE_COLORS.neutral : TILE_COLORS.glyph,
+  } satisfies CSSProperties;
   return (
     <div
       ref={rootRef}
@@ -370,6 +382,7 @@ export function StatusTiles({
       {layout.hasPrevious ? (
         <span
           className="status-tiles__indicator status-tiles__indicator--previous"
+          style={indicatorStyle}
           aria-hidden="true"
         >
           ▲
@@ -459,7 +472,11 @@ export function StatusTiles({
         );
       })}
       {layout.hasNext ? (
-        <span className="status-tiles__indicator status-tiles__indicator--next" aria-hidden="true">
+        <span
+          className="status-tiles__indicator status-tiles__indicator--next"
+          style={indicatorStyle}
+          aria-hidden="true"
+        >
           ▼
         </span>
       ) : null}

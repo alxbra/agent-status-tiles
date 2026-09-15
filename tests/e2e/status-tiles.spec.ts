@@ -49,6 +49,10 @@ function screenshotPath(count: number, state = 'collapsed'): string {
   );
 }
 
+function visualScreenshotPath(name: string): string {
+  return resolve(projectRoot, 'test-results/status-tiles-screenshots', `visual-${name}.png`);
+}
+
 async function openFixture(page: Page, count: number, suffix = ''): Promise<void> {
   await page.setViewportSize({ width: 180, height: 480 });
   await page.goto(fixtureUrl(`count=${String(count)}${suffix}`));
@@ -279,3 +283,115 @@ test('waits for stock context-menu dismissal instead of dismissing on right-clic
     .poll(() => page.evaluate(() => window.__fixtureDismissedSessionId))
     .toBe('codex:fixture-0');
 });
+
+async function captureVisualEvidence(page: Page, scaleLabel: string): Promise<void> {
+  for (const theme of ['light', 'dark'] as const) {
+    await openFixture(page, 6, `&visual=all&theme=${theme}`);
+    const statuses = await page
+      .locator('.status-tiles__tile')
+      .evaluateAll((elements) => elements.map((element) => element.getAttribute('data-status')));
+    expect(statuses).toEqual([
+      'error',
+      'unavailable',
+      'working',
+      'needs-input',
+      'unread',
+      'working',
+    ]);
+    await page.screenshot({
+      path: visualScreenshotPath(`${scaleLabel}-${theme}-states`),
+      scale: 'device',
+      animations: 'disabled',
+    });
+
+    const errorTile = page.locator('.status-tiles__tile[data-status="error"]');
+    const errorBox = await errorTile.boundingBox();
+    if (errorBox === null) throw new Error('Error tile has no target box');
+    await page.mouse.move(errorBox.x + errorBox.width / 2, errorBox.y + errorBox.height / 2);
+    await expect(errorTile.locator('.status-tiles__tile-surface')).toHaveCSS('width', '40px');
+    await expect(errorTile.locator('.status-tiles__provider-icon')).toHaveCSS('opacity', '1');
+    await expect(errorTile.locator('.status-tiles__status-icon')).toHaveCSS('opacity', '1');
+    await page.screenshot({
+      path: visualScreenshotPath(`${scaleLabel}-${theme}-error-expanded`),
+      scale: 'device',
+      animations: 'disabled',
+    });
+
+    await openFixture(page, 6, `&visual=all&theme=${theme}`);
+    const unavailableTile = page.locator('.status-tiles__tile[data-status="unavailable"]');
+    const unavailableBox = await unavailableTile.boundingBox();
+    if (unavailableBox === null) throw new Error('Unavailable tile has no target box');
+    await page.mouse.move(
+      unavailableBox.x + unavailableBox.width / 2,
+      unavailableBox.y + unavailableBox.height / 2,
+    );
+    await expect(unavailableTile.locator('.status-tiles__tile-surface')).toHaveCSS('width', '40px');
+    await expect(unavailableTile.locator('.status-tiles__provider-icon')).toHaveCSS('opacity', '1');
+    await expect(unavailableTile.locator('.status-tiles__status-icon')).toHaveCSS('opacity', '1');
+    await page.screenshot({
+      path: visualScreenshotPath(`${scaleLabel}-${theme}-unavailable-expanded`),
+      scale: 'device',
+      animations: 'disabled',
+    });
+
+    await openFixture(page, 2, `&visual=all&theme=${theme}`);
+    const providerTiles = page.locator('.status-tiles__tile');
+    const providerBoxes = await providerTiles.evaluateAll((elements) =>
+      elements.map((element) => {
+        const box = element.getBoundingClientRect();
+        return { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+      }),
+    );
+    const firstProvider = providerBoxes[0];
+    const secondProvider = providerBoxes[1];
+    if (firstProvider === undefined || secondProvider === undefined) {
+      throw new Error('Provider fixture has insufficient tiles');
+    }
+    await page.mouse.move(
+      (firstProvider.x + secondProvider.x) / 2,
+      (firstProvider.y + secondProvider.y) / 2,
+    );
+    await expect(providerTiles.locator('.status-tiles__provider-icon')).toHaveCount(2);
+    await expect(providerTiles.locator('.status-tiles__provider-icon').first()).toHaveCSS(
+      'opacity',
+      '1',
+    );
+    await expect(providerTiles.locator('.status-tiles__provider-icon').last()).toHaveCSS(
+      'opacity',
+      '1',
+    );
+    await page.screenshot({
+      path: visualScreenshotPath(`${scaleLabel}-${theme}-both-providers-expanded`),
+      scale: 'device',
+      animations: 'disabled',
+    });
+
+    await openFixture(page, 30, `&theme=${theme}`);
+    const nextIndicator = page.locator('.status-tiles__indicator--next');
+    await expect(nextIndicator).toBeVisible();
+    await expect(nextIndicator).toHaveCSS(
+      'color',
+      theme === 'dark' ? 'rgb(241, 241, 237)' : 'rgb(17, 19, 21)',
+    );
+    await page.screenshot({
+      path: visualScreenshotPath(`${scaleLabel}-${theme}-overflow`),
+      scale: 'device',
+      animations: 'disabled',
+    });
+  }
+}
+
+for (const [scaleLabel, deviceScaleFactor] of [
+  ['1x', 1],
+  ['2x', 2],
+] as const) {
+  test.describe(`browser visual evidence at ${scaleLabel}`, () => {
+    test.use({ deviceScaleFactor });
+
+    test(`captures states, provider marks, overflow, and themes at ${scaleLabel}`, async ({
+      page,
+    }) => {
+      await captureVisualEvidence(page, scaleLabel);
+    });
+  });
+}

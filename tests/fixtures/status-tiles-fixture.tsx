@@ -1,7 +1,7 @@
 import { StrictMode, useState, type ReactElement } from 'react';
 import { createRoot } from 'react-dom/client';
 
-import type { SessionSnapshot } from '../../src/shared/session';
+import type { SessionSnapshot, SessionStatus } from '../../src/shared/session';
 import { StatusTiles, type OpenSessionTarget } from '../../src/renderer/tiles';
 import './status-tiles-fixture.css';
 
@@ -14,7 +14,19 @@ declare global {
   }
 }
 
-function makeSessions(count: number, forceError = false): readonly SessionSnapshot[] {
+function makeSessions(
+  count: number,
+  forceError = false,
+  visualStates = false,
+): readonly SessionSnapshot[] {
+  const states: readonly SessionStatus[] = [
+    'error',
+    'unavailable',
+    'working',
+    'needs-input',
+    'unread',
+    'working',
+  ];
   return Array.from(
     { length: count },
     (_, index) =>
@@ -23,8 +35,9 @@ function makeSessions(count: number, forceError = false): readonly SessionSnapsh
         provider: index % 2 === 0 ? 'codex' : 'claude',
         surface: index % 2 === 0 ? 'desktop' : 'cli',
         title: `Fixture session ${index + 1}`,
-        status:
-          forceError && index === 0
+        status: visualStates
+          ? states[index % states.length]!
+          : forceError && index === 0
             ? 'error'
             : index === 0
               ? 'unread'
@@ -46,8 +59,11 @@ export function Fixture(): ReactElement {
   const count = Math.max(0, Number(query.get('count') ?? 1));
   const reducedMotion = query.get('reduced') === '1';
   const forceError = query.get('error') === '1';
+  const visualStates = query.get('visual') === 'all';
+  const theme = query.get('theme') === 'dark' ? 'dark' : 'light';
+  document.body.dataset.fixtureTheme = theme;
   const [sessions, setSessions] = useState<readonly SessionSnapshot[]>(() =>
-    makeSessions(count, forceError),
+    makeSessions(count, forceError, visualStates),
   );
   window.__setFixtureSessions = setSessions;
 
@@ -55,6 +71,7 @@ export function Fixture(): ReactElement {
     <StatusTiles
       sessions={sessions}
       reducedMotion={reducedMotion}
+      backgroundTone={theme}
       height={480}
       onOpenSession={(target) => {
         window.__fixtureOpenTarget = target;

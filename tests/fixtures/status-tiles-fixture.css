@@ -8,6 +8,10 @@ body,
 
 body {
   overflow: hidden;
+  background: #f1f1ed;
+}
+
+body[data-fixture-theme='dark'] {
   background: #242424;
 }
 
