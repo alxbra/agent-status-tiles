@@ -1,0 +1,38 @@
+export { StatusTiles, type StatusTilesProps } from './StatusTiles';
+export {
+  DEFAULT_STRIP_HEIGHT,
+  DEFAULT_STRIP_WIDTH,
+  EXPANDED_TILE_RADIUS,
+  EXPANDED_TILE_SIZE,
+  layoutTiles,
+  MAGNIFICATION_RADIUS_SLOTS,
+  MAX_VISIBLE_TILES,
+  minimumHeightForSlots,
+  MIN_SURFACE_GAP,
+  normalizeStripWidth,
+  RIGHT_EDGE_INSET,
+  sessionHitRegions,
+  SLOT_SPACING,
+  surfacesHaveMinimumGap,
+  TILE_HIT_SIZE,
+  TILE_CONTENT_SIZE,
+  TILE_RADIUS,
+  TILE_SIZE,
+  tileRadiusForInfluence,
+  tileSizeForInfluence,
+  visibleSlotCount,
+  type TileGeometry,
+  type TileHitRegion,
+  type TileLayout,
+  type TileLayoutOptions,
+  type TilePoint,
+} from './geometry';
+export {
+  canAcknowledgeTarget,
+  captureOpenTarget,
+  isSameSessionOrder,
+  updateFrozenSessionStatuses,
+  visibleTileSessions,
+  type OpenSessionTarget,
+} from './interaction';
+export { TILE_COLORS, STATUS_COLOR, statusLabel } from './theme';
