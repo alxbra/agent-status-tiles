@@ -59,4 +59,23 @@ describe('overlay hit-region publisher', () => {
       expect(publish).toHaveBeenCalledTimes(2);
     });
   });
+
+  it('restores desired geometry after a newer publication is rejected', async () => {
+    const publications = [deferred<boolean>(), deferred<boolean>(), deferred<boolean>()];
+    const publish = vi.fn(() => publications[publish.mock.calls.length - 1]!.promise);
+    const publisher = createOverlayHitRegionPublisher(publish);
+
+    publisher.update(tileRegion);
+    publications[0]!.resolve(true);
+    await publications[0]!.promise;
+    publisher.update(portalRegion);
+    await vi.waitFor(() => expect(publish).toHaveBeenCalledTimes(2));
+    publisher.update(tileRegion);
+
+    publications[1]!.resolve(false);
+    await publications[1]!.promise;
+    await vi.waitFor(() => expect(publish).toHaveBeenCalledTimes(3));
+    expect(publish).toHaveBeenLastCalledWith(tileRegion);
+    publications[2]!.resolve(true);
+  });
 });

@@ -279,6 +279,29 @@ for (const testSessionCount of [1, 12]) {
   });
 }
 
+test('keeps an actionable native context menu reachable', async () => {
+  test.skip(process.platform !== 'darwin', 'the desktop shell targets macOS');
+  const userDataDir = await mkdtemp(join(tmpdir(), 'agent-status-tiles-menu-e2e-'));
+  let application: ElectronApplication | undefined;
+
+  try {
+    application = await launch(userDataDir, 4);
+    await settingsWindow(application);
+    const page = await overlayWindow(application);
+    const errorTile = page.locator('.status-tiles__tile[data-status="error"]');
+    await expect(errorTile).toHaveCount(1);
+
+    await errorTile.click({ button: 'right' });
+    const dismissItem = page.getByRole('menuitem', { name: 'Dismiss error' });
+    await expect(dismissItem).toBeEnabled();
+    await dismissItem.click();
+    await expect(dismissItem).toBeHidden();
+  } finally {
+    await closeApplication(application);
+    await rm(userDataDir, { recursive: true, force: true });
+  }
+});
+
 test('keeps a single application instance for one user-data directory', async () => {
   const userDataDir = await mkdtemp(join(tmpdir(), 'agent-status-tiles-e2e-'));
   let firstApplication: ElectronApplication | undefined;

@@ -49,7 +49,12 @@ export function TileContextMenu({
             </ContextMenuItem>
           </ContextMenuContent>
         </ContextMenu>
-        <TooltipContent side="left" sideOffset={8} className="whitespace-nowrap">
+        <TooltipContent
+          collisionPadding={8}
+          side="left"
+          sideOffset={8}
+          className="status-tiles__tooltip whitespace-nowrap"
+        >
           {tooltip}
         </TooltipContent>
       </Tooltip>

@@ -20,7 +20,9 @@ export function createOverlayHitRegionPublisher(
     inFlight = true;
     void publish(publication.regions)
       .then((accepted) => {
-        if (accepted) acceptedKey = publication.key;
+        // A rejected update means the main process cleared its native region
+        // set, so no previously accepted renderer key remains authoritative.
+        acceptedKey = accepted ? publication.key : '';
       })
       .catch(() => undefined)
       .finally(() => {

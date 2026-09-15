@@ -103,6 +103,15 @@
   bottom: 5px;
 }
 
+.status-tiles__tooltip {
+  box-sizing: border-box;
+  /* Reserve the right-edge tile target and collision gap inside the host viewport. */
+  max-width: calc(100vw - 4.5rem);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .status-tiles--reduced-motion .status-tiles__tile,
 .status-tiles--reduced-motion .status-tiles__tile-surface,
 .status-tiles--reduced-motion .status-tiles__provider-icon,

@@ -8,6 +8,7 @@ import { StatusTiles } from './tiles/StatusTiles';
 import { DISMISS_TILE_PORTALS_EVENT } from './tiles/events';
 import type { TileHitRegion } from './tiles/geometry';
 import type { OpenSessionTarget } from './tiles/interaction';
+import './styles.css';
 import './overlay.css';
 
 const overlayApi = window.agentStatusTilesOverlay;
