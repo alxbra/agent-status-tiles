@@ -5,8 +5,9 @@ Code sessions are doing without keeping their harness windows visible.
 
 The product and implementation contract lives in [MVP_PLAN.md](MVP_PLAN.md).
 The plan is the source of truth for scope, privacy, native macOS behavior, and
-the exact overlay geometry. The application is not scaffolded yet; this commit
-only establishes the repository foundation.
+the exact overlay geometry. The current foundation provides a minimal secure
+Electron Settings shell; overlay and provider integrations remain subsequent
+bounded PRs.
 
 ## Development workflow
 
@@ -19,3 +20,13 @@ only establishes the repository foundation.
 
 `main` is reserved for the eventual release promotion. See `AGENTS.md` for the
 full contribution and review requirements.
+
+## Development commands
+
+Use a supported Node.js line (`^20.19.0`, `^22.13.0`, or `>=24.0.0`; CI uses
+Node.js 24), then install dependencies with `pnpm install`. Use `pnpm dev` for
+the Electron development shell. The foundation checks are `pnpm format:check`,
+`pnpm lint`, `pnpm typecheck`, and `pnpm test`. Run `pnpm test:e2e` to build and
+exercise the packaged Electron entry point with an isolated temporary
+user-data directory. `pnpm run pack` creates an unsigned unpacked application
+under `release/`.

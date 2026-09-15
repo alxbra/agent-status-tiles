@@ -379,7 +379,7 @@ Do not promote application code to `main` during MVP development.
 Use the [PR hardening workflow](/Users/alex/.codex/skills/create-pr/SKILL.md), with the user’s **one-pass CodeRabbit limit overriding its multi-pass defaults**. Apply [safe merge safeguards](/Users/alex/.codex/skills/squash-merge-pr-safe/SKILL.md).
 
 ```sh
-coderabbit review --agent --base origin/staging --type committed
+coderabbit review --agent --base origin/staging --committed
 ```
 
 Disable automatic CodeRabbit reruns so subsequent fix commits do not generate additional passes. Do not combine an automatic review with a second CLI review.

@@ -43,7 +43,7 @@ After bootstrap:
    relative to `staging`:
 
    ```sh
-   coderabbit review --agent --base origin/staging --type committed
+   coderabbit review --agent --base origin/staging --committed
    ```
 
    Automatic CodeRabbit reviews are disabled in `.coderabbit.yaml`; do not

@@ -9,6 +9,9 @@ build/
 .vite/
 coverage/
 target/
+release/
+test-results/
+playwright-report/
 
 # Local operating-system and editor files
 .DS_Store
@@ -33,3 +36,4 @@ temp/
 *.pfx
 *.cer
 *.key
+*.tgz
