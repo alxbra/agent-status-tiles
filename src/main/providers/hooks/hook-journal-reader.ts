@@ -568,7 +568,7 @@ export class HookJournalReader {
         if (
           consumed.hasMore ||
           consumed.recordLimitReached ||
-          (consumed.hasPendingTail && isActiveSnapshot(snapshot)) ||
+          consumed.hasPendingTail ||
           bytesRead >= byteBudget ||
           index + 1 >= snapshots.length
         ) {
@@ -739,7 +739,7 @@ export class HookJournalReader {
   ): Promise<ConsumedFile> {
     let offset = requestedOffset;
     const isActive = isActiveSnapshot(snapshot);
-    let discarding = isActive ? (previous?.isDiscardingOversizedLine ?? false) : false;
+    let discarding = previous?.isDiscardingOversizedLine ?? false;
     if (offset > snapshot.size) {
       addDiagnostic(diagnostics, 'cursor-truncated', target);
       offset = 0;
@@ -753,6 +753,9 @@ export class HookJournalReader {
       diagnostics,
     );
     const bytes = readResult.bytes;
+    const reachedSnapshotEof =
+      !readResult.byteLimitReached && offset + bytes.length === snapshot.size;
+    if (!isActive && reachedSnapshotEof && bytes.length === 0) discarding = false;
     const events: HookJournalEvent[] = [];
     let cursorOffset = offset;
     let lineStart = offset;
@@ -767,7 +770,7 @@ export class HookJournalReader {
       const newline = bytes.indexOf(0x0a, index);
       if (newline < 0) {
         const partialLength = bytes.length - index;
-        if (!isActive) {
+        if (!isActive && reachedSnapshotEof) {
           addDiagnostic(
             diagnostics,
             discarding || partialLength + 1 > MAX_RECORD_BYTES

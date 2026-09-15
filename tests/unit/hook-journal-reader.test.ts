@@ -358,6 +358,69 @@ describe('HookJournalReader', () => {
     expect(oversizedResult.nextTargetIndex).toBeUndefined();
   });
 
+  it('preserves an archived record split by the total byte budget', async () => {
+    const root = await isolatedJournalRoot();
+    const prefixTargets = Array.from({ length: 32 }, (_, index) =>
+      target(`budget-prefix-${index}`),
+    );
+    const budgetTarget = target('budget-target');
+    const archivedRecord = record({ event_name: 'SessionStart' }, 'budget-target');
+    const activeRecord = record({ event_name: 'Stop' }, 'budget-target');
+
+    await Promise.all([
+      ...prefixTargets.map((journalTarget) =>
+        writeFile(activePath(root, journalTarget), 'x'.repeat(MAX_FILE_BYTES - 1)),
+      ),
+      writeFile(archivePath(root, budgetTarget, 1), archivedRecord),
+      writeFile(activePath(root, budgetTarget), activeRecord),
+    ]);
+
+    const targets = [...prefixTargets, budgetTarget];
+    const reader = new HookJournalReader({ appDataPath: root });
+    const first = await reader.read(targets);
+    expect(first.events).toEqual([]);
+    expect(first.diagnostics.map((diagnostic) => diagnostic.code)).toContain('read-limit');
+    expect(first.nextTargetIndex).toBe(prefixTargets.length);
+    expect(cursorFor(budgetTarget, first.cursors)).toMatchObject({ offset: 0 });
+
+    const second = await reader.read(targets, first.cursors, {
+      startTargetIndex: first.nextTargetIndex,
+    });
+    expect(second.events.map((event) => event.eventName)).toEqual(['SessionStart', 'Stop']);
+    expect(second.events.map((event) => event.sessionId)).toEqual([
+      'budget-target',
+      'budget-target',
+    ]);
+    expect(second.nextTargetIndex).toBeUndefined();
+  });
+
+  it('continues an oversized line after its active inode rotates to an archive', async () => {
+    const root = await isolatedJournalRoot();
+    const journalTarget = target('rotating-oversized');
+    const active = activePath(root, journalTarget);
+    const archived = archivePath(root, journalTarget, 1);
+    await writeFile(active, 'x'.repeat(MAX_RECORD_BYTES));
+
+    const reader = new HookJournalReader({ appDataPath: root });
+    const first = await reader.read([journalTarget]);
+    expect(first.events).toEqual([]);
+    expect(cursorFor(journalTarget, first.cursors)).toMatchObject({
+      offset: MAX_RECORD_BYTES,
+      isDiscardingOversizedLine: true,
+    });
+
+    await rename(active, archived);
+    await appendFile(archived, `\n${record({ event_name: 'Stop' }, 'rotating-oversized')}`);
+    const second = await reader.read([journalTarget], first.cursors);
+
+    expect(second.events.map((event) => event.eventName)).toEqual(['Stop']);
+    expect(second.events[0]?.sessionId).toBe('rotating-oversized');
+    expect(cursorFor(journalTarget, second.cursors)).toMatchObject({
+      isDiscardingOversizedLine: false,
+    });
+    expect(second.nextTargetIndex).toBeUndefined();
+  });
+
   it('carries shared cursor watermarks and oversized-line continuation state', async () => {
     const root = await isolatedJournalRoot();
     const journalTarget = target();
