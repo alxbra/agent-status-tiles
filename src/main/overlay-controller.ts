@@ -168,6 +168,7 @@ export function createOverlayController(): OverlayController {
     }
 
     overlayWindow.setBounds(overlayBounds(screen.getPrimaryDisplay().workArea), false);
+    syncMouseMode();
   };
 
   const syncVisibility = (): void => {
@@ -181,6 +182,7 @@ export function createOverlayController(): OverlayController {
     } else if (overlayWindow.isVisible()) {
       overlayWindow.hide();
     }
+    syncMouseMode();
   };
 
   const setMouseIgnoring = (ignore: boolean): void => {
@@ -190,6 +192,23 @@ export function createOverlayController(): OverlayController {
 
     ignoringMouseEvents = ignore;
     overlayWindow.setIgnoreMouseEvents(ignore, ignore ? { forward: true } : undefined);
+  };
+
+  const syncMouseMode = (): void => {
+    if (!overlayWindow || overlayWindow.isDestroyed()) {
+      return;
+    }
+
+    if (!overlayWindow.isVisible() || hitRegions.length === 0) {
+      setMouseIgnoring(true);
+      return;
+    }
+
+    const bounds = overlayWindow.getBounds();
+    const cursor = screen.getCursorScreenPoint();
+    setMouseIgnoring(
+      !isPointInOverlayHitRegion(cursor.x - bounds.x, cursor.y - bounds.y, hitRegions),
+    );
   };
 
   const onPointerInput = (inputEvent: InputEvent): void => {
@@ -249,6 +268,7 @@ export function createOverlayController(): OverlayController {
       const valid =
         regions.length <= MAX_OVERLAY_HIT_REGIONS && regions.every(isValidOverlayHitRegion);
       hitRegions = valid ? regions.map((region) => ({ ...region })) : [];
+      syncMouseMode();
       return valid;
     },
     destroy: () => {

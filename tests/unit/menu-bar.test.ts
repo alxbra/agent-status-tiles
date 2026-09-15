@@ -10,7 +10,7 @@ const electronMocks = vi.hoisted(() => ({
   Menu: { buildFromTemplate: vi.fn(() => ({})) },
   Tray: vi.fn(),
   nativeImage: {
-    createFromDataURL: vi.fn(() => ({ setTemplateImage: vi.fn() })),
+    createFromBuffer: vi.fn(() => ({ isEmpty: vi.fn(() => false), setTemplateImage: vi.fn() })),
   },
 }));
 
@@ -30,7 +30,7 @@ describe('menu bar', () => {
     electronMocks.Menu.buildFromTemplate.mockReset();
     electronMocks.Menu.buildFromTemplate.mockReturnValue({});
     electronMocks.Tray.mockReset();
-    electronMocks.nativeImage.createFromDataURL.mockClear();
+    electronMocks.nativeImage.createFromBuffer.mockClear();
   });
 
   afterEach(() => {
@@ -55,12 +55,14 @@ describe('menu bar', () => {
     const { createMenuBar } = await import('../../src/main/menu-bar');
 
     const controller = createMenuBar(actions);
-    const icon = electronMocks.nativeImage.createFromDataURL.mock.results[0]?.value as {
+    const icon = electronMocks.nativeImage.createFromBuffer.mock.results[0]?.value as {
+      isEmpty: ReturnType<typeof vi.fn>;
       setTemplateImage: ReturnType<typeof vi.fn>;
     };
     const menuCall = electronMocks.Menu.buildFromTemplate.mock.calls[0] as unknown as [MenuItem[]];
     const template = menuCall[0];
 
+    expect(icon.isEmpty).toHaveBeenCalledOnce();
     expect(icon.setTemplateImage).toHaveBeenCalledWith(true);
     expect(tray.setToolTip).toHaveBeenCalledWith('Agent Status Tiles');
     expect(template.map((item) => item.label ?? item.type)).toEqual([

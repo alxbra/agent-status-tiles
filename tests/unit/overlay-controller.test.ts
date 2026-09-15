@@ -11,6 +11,7 @@ type OverlayWindowMock = {
   hide: ReturnType<typeof vi.fn>;
   isDestroyed: ReturnType<typeof vi.fn>;
   isVisible: ReturnType<typeof vi.fn>;
+  getBounds: ReturnType<typeof vi.fn>;
   loadFile: ReturnType<typeof vi.fn>;
   loadURL: ReturnType<typeof vi.fn>;
   setAlwaysOnTop: ReturnType<typeof vi.fn>;
@@ -32,6 +33,7 @@ const electronMocks = vi.hoisted(() => ({
   powerMonitor: { on: vi.fn(), off: vi.fn() },
   screen: {
     getPrimaryDisplay: vi.fn(() => ({ workArea: { x: 0, y: 24, width: 1440, height: 876 } })),
+    getCursorScreenPoint: vi.fn(() => ({ x: 0, y: 0 })),
     on: vi.fn(),
     off: vi.fn(),
   },
@@ -48,6 +50,7 @@ function createOverlayWindowMock(): OverlayWindowMock {
     }),
     isDestroyed: vi.fn(() => false),
     isVisible: vi.fn(() => visible),
+    getBounds: vi.fn(() => ({ x: 1352, y: 222, width: 88, height: 480 })),
     loadFile: vi.fn(() => Promise.resolve()),
     loadURL: vi.fn(),
     setAlwaysOnTop: vi.fn(),
@@ -93,6 +96,7 @@ describe('overlay controller', () => {
     vi.resetModules();
     electronMocks.BrowserWindow.mockReset();
     electronMocks.screen.getPrimaryDisplay.mockClear();
+    electronMocks.screen.getCursorScreenPoint.mockClear();
     electronMocks.screen.on.mockClear();
     electronMocks.screen.off.mockClear();
     electronMocks.powerMonitor.on.mockClear();
@@ -173,14 +177,22 @@ describe('overlay controller', () => {
         })),
       ),
     ).toBe(false);
+    overlayWindow.readyListener?.();
+    controller.setQualifyingSessionCount(1);
+    electronMocks.screen.getCursorScreenPoint.mockReturnValue({ x: 1364, y: 244 });
+    expect(controller.setHitRegions([{ x: 10, y: 20, width: 24, height: 24 }])).toBe(true);
+    expect(overlayWindow.setIgnoreMouseEvents).toHaveBeenLastCalledWith(false, undefined);
+    expect(controller.setHitRegions([{ x: 40, y: 20, width: 24, height: 24 }])).toBe(true);
+    expect(overlayWindow.setIgnoreMouseEvents).toHaveBeenLastCalledWith(true, { forward: true });
     expect(controller.setHitRegions([{ x: 10, y: 20, width: 24, height: 24 }])).toBe(true);
 
     overlayWindow.pointerListener?.({ type: 'mouseMove', x: 12, y: 22 });
-    expect(overlayWindow.setIgnoreMouseEvents).toHaveBeenCalledWith(false, undefined);
     overlayWindow.pointerListener?.({ type: 'mouseMove', x: 34, y: 22 });
-    expect(overlayWindow.setIgnoreMouseEvents).toHaveBeenCalledWith(true, { forward: true });
+    expect(overlayWindow.setIgnoreMouseEvents).toHaveBeenLastCalledWith(true, { forward: true });
+    overlayWindow.pointerListener?.({ type: 'mouseMove', x: 12, y: 22 });
+    expect(overlayWindow.setIgnoreMouseEvents).toHaveBeenLastCalledWith(false, undefined);
     overlayWindow.pointerListener?.({ type: 'mouseLeave', x: 34, y: 22 });
-    expect(overlayWindow.setIgnoreMouseEvents).toHaveBeenCalledTimes(3);
+    expect(overlayWindow.setIgnoreMouseEvents).toHaveBeenLastCalledWith(true, { forward: true });
     controller.destroy();
   });
 });

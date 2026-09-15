@@ -1,7 +1,7 @@
 import { Menu, Tray, nativeImage, type MenuItemConstructorOptions } from 'electron';
 
-const TEMPLATE_ICON_DATA_URL =
-  'data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxNiIgaGVpZ2h0PSIxNiIgdmlld0JveD0iMCAwIDE2IDE2Ij48cGF0aCBmaWxsPSIjMDAwIiBkPSJNOCAxLjI1YTYuNzUgNi43NSAwIDEgMCAwIDEzLjVBNi43NSA2Ljc1IDAgMCAwIDggMS4yNVptMCAyLjFhNC42NSA0LjY1IDAgMSAxIDAgOS4zIDQuNjUgNC42NSAwIDAgMSAwLTkuM1ptMCAxLjVhMy4xNSAzLjE1IDAgMSAwIDAgNi4zIDMuMTUgMy4xNSAwIDAgMCAwLTYuM1oiLz48L3N2Zz4=';
+const TEMPLATE_ICON_PNG_BASE64 =
+  'iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAAXNSR0IArs4c6QAAAERlWElmTU0AKgAAAAgAAYdpAAQAAAABAAAAGgAAAAAAA6ABAAMAAAABAAEAAKACAAQAAAABAAAAEKADAAQAAAABAAAAEAAAAAA0VXHyAAAAi0lEQVQ4Ec1TyQ2AIBAEH1ob3WkLtgZvW8AdIhtdWVH04SQbCHNwG/MResoZqRaqWClooIWHMVGvZpQ8Qhh3ZpYB8DCYdM5F732UwBg4cuzrHFAy5zBwMsBuESASSJy7xdbabEm07YqqB4M/DAghqBu44vh0W6+x+SHlQ5zVdevEwTOQ7tVn0uepMCt0VLBsQ8ZHTwAAAABJRU5ErkJggg==';
 
 export interface MenuBarActions {
   showOverlay(): void;
@@ -16,7 +16,10 @@ export interface MenuBarController {
 }
 
 function createTemplateIcon() {
-  const icon = nativeImage.createFromDataURL(TEMPLATE_ICON_DATA_URL);
+  const icon = nativeImage.createFromBuffer(Buffer.from(TEMPLATE_ICON_PNG_BASE64, 'base64'));
+  if (icon.isEmpty()) {
+    throw new Error('Unable to create the menu-bar template icon');
+  }
   icon.setTemplateImage(true);
   return icon;
 }

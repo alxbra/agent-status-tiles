@@ -23,6 +23,22 @@ async function launch(userDataDir: string): Promise<ElectronApplication> {
   });
 }
 
+async function settingsWindow(application: ElectronApplication): Promise<Page> {
+  const existingSettingsWindow = application
+    .windows()
+    .find((window) => window.url().includes('/renderer/index.html'));
+  if (existingSettingsWindow) {
+    return existingSettingsWindow;
+  }
+
+  while (true) {
+    const window = await application.waitForEvent('window');
+    if (window.url().includes('/renderer/index.html')) {
+      return window;
+    }
+  }
+}
+
 async function closeApplication(application: ElectronApplication | undefined): Promise<void> {
   if (application) {
     await application.close();
@@ -43,7 +59,7 @@ test('launches the built Settings window with the typed bridge', async () => {
 
   try {
     application = await launch(userDataDir);
-    const page = await application.firstWindow();
+    const page = await settingsWindow(application);
 
     await expect(page).toHaveTitle('Settings');
     await expect(page.getByRole('heading', { name: 'Settings' })).toBeVisible();
@@ -59,7 +75,64 @@ test('launches the built Settings window with the typed bridge', async () => {
     expect(page.url()).toBe(rendererUrl);
 
     await closePage(page);
-    expect(application.windows()).toHaveLength(0);
+    expect(
+      application.windows().filter((window) => window.url().includes('/renderer/index.html')),
+    ).toHaveLength(0);
+  } finally {
+    await closeApplication(application);
+    await rm(userDataDir, { recursive: true, force: true });
+  }
+});
+
+test('creates a hidden nonactivating overlay in the primary work area', async () => {
+  test.skip(process.platform !== 'darwin', 'the desktop shell targets macOS');
+  const userDataDir = await mkdtemp(join(tmpdir(), 'agent-status-tiles-e2e-'));
+  let application: ElectronApplication | undefined;
+
+  try {
+    application = await launch(userDataDir);
+    await settingsWindow(application);
+
+    const shell = await application.evaluate(({ BrowserWindow, app, screen }) => {
+      const workArea = screen.getPrimaryDisplay().workArea;
+      return {
+        dockVisible: app.dock?.isVisible() ?? false,
+        workArea,
+        windows: BrowserWindow.getAllWindows().map((window) => ({
+          title: window.getTitle(),
+          visible: window.isVisible(),
+          focusable: window.isFocusable(),
+          alwaysOnTop: window.isAlwaysOnTop(),
+          allWorkspaces: window.isVisibleOnAllWorkspaces(),
+          bounds: window.getBounds(),
+          url: window.webContents.getURL(),
+        })),
+      };
+    });
+
+    expect(shell.dockVisible).toBe(false);
+    expect(shell.windows).toHaveLength(2);
+    const overlay = shell.windows.find((window) => window.url.includes('/renderer/overlay.html'));
+    expect(overlay).toBeDefined();
+    expect(overlay).toMatchObject({
+      visible: false,
+      focusable: false,
+      alwaysOnTop: true,
+      allWorkspaces: true,
+      bounds: {
+        x: shell.workArea.x + shell.workArea.width - 88,
+        y: shell.workArea.y + Math.round((shell.workArea.height - 480) / 2),
+        width: 88,
+        height: 480,
+      },
+    });
+    expect(overlay?.url).toContain('/out/renderer/overlay.html');
+    const overlayPage = application
+      .windows()
+      .find((window) => window.url().includes('/renderer/overlay.html'));
+    expect(await overlayPage?.evaluate(() => getComputedStyle(document.body).backgroundColor)).toBe(
+      'rgba(0, 0, 0, 0)',
+    );
   } finally {
     await closeApplication(application);
     await rm(userDataDir, { recursive: true, force: true });
@@ -72,7 +145,7 @@ test('keeps a single application instance for one user-data directory', async ()
 
   try {
     firstApplication = await launch(userDataDir);
-    const firstWindow = await firstApplication.firstWindow();
+    const firstWindow = await settingsWindow(firstApplication);
     await expect(firstWindow).toHaveTitle('Settings');
 
     const secondProcess = spawn(electronExecutable, [`--user-data-dir=${userDataDir}`, mainEntry], {
@@ -89,8 +162,10 @@ test('keeps a single application instance for one user-data directory', async ()
 
     expect(exitCode).toBe(0);
     expect(signal).toBeNull();
-    expect(firstApplication.windows()).toHaveLength(1);
-    const firstWindowAgain = await firstApplication.firstWindow();
+    expect(
+      firstApplication.windows().filter((window) => window.url().includes('/renderer/index.html')),
+    ).toHaveLength(1);
+    const firstWindowAgain = await settingsWindow(firstApplication);
     await expect(firstWindowAgain).toHaveTitle('Settings');
   } finally {
     await closeApplication(firstApplication);
