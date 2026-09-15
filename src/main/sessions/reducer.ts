@@ -70,6 +70,11 @@ function refreshStatus(record: SessionRecord): SessionRecord {
   return record.status === status ? record : { ...record, status };
 }
 
+/** Recompute the public status after restoring internal session fields. */
+export function refreshSessionRecord(record: SessionRecord): SessionRecord {
+  return refreshStatus(record);
+}
+
 function replaceRecord(
   state: SessionState,
   sessionId: string,
