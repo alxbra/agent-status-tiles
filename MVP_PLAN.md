@@ -1,7 +1,7 @@
 # Agent Status Tiles — MVP Implementation Plan
 
 **Document:** `MVP_PLAN.md` in the project root.  
-**Document status:** Implementation in progress; repository bootstrap, the Epic 0 application foundation, session state/persistence, the bounded Codex rollout reader, the Codex catalog (PR #7), and the rounded-square tile renderer (PR #8) are merged. Unsigned helper packaging (PR #9) remains implementation-complete on an open branch awaiting review and merge. Native integration, live provider wiring, and later release gates remain pending.
+**Document status:** Implementation in progress; repository bootstrap, the Epic 0 application foundation, session state/persistence, the bounded Codex rollout reader, the Codex catalog (PR #7), and the rounded-square tile renderer (PR #8) are merged. Unsigned helper packaging (PR #9) is implementation- and review-complete on an open branch awaiting merge. Native integration, live provider wiring, and later release gates remain pending.
 **Repository:** [alxbra/agent-status-tiles](https://github.com/alxbra/agent-status-tiles)
 
 ## 1. Product and release target
@@ -510,11 +510,12 @@ wiring remain pending.
 
 Implementation progress (not an acceptance checkoff): PR #9 contains the
 unsigned arm64/x64 helper packaging implementation and passes its native,
-package, and CI checks on the open branch; review and merge are pending. It
+package, and CI checks on the open branch; review is complete and merge is
+pending. It
 does not install hooks, wire startup, or make a signing/notarization claim.
 
 - [x] Build the native hook-helper executable (merged PR #2).
-- [ ] Package the helper into the application and complete packaging review/integration (PR #9 review/merge pending).
+- [x] Package the native helper as unsigned arm64/x64 application resources (PR #9 implementation and review complete; merge pending).
 - [x] Implement reduced local event journal writing, concurrency handling, bounded rotation, and silent malformed-input behavior in the merged native helper (PR #2).
 - [ ] Replay helper journals through companion app state; the app reader/replay path remains pending.
 - [ ] Install only owned hooks into shared user settings.
@@ -600,7 +601,7 @@ Maintain this table in the plan:
 | [#6 `feat: add bounded Codex rollout reader`](https://github.com/alxbra/agent-status-tiles/pull/6) | Codex rollout reader with bounded, causal event normalization, synthetic/source-derived fixtures, and a metadata-only installed-format check | 1 completed CLI pass; 1 valid finding fixed | 2 | 62 unit tests, 3 Electron E2E tests, format/lint/type/build checks; [CI run 34980907374](https://github.com/alxbra/agent-status-tiles/actions/runs/34980907374); [audit comment](https://github.com/alxbra/agent-status-tiles/pull/6#issuecomment-5681842281) | `3f7fa776065ca6aaf6942c1c06dd6c7e8894ab68` |
 | [#7 `feat/codex catalog`](https://github.com/alxbra/agent-status-tiles/pull/7) | Read-only Codex app-server catalog client with bounded metadata projection | 1 completed CLI pass; 2 valid findings fixed | 2 | 83 unit tests, 3 Electron smoke tests, format/lint/type/build checks; green [CI run 34986281698](https://github.com/alxbra/agent-status-tiles/actions/runs/34986281698); [audit comment](https://github.com/alxbra/agent-status-tiles/pull/7#issuecomment-5682690186) | `419322edcfd277730acd0fef669c26479352c443` |
 | [#8 `feat: add rounded-square status tile UI`](https://github.com/alxbra/agent-status-tiles/pull/8) | Isolated rounded-square tile renderer, magnification, overflow, keyboard interaction, and visual fixtures | 1 completed CLI pass; 1 valid finding fixed | 2 | 94 unit tests, 3 Electron smoke tests, 22 browser fixture tests; final head `febe543d76a4e8d052b85c8e044bf612f471a1d3`; [CI run 34987937805](https://github.com/alxbra/agent-status-tiles/actions/runs/34987937805); [audit comment](https://github.com/alxbra/agent-status-tiles/pull/8#issuecomment-5682973864) | `1f3c523465de0cff9eb2cbafb65a04cb347ce301` |
-| [#9 `build/helper packaging`](https://github.com/alxbra/agent-status-tiles/pull/9) | Unsigned arm64/x64 packaging for the existing native hook helper | 1 completed CLI pass; 1 valid documentation finding fixed | Pending | Implementation complete; review/merge pending. 104 TypeScript unit tests, 11 native helper tests, format/lint/type/build checks, and unsigned packaging; Electron E2E held for the staging sync | Open; no merge SHA |
+| [#9 `build/helper packaging`](https://github.com/alxbra/agent-status-tiles/pull/9) | Unsigned arm64/x64 packaging for the existing native hook helper | 1 completed CLI pass; 1 valid documentation finding fixed | 2 | Implementation and review complete; merge pending. 104 TypeScript unit tests, 11 native helper tests, 25 E2E tests (3 Electron and 22 browser), format/lint/type/build checks, and unsigned arm64/x64 resource validation; CI status pending | Open; no merge SHA |
 
 Foundation review corrections included strict IPC sender/frame validation, same-host renderer navigation checks, supported Node engine ranges, formatter coverage, and recovery after a failed settings-window load. No signing or notarization was claimed; Apple Developer credentials remain a release dependency.
 
@@ -623,6 +624,15 @@ tests, and [CI run 34987937805](https://github.com/alxbra/agent-status-tiles/act
 see the [audit comment](https://github.com/alxbra/agent-status-tiles/pull/8#issuecomment-5682973864).
 Native overlay integration, portal and passthrough behavior, and multi-display
 acceptance remain pending.
+
+Helper packaging PR #9 has completed one CodeRabbit CLI pass with one valid
+documentation finding fixed and two root QA passes (the QA1 naming cleanup and
+QA2 with no further findings). The implementation is verified by 104 unit
+tests, 11 native helper tests, 25 E2E tests (3 Electron and 22 browser), the
+canonical format/lint/type/build checks, and unsigned arm64/x64 resource
+validation. The PR remains open awaiting merge; CI status for the current head
+is pending. Signing/notarization, startup and hook installation, journal replay,
+and live provider integration remain unchecked.
 
 Record corrections made after review and the commit used for final validation.
 
