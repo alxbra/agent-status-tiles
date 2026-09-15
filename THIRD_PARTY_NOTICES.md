@@ -15,3 +15,10 @@ handling patterns from `src/codex/rollout-watcher.ts` in that project. The
 adapted work remains Apache-2.0 licensed; the root `LICENSE` contains the
 license text. Stream Deck integration, process execution, and legacy aliases
 were not copied.
+
+The macOS navigation adapter also adapts the validated Codex task-link and
+`/usr/bin/open` dispatch boundary from
+[`src/platform/macos/task-navigator.ts`](https://github.com/alxbra/codex-status-actions/blob/main/src/platform/macos/task-navigator.ts)
+and [`src/task-link.ts`](https://github.com/alxbra/codex-status-actions/blob/main/src/task-link.ts).
+The adapter is Apache-2.0 licensed; it does not carry over Stream Deck actions,
+shell execution, or unsupported legacy navigation modes.
