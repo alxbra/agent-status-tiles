@@ -61,7 +61,9 @@ export type CodexDiagnosticCode =
   | 'missing-turn-id'
   | 'invalid-timestamp'
   | 'oversized-line'
-  | 'file-reset';
+  | 'file-reset'
+  | 'invalid-cutoff'
+  | 'fixed-boundary-truncated';
 
 export interface CodexDiagnostic {
   code: CodexDiagnosticCode;
@@ -70,10 +72,35 @@ export interface CodexDiagnostic {
   offset?: number;
 }
 
+/** Options for one bounded replay pass. Cutoff keys are cursorKeyForPath(). */
+export interface CodexRolloutReadOptions {
+  firstInstallBaseline?: boolean;
+  sourceStart?: number;
+  /**
+   * Immutable byte EOFs captured by the caller before replay. A reader never
+   * reads bytes at or beyond a cutoff, even when the source appends while it
+   * is being consumed. Omitted keys use the EOF observed when the file opens.
+   */
+  frozenCutoffs?: Readonly<Record<string, number>>;
+}
+
+/** The only rollout metadata exposed to the catalog/qualification boundary. */
+export interface CodexSessionMetaInspection {
+  nativeSessionId: string;
+}
+
 export interface RolloutReadResult {
   events: readonly CodexRolloutEvent[];
   cursors: FileCursorMap;
   diagnostics: readonly CodexDiagnostic[];
   /** Index of the next explicit source when the source/event budget was hit. */
   nextSourceIndex?: number;
+  /**
+   * Source cursor keys whose fixed EOF was reached. This is explicit even if
+   * the boundary ends in an unterminated line, where the byte cursor remains
+   * at the beginning of that line for safe completion after a later append.
+   */
+  exhaustedSourceIds?: readonly string[];
+  /** True when this pass consumed every source through its observed boundary. */
+  complete: boolean;
 }

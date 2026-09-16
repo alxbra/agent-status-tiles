@@ -106,6 +106,11 @@ process.stdin.on('data', (chunk) => {
       continue;
     }
     if (request.method !== 'thread/list') continue;
+    if (mode === 'archived-route') {
+      const data = request.params.archived ? [${JSON.stringify(topLevelThread)}] : [];
+      process.stdout.write(JSON.stringify({ id: request.id, result: { data, nextCursor: null } }) + '\\n');
+      continue;
+    }
     if (mode === 'slow-start' && !initializeResponseSent) process.exit(3);
     if (mode === 'require-source-kinds' && JSON.stringify(request.params.sourceKinds) !== JSON.stringify(expectedSourceKinds)) process.exit(4);
     if (mode === 'require-default-page-size' && request.params.limit !== 20) process.exit(5);
@@ -136,6 +141,8 @@ process.stdin.on('data', (chunk) => {
     const page = request.params.cursor === null ? pages[0] : pages[1];
     const outputPage = { ...page, data: page.data.slice(0, request.params.limit) };
     if (mode === 'unsupported-record') outputPage.data[0] = { ...outputPage.data[0], source: 'ambiguous' };
+    if (mode === 'ambiguous-unknown') outputPage.data[0] = { ...outputPage.data[0], source: 'unknown', originator: null, cwd: null };
+    if (mode === 'ambiguous-desktop') outputPage.data[0] = { ...outputPage.data[0], source: 'vscode', id: null };
     if (mode === 'custom-source') {
       outputPage.data[0] = { ...outputPage.data[0], source: { custom: 'custom-connector' } };
     }
@@ -277,6 +284,19 @@ describe('Codex catalog client', () => {
     await client.stop();
   });
 
+  it('decodes an archived continuation independently of the includeArchived flag', async () => {
+    const diagnostics: CodexCatalogDiagnosticCode[] = [];
+    const client = createClient(await createFakeBinary('archived-route'), diagnostics);
+    const first = await client.listThreads({ includeArchived: true, maxPages: 1 });
+    expect(first.complete).toBe(false);
+    expect(first.nextCursor).toBe('archived:start');
+    const second = await client.listThreads({ cursor: first.nextCursor, maxPages: 1 });
+    expect(second.complete).toBe(true);
+    expect(second.records).toMatchObject([{ isArchived: true }]);
+    expect(diagnostics).toEqual([]);
+    await client.stop();
+  });
+
   it('detects repeated cursors without retrying or looping', async () => {
     const diagnostics: CodexCatalogDiagnosticCode[] = [];
     const client = createClient(await createFakeBinary('repeated-cursor'), diagnostics);
@@ -338,7 +358,7 @@ describe('Codex catalog client', () => {
     await serverError.stop();
   });
 
-  it('reports ambiguous source metadata without guessing a surface', async () => {
+  it('skips malformed records with definitive CLI originator evidence', async () => {
     const diagnostics: CodexCatalogDiagnosticCode[] = [];
     const client = createClient(await createFakeBinary('unsupported-record'), diagnostics);
 
@@ -346,7 +366,28 @@ describe('Codex catalog client', () => {
 
     expect(result.records).toHaveLength(1);
     expect(result.records[0]?.sourceEvidence.source).toBe('subAgentReview');
-    expect(diagnostics).toEqual(['unsupported-record']);
+    expect(diagnostics).toEqual([]);
+    await client.stop();
+  });
+
+  it('fails closed on malformed records that could be Desktop', async () => {
+    const diagnostics: CodexCatalogDiagnosticCode[] = [];
+    const client = createClient(await createFakeBinary('ambiguous-desktop'), diagnostics);
+
+    await expect(client.listThreads({ maxPages: 1 })).rejects.toMatchObject({
+      code: 'coverage-ambiguous',
+    });
+    expect(diagnostics).toEqual(['coverage-ambiguous']);
+    await client.stop();
+  });
+
+  it('fails closed on malformed unknown-source records without unrelated evidence', async () => {
+    const diagnostics: CodexCatalogDiagnosticCode[] = [];
+    const client = createClient(await createFakeBinary('ambiguous-unknown'), diagnostics);
+    await expect(client.listThreads({ maxPages: 1 })).rejects.toMatchObject({
+      code: 'coverage-ambiguous',
+    });
+    expect(diagnostics).toEqual(['coverage-ambiguous']);
     await client.stop();
   });
 
@@ -384,7 +425,7 @@ describe('Codex catalog client', () => {
 
     expect(result.records).toHaveLength(1);
     expect(result.records[0]?.sourceEvidence.source).toBe('subAgentReview');
-    expect(diagnostics).toEqual(['unsupported-record']);
+    expect(diagnostics).toEqual([]);
     await client.stop();
   });
 

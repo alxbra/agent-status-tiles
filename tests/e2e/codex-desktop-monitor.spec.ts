@@ -1,0 +1,226 @@
+import { expect, test } from '@playwright/test';
+import { _electron as electron, type ElectronApplication, type Page } from 'playwright';
+import { appendFile, chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
+import {
+  createInitialMonitoringState,
+  loadSessionState,
+  saveSessionState,
+} from '../../src/main/sessions/persistence';
+
+const projectRoot = process.cwd();
+const mainEntry = resolve(projectRoot, 'out/main/index.js');
+const nativeId = '11111111-1111-7111-8111-111111111111';
+
+function line(timestamp: string, type: string, payload: object): string {
+  return `${JSON.stringify({ timestamp, type, payload })}\n`;
+}
+
+async function overlayWindow(application: ElectronApplication): Promise<Page> {
+  await expect
+    .poll(() =>
+      application.windows().some((window) => window.url().includes('/renderer/overlay.html')),
+    )
+    .toBe(true);
+  const overlay = application
+    .windows()
+    .find((window) => window.url().includes('/renderer/overlay.html'));
+  if (overlay === undefined) throw new Error('Expected native overlay');
+  return overlay;
+}
+
+test('native Desktop baseline hides historical completion then publishes new work', async () => {
+  test.skip(process.platform !== 'darwin', 'native overlay targets macOS');
+  const root = await mkdtemp(join(tmpdir(), 'agent-status-tiles-desktop-e2e-'));
+  const userDataDir = join(root, 'user-data');
+  const sessionsRoot = join(root, 'sessions');
+  const rolloutPath = join(sessionsRoot, 'rollout.jsonl');
+  const binaryPath = join(root, 'codex');
+  const childPidPath = join(root, 'child.pid');
+  let application: ElectronApplication | undefined;
+  try {
+    await mkdir(userDataDir);
+    await mkdir(sessionsRoot);
+    await writeFile(
+      rolloutPath,
+      line('2026-09-15T10:00:00.000Z', 'session_meta', {
+        id: nativeId,
+        source: 'vscode',
+        originator: 'Codex Desktop',
+      }) +
+        line('2026-09-15T10:00:01.000Z', 'event_msg', {
+          type: 'task_started',
+          turn_id: 'historical',
+        }) +
+        line('2026-09-15T10:00:02.000Z', 'event_msg', {
+          type: 'task_complete',
+          turn_id: 'historical',
+          last_agent_message: 'PRIVATE',
+        }),
+    );
+    const catalogRecord = {
+      id: '22222222-2222-7222-8222-222222222222',
+      sessionId: nativeId,
+      createdAt: 1_700_000_000,
+      updatedAt: 1_700_000_100,
+      cwd: '/tmp/example-project',
+      path: rolloutPath,
+      cliVersion: 'test',
+      source: 'vscode',
+      originator: 'Codex Desktop',
+      parentThreadId: null,
+      forkedFromId: null,
+      ephemeral: false,
+      preview: 'PRIVATE_PROMPT',
+    };
+    const fakeBinary = `#!/usr/bin/env node
+const fs = require('node:fs');
+fs.writeFileSync(${JSON.stringify(childPidPath)}, String(process.pid));
+let pending = '';
+process.stdin.setEncoding('utf8');
+process.stdin.on('data', chunk => {
+  pending += chunk;
+  let end;
+  while ((end = pending.indexOf('\\n')) >= 0) {
+    const raw = pending.slice(0, end); pending = pending.slice(end + 1);
+    let request; try { request = JSON.parse(raw); } catch { continue; }
+    if (request.method === 'initialize') {
+      process.stdout.write(JSON.stringify({id:request.id,result:{codexHome:'/tmp/test',platformFamily:'unix',platformOs:'macos',userAgent:'test'}})+'\\n');
+    } else if (request.method === 'thread/list') {
+      const data = request.params.archived ? [] : [${JSON.stringify(catalogRecord)}];
+      process.stdout.write(JSON.stringify({id:request.id,result:{data,nextCursor:null}})+'\\n');
+    }
+  }
+});
+`;
+    await writeFile(binaryPath, fakeBinary);
+    await chmod(binaryPath, 0o700);
+    const monitoring = createInitialMonitoringState();
+    monitoring.partitions['codex:desktop'].enabled = true;
+    await saveSessionState(userDataDir, monitoring);
+    const launchOptions = {
+      args: [`--user-data-dir=${userDataDir}`, mainEntry],
+      cwd: projectRoot,
+      env: {
+        ...process.env,
+        NODE_ENV: 'test',
+        AGENT_STATUS_TILES_TEST_CODEX_BINARY: binaryPath,
+        AGENT_STATUS_TILES_TEST_CODEX_SESSIONS_ROOT: sessionsRoot,
+      },
+    };
+    application = await electron.launch(launchOptions);
+    const overlay = await overlayWindow(application);
+    await expect
+      .poll(
+        async () =>
+          (await loadSessionState(userDataDir)).monitoring.partitions['codex:desktop'].baseline
+            .status,
+      )
+      .toBe('ready');
+    await expect
+      .poll(() =>
+        overlay.evaluate(async () => (await window.agentStatusTilesOverlay.getState()).sessions),
+      )
+      .toEqual([]);
+    const stateText = await readFile(join(userDataDir, 'session-state.json'), 'utf8');
+    expect(stateText).not.toContain('PRIVATE');
+    await appendFile(
+      rolloutPath,
+      line('2026-09-15T10:00:03.000Z', 'event_msg', { type: 'task_started', turn_id: 'live' }),
+    );
+    await expect
+      .poll(() =>
+        overlay.evaluate(async () =>
+          (await window.agentStatusTilesOverlay.getState()).sessions.map(
+            (session) => session.status,
+          ),
+        ),
+      )
+      .toContain('working');
+    await appendFile(
+      rolloutPath,
+      line('2026-09-15T10:00:04.000Z', 'response_item', {
+        type: 'function_call',
+        name: 'request_user_input',
+        call_id: 'call-live',
+        turn_id: 'live',
+        arguments: 'PRIVATE_INPUT_REQUEST',
+      }),
+    );
+    await expect
+      .poll(() =>
+        overlay.evaluate(async () =>
+          (await window.agentStatusTilesOverlay.getState()).sessions.map(
+            (session) => session.status,
+          ),
+        ),
+      )
+      .toContain('needs-input');
+    await appendFile(
+      rolloutPath,
+      line('2026-09-15T10:00:05.000Z', 'response_item', {
+        type: 'function_call_output',
+        call_id: 'call-live',
+        turn_id: 'live',
+        output: 'PRIVATE_INPUT_RESPONSE',
+      }),
+    );
+    await expect
+      .poll(() =>
+        overlay.evaluate(async () =>
+          (await window.agentStatusTilesOverlay.getState()).sessions.map(
+            (session) => session.status,
+          ),
+        ),
+      )
+      .toContain('working');
+    await appendFile(
+      rolloutPath,
+      line('2026-09-15T10:00:06.000Z', 'event_msg', {
+        type: 'task_complete',
+        turn_id: 'live',
+        last_agent_message: 'PRIVATE_COMPLETION',
+      }),
+    );
+    await expect
+      .poll(() =>
+        overlay.evaluate(async () =>
+          (await window.agentStatusTilesOverlay.getState()).sessions.map(
+            (session) => session.status,
+          ),
+        ),
+      )
+      .toContain('unread');
+    expect(await readFile(join(userDataDir, 'session-state.json'), 'utf8')).not.toContain(
+      'PRIVATE',
+    );
+    await application.close();
+    application = undefined;
+    const pid = Number(await readFile(childPidPath, 'utf8'));
+    await expect
+      .poll(() => {
+        try {
+          process.kill(pid, 0);
+          return true;
+        } catch {
+          return false;
+        }
+      })
+      .toBe(false);
+    application = await electron.launch(launchOptions);
+    const restartedOverlay = await overlayWindow(application);
+    await expect
+      .poll(() =>
+        restartedOverlay.evaluate(async () =>
+          (await window.agentStatusTilesOverlay.getState()).sessions.map(
+            (session) => session.status,
+          ),
+        ),
+      )
+      .toContain('unread');
+  } finally {
+    await application?.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
