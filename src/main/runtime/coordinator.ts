@@ -302,11 +302,12 @@ function sanitizeSources(
 
 function sourceCutoffs(
   sources: readonly RuntimeMonitorSource[],
-  requireExplicitEndOffsets: boolean,
+  baseline: boolean,
+  newlyObservedSourceIds: ReadonlySet<string>,
 ): Readonly<Record<string, number>> {
   const cutoffs: Record<string, number> = {};
   for (const source of sources) {
-    if (requireExplicitEndOffsets) {
+    if (baseline || newlyObservedSourceIds.has(source.id)) {
       if (source.endOffset === undefined) throw new Error('baseline-cutoff-missing');
       cutoffs[source.id] = source.endOffset;
     }
@@ -1093,6 +1094,22 @@ export function createRuntimeCoordinator(options: RuntimeCoordinatorOptions): Ru
       let cursors: SurfaceCursorMap = Object.fromEntries(
         Object.entries(partition.cursors).filter(([sourceId]) => currentSourceIds.has(sourceId)),
       );
+      // A source discovered after the initial baseline must still replay only
+      // to its captured EOF as historical work. This prevents old completion
+      // events becoming unread when uncertain catalog metadata later resolves.
+      const newlyObservedSourceIds = new Set(
+        baseline
+          ? []
+          : runtime.sources
+              .filter((source) => cursors[source.id] === undefined)
+              .map((source) => source.id),
+      );
+      const newlyObservedSessionIds = new Set(
+        runtime.sources
+          .filter((source) => newlyObservedSourceIds.has(source.id))
+          .map((source) => makeSessionId(provider, source.nativeSessionId)),
+      );
+      const frozenCutoffs = sourceCutoffs(runtime.sources, baseline, newlyObservedSourceIds);
       const events: (SessionEvent | RuntimeEventEnvelope)[] = [];
       const exhaustedSourceIds = new Set<string>();
       let readPasses = 0;
@@ -1106,7 +1123,7 @@ export function createRuntimeCoordinator(options: RuntimeCoordinatorOptions): Ru
           sources: runtime.sources,
           cursors,
           sessions: continuationState.sessions,
-          frozenCutoffs: sourceCutoffs(runtime.sources, baseline),
+          frozenCutoffs,
           baseline,
           ...(sourceStart === 0 ? {} : { sourceStart }),
         });
@@ -1145,13 +1162,22 @@ export function createRuntimeCoordinator(options: RuntimeCoordinatorOptions): Ru
         }
         for (const value of read.events) {
           const event = normalizeEnvelope(value, baseline, events.length);
-          if (event === undefined) continue;
+          if (event === undefined) {
+            events.push(value);
+            continue;
+          }
           if (safeEventForSurface(event.event, runtime.key)) {
             validateEventSource(event, runtime.sources);
             continuationState = reduceSessionState(continuationState, event.event);
           }
+          const isNewSourceHistory =
+            'sessionId' in event.event && newlyObservedSessionIds.has(event.event.sessionId);
+          events.push({
+            event: event.event,
+            historical: event.historical || isNewSourceHistory,
+            ...(event.sourceId === undefined ? {} : { sourceId: event.sourceId }),
+          });
         }
-        events.push(...read.events);
         if (read.nextSourceIndex === undefined) {
           hasMore = false;
           finalReadComplete = read.complete;
