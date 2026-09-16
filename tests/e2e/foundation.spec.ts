@@ -201,7 +201,7 @@ test('wires production settings through preload, overlay state, and restart pers
     await expect(page.getByRole('combobox', { name: 'Display' })).toContainText('Primary');
     await expect(page.getByRole('button', { name: 'Connect' })).toHaveCount(3);
     await expect(page.getByRole('button', { name: 'Connect' }).first()).toBeEnabled();
-    await expect(page.getByRole('button', { name: 'Connect' }).nth(1)).toBeDisabled();
+    await expect(page.getByRole('button', { name: 'Connect' }).nth(1)).toBeEnabled();
     await expect(page.getByRole('button', { name: 'Connect' }).nth(2)).toBeDisabled();
     await expect(page.getByRole('button', { name: 'Open Advanced settings' })).toBeDisabled();
     await expect(page.getByRole('switch', { name: 'Reduce motion' })).not.toBeChecked();

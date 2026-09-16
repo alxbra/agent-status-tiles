@@ -74,11 +74,15 @@ export class CodexCatalogError extends Error {
   }
 }
 
+export type CodexCatalogTargetSurface = 'desktop' | 'cli';
+
 export interface CodexCatalogClientOptions {
   /** Absolute path to the trusted Codex executable supplied by the caller. */
   binaryPath: string;
   /** Optional caller-selected Codex home; this client never reads auth files. */
   codexHome?: string;
+  /** Surface whose malformed records must remain coverage-ambiguous. */
+  targetSurface?: CodexCatalogTargetSurface;
   requestTimeoutMs?: number;
   onDiagnostic?: (diagnostic: CodexCatalogDiagnostic) => void;
 }
@@ -357,29 +361,63 @@ function parseListPage(value: unknown): ListPage | undefined {
   };
 }
 
+function hasConfidentSubagentEvidence(value: Record<string, unknown>): boolean {
+  return (
+    value.ephemeral === true ||
+    safeString(value.parentThreadId, MAX_ID_BYTES) ||
+    safeString(value.forkedFromId, MAX_ID_BYTES) ||
+    (typeof value.threadSource === 'string' &&
+      SUBAGENT_THREAD_SOURCE_KINDS.has(value.threadSource)) ||
+    (isRecord(value.source) &&
+      hasOwn(value.source, 'subAgent') &&
+      !(hasOwn(value.source, 'custom') && hasOwn(value.source, 'subAgent')))
+  );
+}
+
 /**
  * Inspect source evidence before validating any other metadata. A known
  * non-Desktop source must not turn malformed private fields into a coverage
  * warning. Only plausible Desktop records are eligible for that warning.
  */
-function isConfidentlyUnrelatedSource(value: unknown): boolean {
+function isConfidentlyUnrelatedDesktopSource(value: unknown): boolean {
   if (!isRecord(value)) return false;
   if (value.originator === 'Codex Desktop' && value.source !== 'vscode') return false;
   if (value.originator === 'codex_cli_rs' && value.source !== 'vscode') return true;
-  if (value.ephemeral === true) return true;
-  if (
-    safeString(value.parentThreadId, MAX_ID_BYTES) ||
-    safeString(value.forkedFromId, MAX_ID_BYTES) ||
-    (typeof value.threadSource === 'string' && SUBAGENT_THREAD_SOURCE_KINDS.has(value.threadSource))
-  ) {
-    return true;
-  }
+  if (hasConfidentSubagentEvidence(value)) return true;
   const source = value.source;
   if (typeof source === 'string') {
     return source !== 'vscode' && source !== 'unknown' && DIRECT_SOURCE_KINDS.has(source);
   }
   if (!isRecord(source)) return false;
   return hasOwn(source, 'subAgent') && !(hasOwn(source, 'custom') && hasOwn(source, 'subAgent'));
+}
+
+/**
+ * Inspect source evidence for the CLI monitor before validating any other
+ * metadata. CLI-originated records remain plausible even when their payload
+ * is malformed; only clear Desktop or subagent evidence is unrelated.
+ */
+function isConfidentlyUnrelatedCliSource(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  if (hasConfidentSubagentEvidence(value)) return true;
+  if (value.originator === 'codex_cli_rs') return false;
+  if (value.originator === 'Codex Desktop') return value.source !== 'cli';
+
+  const source = value.source;
+  if (typeof source === 'string') {
+    return source !== 'cli' && source !== 'unknown' && DIRECT_SOURCE_KINDS.has(source);
+  }
+  if (!isRecord(source)) return false;
+  return hasOwn(source, 'subAgent') && !(hasOwn(source, 'custom') && hasOwn(source, 'subAgent'));
+}
+
+function isConfidentlyUnrelatedSource(
+  value: unknown,
+  targetSurface: CodexCatalogTargetSurface,
+): boolean {
+  return targetSurface === 'desktop'
+    ? isConfidentlyUnrelatedDesktopSource(value)
+    : isConfidentlyUnrelatedCliSource(value);
 }
 
 function validOption(value: number, minimum: number, maximum: number): boolean {
@@ -406,8 +444,14 @@ export class CodexCatalogClient {
   private readonly pending = new Map<number, PendingRequest>();
   private lineBuffer = Buffer.alloc(0);
   private isDiscardingOversizedLine = false;
+  private readonly targetSurface: CodexCatalogTargetSurface;
 
   constructor(private readonly options: CodexCatalogClientOptions) {
+    const targetSurface = options.targetSurface ?? 'desktop';
+    if (targetSurface !== 'desktop' && targetSurface !== 'cli') {
+      throw new CodexCatalogError('invalid-options');
+    }
+    this.targetSurface = targetSurface;
     if (!isAbsolute(options.binaryPath) || !safeString(options.binaryPath, MAX_PATH_BYTES)) {
       throw new CodexCatalogError('invalid-options');
     }
@@ -543,7 +587,7 @@ export class CodexCatalogClient {
       for (const value of page.data) {
         const record = projectThread(value, archivedRoute);
         if (record === undefined) {
-          if (isConfidentlyUnrelatedSource(value)) continue;
+          if (isConfidentlyUnrelatedSource(value, this.targetSurface)) continue;
           this.report('coverage-ambiguous');
           throw new CodexCatalogError('coverage-ambiguous');
         }

@@ -25,6 +25,7 @@ import {
   CodexDesktopMonitor,
   type CodexDesktopMonitorOptions,
 } from './providers/codex/desktop-monitor';
+import { CodexCliMonitor, type CodexCliMonitorOptions } from './providers/codex/cli-monitor';
 
 const hasSingleInstanceLock = app.requestSingleInstanceLock();
 const TEST_KEYBOARD_ENTRY_HOOK = Symbol.for('agent-status-tiles.test.keyboard-entry');
@@ -69,6 +70,17 @@ function desktopMonitorOptions(): CodexDesktopMonitorOptions {
   };
 }
 
+function cliMonitorOptions(): CodexCliMonitorOptions {
+  if (app.isPackaged || process.env.NODE_ENV !== 'test') return {};
+  const binaryPath = process.env.AGENT_STATUS_TILES_TEST_CODEX_CLI_BINARY;
+  const sessionsRoot = process.env.AGENT_STATUS_TILES_TEST_CODEX_SESSIONS_ROOT;
+  if (!binaryPath || !sessionsRoot) return {};
+  return {
+    sessionsRoot,
+    resolveBinary: async () => ({ ok: true, binaryPath }),
+  };
+}
+
 function isQualifyingSession(session: SessionSnapshot): boolean {
   return session.isTopLevel && !session.isArchived && session.status !== 'idle';
 }
@@ -106,8 +118,8 @@ function connectionState(
   const enabled = coordinator.getMonitoringState().partitions[key].enabled;
   if (!enabled) {
     return {
-      status: connection === 'codexDesktop' ? 'disconnected' : 'unavailable',
-      canConnect: connection === 'codexDesktop',
+      status: connection === 'claudeCode' ? 'unavailable' : 'disconnected',
+      canConnect: connection !== 'claudeCode',
       canDisconnect: false,
     };
   }
@@ -130,13 +142,23 @@ function getSettingsState(): SettingsState {
       ? { enabled: false }
       : evaluateLoginItemSettings(loginSettings, requestedLoginItemState);
   if (loginItemState.error === undefined) requestedLoginItemState = undefined;
-  const desktopHealth = runtimeCoordinator?.getHealth()['codex:desktop'];
-  const desktopConnectionIssue =
-    runtimeCoordinator?.getMonitoringState().partitions['codex:desktop'].enabled &&
-    (desktopHealth?.status === 'error' || desktopHealth?.status === 'unavailable')
-      ? 'Codex Desktop connection or coverage is incomplete. Check the installation, then disconnect and reconnect.'
-      : undefined;
-  const settingsError = [loginItemState.error, monitoringCoverageWarning, desktopConnectionIssue]
+  const codexConnectionIssues = (['codexDesktop', 'codexCli'] as const).flatMap((connection) => {
+    const coordinator = runtimeCoordinator;
+    if (coordinator === null) return [];
+    const [provider, surface] = CONNECTION_TARGETS[connection];
+    const key = `${provider}:${surface}` as const;
+    const health = coordinator.getHealth()[key].status;
+    if (
+      !coordinator.getMonitoringState().partitions[key].enabled ||
+      (health !== 'error' && health !== 'unavailable')
+    )
+      return [];
+    const label = connection === 'codexDesktop' ? 'Codex Desktop' : 'Codex CLI';
+    return [
+      `${label} connection or coverage is incomplete. Check the installation, then disconnect and reconnect.`,
+    ];
+  });
+  const settingsError = [loginItemState.error, monitoringCoverageWarning, ...codexConnectionIssues]
     .filter((message): message is string => message !== undefined)
     .join(' ');
   return {
@@ -256,7 +278,10 @@ if (!hasSingleInstanceLock) {
     const preserveFixtureOverlay = !app.isPackaged && overlayState.sessions.length > 0;
     runtimeCoordinator = createRuntimeCoordinator({
       appDataPath: app.getPath('userData'),
-      monitors: [new CodexDesktopMonitor(desktopMonitorOptions())],
+      monitors: [
+        new CodexDesktopMonitor(desktopMonitorOptions()),
+        new CodexCliMonitor(cliMonitorOptions()),
+      ],
       onOverlayState: (state) => {
         if (preserveFixtureOverlay && state.sessions.length === 0) return;
         overlayState = { ...state, reducedMotion: desktopPreferences?.get().reduceMotion ?? false };
@@ -327,18 +352,19 @@ if (!hasSingleInstanceLock) {
         return state;
       },
       connectSurface: async (connection) => {
-        if (connection !== 'codexDesktop') throw new Error('Connection is not available');
+        if (connection === 'claudeCode') throw new Error('Connection is not available');
         await runtimeStartPromise;
         if (pendingConnectionActions.has(connection))
           throw new Error('Connection action is pending');
         const coordinator = runtimeCoordinator;
         if (coordinator === null) throw new Error('Monitoring is unavailable');
-        if (coordinator.getMonitoringState().partitions['codex:desktop'].enabled) {
+        const [provider, surface] = CONNECTION_TARGETS[connection];
+        if (coordinator.getMonitoringState().partitions[`${provider}:${surface}`].enabled) {
           throw new Error('Connection is already enabled');
         }
         pendingConnectionActions.add(connection);
         try {
-          await coordinator.connect('codex', 'desktop');
+          await coordinator.connect(provider, surface);
           const state = getSettingsState();
           publishSettingsState(getSettingsWindow(), state);
           return state;
