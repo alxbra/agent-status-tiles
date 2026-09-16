@@ -106,6 +106,11 @@ process.stdin.on('data', (chunk) => {
       continue;
     }
     if (request.method !== 'thread/list') continue;
+    if (mode === 'archived-route') {
+      const data = request.params.archived ? [${JSON.stringify(topLevelThread)}] : [];
+      process.stdout.write(JSON.stringify({ id: request.id, result: { data, nextCursor: null } }) + '\\n');
+      continue;
+    }
     if (mode === 'slow-start' && !initializeResponseSent) process.exit(3);
     if (mode === 'require-source-kinds' && JSON.stringify(request.params.sourceKinds) !== JSON.stringify(expectedSourceKinds)) process.exit(4);
     if (mode === 'require-default-page-size' && request.params.limit !== 20) process.exit(5);
@@ -275,6 +280,19 @@ describe('Codex catalog client', () => {
     expect(result.records).toHaveLength(1);
     expect(result.pagesRead).toBe(1);
     expect(result.nextCursor).toBe('page-2');
+    expect(diagnostics).toEqual([]);
+    await client.stop();
+  });
+
+  it('decodes an archived continuation independently of the includeArchived flag', async () => {
+    const diagnostics: CodexCatalogDiagnosticCode[] = [];
+    const client = createClient(await createFakeBinary('archived-route'), diagnostics);
+    const first = await client.listThreads({ includeArchived: true, maxPages: 1 });
+    expect(first.complete).toBe(false);
+    expect(first.nextCursor).toBe('archived:start');
+    const second = await client.listThreads({ cursor: first.nextCursor, maxPages: 1 });
+    expect(second.complete).toBe(true);
+    expect(second.records).toMatchObject([{ isArchived: true }]);
     expect(diagnostics).toEqual([]);
     await client.stop();
   });

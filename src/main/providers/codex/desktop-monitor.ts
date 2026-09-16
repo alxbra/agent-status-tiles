@@ -9,7 +9,7 @@ import type {
   RuntimeReadResult,
 } from '../../runtime/coordinator';
 import { resolveBundledCodexBinary } from './bundled-binary-resolver';
-import { CodexCatalogClient, type CodexListThreadsResult } from './catalog-client';
+import { CodexCatalogClient, type CodexCatalogRecord } from './catalog-client';
 import { qualifyCodexDesktopCatalog } from './catalog-qualification';
 import { CodexRolloutReader, cursorKeyForPath } from './rollout-reader';
 import type { CodexRolloutSource } from './events';
@@ -32,6 +32,9 @@ interface DiscoveredFile {
   path: string;
   nativeSessionId: string;
 }
+
+const MAX_CATALOG_CONTINUATIONS = 16;
+const MAX_CATALOG_RECORDS = 1_024;
 
 function runtimeSourceId(cursorKey: string): string {
   if (!cursorKey.startsWith('codex:')) throw new Error('desktop-invalid-cursor-key');
@@ -91,9 +94,33 @@ export class CodexDesktopMonitor implements ProviderSurfaceMonitor {
 
   async discover(): Promise<RuntimeDiscoveryResult> {
     if (!this.started || this.catalog === undefined) throw new Error('desktop-not-started');
-    const list: CodexListThreadsResult = await this.catalog.listThreads({ includeArchived: true });
-    if (!list.complete) throw new Error('desktop-catalog-incomplete');
-    const qualified = qualifyCodexDesktopCatalog(list.records);
+    const records: CodexCatalogRecord[] = [];
+    const seenCursors = new Set<string>();
+    let cursor: string | null = null;
+    let complete = false;
+    for (let iteration = 0; iteration < MAX_CATALOG_CONTINUATIONS; iteration += 1) {
+      const remaining = MAX_CATALOG_RECORDS - records.length;
+      if (remaining < 1) throw new Error('desktop-catalog-incomplete');
+      const page = await this.catalog.listThreads({
+        includeArchived: true,
+        cursor,
+        pageSize: 100,
+        maxPages: 16,
+        maxRecords: remaining,
+      });
+      records.push(...page.records);
+      if (page.complete) {
+        complete = true;
+        break;
+      }
+      if (page.nextCursor === null || seenCursors.has(page.nextCursor)) {
+        throw new Error('desktop-catalog-incomplete');
+      }
+      seenCursors.add(page.nextCursor);
+      cursor = page.nextCursor;
+    }
+    if (!complete) throw new Error('desktop-catalog-incomplete');
+    const qualified = qualifyCodexDesktopCatalog(records);
     if (qualified.issues.length > 0) throw new Error('desktop-catalog-ambiguous');
 
     const files = new Map<string, DiscoveredFile>();
@@ -178,7 +205,11 @@ export class CodexDesktopMonitor implements ProviderSurfaceMonitor {
       sourceStart: request.sourceStart,
       frozenCutoffs: readerCutoffs,
     });
-    if (result.diagnostics.length > 0) throw new Error('desktop-rollout-coverage-issue');
+    // An inode replacement is replayed as historical by the reader and may
+    // advance to a new safe cursor. Other diagnostics mean coverage is unknown.
+    if (result.diagnostics.some((diagnostic) => diagnostic.code !== 'file-reset')) {
+      throw new Error('desktop-rollout-coverage-issue');
+    }
     return {
       events: result.events.map((entry) => ({
         event: entry.event,

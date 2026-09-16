@@ -4,6 +4,7 @@ import { join, relative, isAbsolute } from 'node:path';
 
 export const CODEX_DESKTOP_BUNDLE_PATH = '/Applications/ChatGPT.app';
 export const CODEX_DESKTOP_BUNDLE_ID = 'com.openai.codex';
+export const CODEX_DESKTOP_TEAM_ID = '2DC432GLL2';
 export const CODEX_DESKTOP_BINARY_RELATIVE_PATH = 'Contents/Resources/codex';
 
 const PLUTIL_PATH = '/usr/bin/plutil';
@@ -115,7 +116,14 @@ async function verifyCodeSignatureDefault(bundlePath: string): Promise<boolean> 
   // treated as unavailable only when the platform can actually verify it.
   if (process.platform !== 'darwin') return true;
   try {
-    await runFixedCommand(CODESIGN_PATH, ['--verify', '--deep', '--strict', bundlePath]);
+    await runFixedCommand(CODESIGN_PATH, [
+      '--verify',
+      '--deep',
+      '--strict',
+      '--requirement',
+      `identifier "${CODEX_DESKTOP_BUNDLE_ID}" and anchor apple generic and certificate leaf[subject.OU] = "${CODEX_DESKTOP_TEAM_ID}"`,
+      bundlePath,
+    ]);
     return true;
   } catch {
     return false;

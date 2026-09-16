@@ -512,7 +512,10 @@ format/lint/type/build checks, and green [CI run 34986281698](https://github.com
 It completed one CodeRabbit pass with two valid findings fixed and two root QA
 passes; see the [audit comment](https://github.com/alxbra/agent-status-tiles/pull/7#issuecomment-5682690186).
 The live catalog-to-reader qualifier, Desktop/CLI surface mapping, and provider
-wiring remain pending.
+wiring are being delivered in sequential live-monitoring slices. PR #22 adds
+strict Codex Desktop qualification, a signed bundled CLI resolver, fixed-EOF
+rollout replay, and native coordinator wiring. Its Settings Connect control
+and independent CLI monitoring remain in the following slices.
 
 - [x] Implement the bounded incremental Codex rollout reader (merged PR #6).
 - [x] Implement the bounded read-only Codex app-server catalog client (merged PR #7; formal QA1 and QA2 complete).
@@ -644,6 +647,7 @@ Maintain this table in the plan:
 | [#18 `feat: recover native overlay lifecycle`](https://github.com/alxbra/agent-status-tiles/pull/18) | Display/resume/activation recovery, close/crash/load-failure replacement, bounded renderer handshakes, and listener cleanup | 1 completed CLI pass; 0 findings | 2 | 191 unit tests, 46 E2E tests, format/lint/type/build checks; [CI run 35031233902](https://github.com/alxbra/agent-status-tiles/actions/runs/35031233902); [audit comment](https://github.com/alxbra/agent-status-tiles/pull/18#issuecomment-5688980090) | `9dc43416eb6e060ded084977717ae35a7bb2ca35` |
 | [#20 `feat: partition monitoring state by provider surface`](https://github.com/alxbra/agent-status-tiles/pull/20) | Live Codex slice 1: schema v2 surface partitions, v1 record migration, independent atomic Connect/Disconnect | 1 completed CLI pass; 1 valid test finding fixed | 2 | 201 unit tests, 46 E2E tests, format/lint/type/build checks; [final CI run 35087785863](https://github.com/alxbra/agent-status-tiles/actions/runs/35087785863); [audit comment](https://github.com/alxbra/agent-status-tiles/pull/20#issuecomment-5696368746) | `fa82f06a57cf14f3a08684acc385fb534635c734` |
 | [#21 `feat: coordinate per-surface monitoring runtime`](https://github.com/alxbra/agent-status-tiles/pull/21) | Live Codex slice 2: isolated runtime baselines, bounded overlay projection, retry/lifecycle wiring | 1 completed CLI pass after 1 rate-limited attempt; 2 valid findings fixed | 2 | 216 unit tests, 47 E2E tests, format/lint/type/build checks; [final CI run 35092198563](https://github.com/alxbra/agent-status-tiles/actions/runs/35092198563); [audit comment](https://github.com/alxbra/agent-status-tiles/pull/21#issuecomment-5696919140) | `cca2adb0a66b8290c3fabe2741bd55733d727044` |
+| [#22 `feat: monitor Codex Desktop sessions`](https://github.com/alxbra/agent-status-tiles/pull/22) | Live Codex slice 3: signed bundled CLI resolution, strict Desktop catalog/rollout matching, fixed-cutoff replay, native coordinator wiring | 1 completed CLI pass; 2 valid pagination findings fixed | 2 | 235 unit tests, 48 E2E tests (including native Desktop baseline/lifecycle/restart/child cleanup), format/lint/type/build checks; final CI and audit comment pending | Pending squash merge; record verified SHA in the next staging-based PR. |
 
 Foundation review corrections included strict IPC sender/frame validation, same-host renderer navigation checks, supported Node engine ranges, formatter coverage, and recovery after a failed settings-window load. No signing or notarization was claimed; Apple Developer credentials remain a release dependency.
 

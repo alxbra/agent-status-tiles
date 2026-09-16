@@ -494,7 +494,7 @@ export class CodexCatalogClient {
       this.report('invalid-options');
       throw new CodexCatalogError('invalid-options');
     }
-    if (includeArchived && cursor?.startsWith(ARCHIVED_CURSOR_PREFIX)) {
+    if (cursor?.startsWith(ARCHIVED_CURSOR_PREFIX)) {
       archivedRoute = true;
       const encodedCursor = cursor.slice(ARCHIVED_CURSOR_PREFIX.length);
       cursor = encodedCursor === ARCHIVED_START_CURSOR ? null : encodedCursor;
