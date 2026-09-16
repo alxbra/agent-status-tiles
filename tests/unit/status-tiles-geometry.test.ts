@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import type { SessionSnapshot } from '../../src/shared/session';
 import {
   DEFAULT_STRIP_WIDTH,
+  dockBackdropBounds,
   layoutTiles,
   minimumHeightForSlots,
   normalizeStripWidth,
@@ -68,6 +69,50 @@ describe('status tile geometry', () => {
     expect(tile.hitRegion.width).toBe(TILE_HIT_SIZE);
     expect(tile.hitRegion.height).toBe(TILE_HIT_SIZE);
     expectRegionsInside(layout, 480);
+  });
+
+  it('bounds the decorative dock behind visible targets without changing their hit regions', () => {
+    const empty = layoutTiles([], { height: 480 });
+    expect(dockBackdropBounds(empty.tiles, DEFAULT_STRIP_WIDTH, 480)).toBeNull();
+
+    const collapsed = layoutTiles(sessions(1), { height: 480 });
+    const originalHitRegions = collapsed.hitRegions.map((region) => ({ ...region }));
+    const collapsedBackdrop = dockBackdropBounds(collapsed.tiles, DEFAULT_STRIP_WIDTH, 480);
+    expect(collapsedBackdrop).toEqual({ x: 28, y: 220, width: 56, height: 40 });
+    expect(collapsed.hitRegions).toEqual(originalHitRegions);
+
+    const expanded = layoutTiles(sessions(1), {
+      height: 480,
+      pointer: { x: DEFAULT_STRIP_WIDTH - 1, y: 240 },
+    });
+    expect(dockBackdropBounds(expanded.tiles, DEFAULT_STRIP_WIDTH, 480)).toEqual({
+      x: 28,
+      y: 212,
+      width: 56,
+      height: 56,
+    });
+    expect(expanded.hitRegions[0]).toMatchObject({ width: 40, height: 40 });
+  });
+
+  it('keeps the dock backdrop inside a short work area while covering every target', () => {
+    const height = minimumHeightForSlots(5);
+    for (let pointerY = 0; pointerY <= Math.ceil(height); pointerY += 1) {
+      const layout = layoutTiles(sessions(5), {
+        height,
+        pointer: { x: DEFAULT_STRIP_WIDTH - 1, y: pointerY },
+      });
+      const backdrop = dockBackdropBounds(layout.tiles, DEFAULT_STRIP_WIDTH, height)!;
+      expect(backdrop.x).toBeGreaterThanOrEqual(0);
+      expect(backdrop.x + backdrop.width).toBeLessThanOrEqual(DEFAULT_STRIP_WIDTH);
+      expect(backdrop.y).toBeGreaterThanOrEqual(0);
+      expect(backdrop.y + backdrop.height).toBeLessThanOrEqual(height);
+      for (const target of layout.hitRegions) {
+        expect(target.x).toBeGreaterThanOrEqual(backdrop.x);
+        expect(target.x + target.width).toBeLessThanOrEqual(backdrop.x + backdrop.width);
+        expect(target.y).toBeGreaterThanOrEqual(backdrop.y);
+        expect(target.y + target.height).toBeLessThanOrEqual(backdrop.y + backdrop.height);
+      }
+    }
   });
 
   it('reaches 40px at the stable hovered slot and keeps surfaces separated', () => {

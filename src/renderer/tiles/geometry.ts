@@ -13,6 +13,7 @@ export const MAX_VISIBLE_TILES = 12;
 export const DEFAULT_STRIP_WIDTH = 88;
 export const DEFAULT_STRIP_HEIGHT = 480;
 export const TILE_CONTENT_SIZE = 38;
+export const DOCK_BACKDROP_PADDING = 8;
 
 export interface TilePoint {
   x: number;
@@ -57,6 +58,13 @@ export interface TileLayout {
   maxStart: number;
   hasPrevious: boolean;
   hasNext: boolean;
+}
+
+export interface DockBackdropBounds {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
 }
 
 function emptyLayout(): TileLayout {
@@ -284,6 +292,37 @@ export function sessionHitRegions(
   height = DEFAULT_STRIP_HEIGHT,
 ): readonly TileHitRegion[] {
   return layoutTiles(sessions, { height }).hitRegions;
+}
+
+/** A non-interactive frosted panel around the visible tile targets only. */
+export function dockBackdropBounds(
+  tiles: readonly TileGeometry[],
+  stripWidth: number,
+  stripHeight: number,
+): DockBackdropBounds | null {
+  if (tiles.length === 0) return null;
+  const height = Math.max(0, finiteOr(stripHeight, DEFAULT_STRIP_HEIGHT));
+  const y = clamp(
+    Math.min(...tiles.map((tile) => tile.hitRegion.y)) - DOCK_BACKDROP_PADDING,
+    0,
+    height,
+  );
+  const bottom = clamp(
+    Math.max(...tiles.map((tile) => tile.hitRegion.y + tile.hitRegion.height)) +
+      DOCK_BACKDROP_PADDING,
+    y,
+    height,
+  );
+  return {
+    x:
+      normalizeStripWidth(stripWidth) -
+      RIGHT_EDGE_INSET -
+      EXPANDED_TILE_SIZE -
+      DOCK_BACKDROP_PADDING,
+    y,
+    width: EXPANDED_TILE_SIZE + DOCK_BACKDROP_PADDING * 2,
+    height: bottom - y,
+  };
 }
 
 export function surfacesHaveMinimumGap(tiles: readonly TileGeometry[]): boolean {

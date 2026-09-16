@@ -590,8 +590,13 @@ for (const testSessionCount of [0, 1, 12, 30]) {
       await expect(tiles).toHaveCount(Math.min(testSessionCount, 12));
       if (testSessionCount === 0) {
         await expect(page.locator('.status-tiles')).toHaveCount(0);
+        await expect(page.locator('.status-tiles__backdrop')).toHaveCount(0);
       } else {
         await expect(page.getByRole('listbox', { name: 'Agent status sessions' })).toBeVisible();
+        const backdrop = page.locator('.status-tiles__backdrop');
+        await expect(backdrop).toHaveCount(1);
+        await expect(backdrop).toHaveCSS('pointer-events', 'none');
+        await expect(backdrop).toHaveCSS('backdrop-filter', /blur\(20px\)/u);
         await expect(page.getByRole('option').first()).toHaveAttribute(
           'aria-label',
           /Test session 1/u,

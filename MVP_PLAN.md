@@ -85,7 +85,7 @@ Idle exists in the state model but is not normally displayed. Unavailable status
 - Tile column sits **12 CSS pixels from the display’s usable right edge**.
 - Vertically center the strip within the display work area.
 - Collapsed tiles contain color only: no logos, numbers, text, borders, or status glyphs.
-- No visible background container in the collapsed state.
+- A non-interactive, translucent macOS-style blurred backdrop with rounded corners sits behind the visible tile cohort. It must not change tile geometry or expand native hit regions; the user explicitly authorized this after PR #25.
 - No permanently visible title, toolbar, legend, or settings button.
 - Each tile has a **24 × 24 pixel hit target**.
 - Transparent space outside interactive targets passes mouse events to applications underneath.
@@ -105,6 +105,7 @@ Use smooth, distance-based magnification:
 - Use stable, unmagnified slot coordinates to calculate pointer influence.
 - Animate expansion and collapse over approximately **160 ms**.
 - Keep the right edge anchored throughout animation.
+- The backdrop follows the visible tile cohort with neutral light/dark material, without labels or controls. Its empty and corner areas remain click-through.
 
 An expanded tile shows:
 
@@ -185,7 +186,7 @@ Rules:
 
 - One concise label per setting.
 - No introductory copy, cards repeating section titles, decorative badges, descriptions, or sublines.
-- Show one actionable error sentence only when a problem exists.
+- Show one actionable error sentence only when a connection or setting actually fails. Do not show a persistent partial-coverage warning for an otherwise healthy Codex connection.
 - Use brief confirmation text when installing or removing hooks; explain the actual configuration change.
 - Keep diagnostic detail behind an explicit action.
 - Saving settings is immediate; no redundant Save button.
@@ -651,7 +652,7 @@ Maintain this table in the plan:
 | [#22 `feat: monitor Codex Desktop sessions`](https://github.com/alxbra/agent-status-tiles/pull/22) | Live Codex slice 3: signed bundled CLI resolution, strict Desktop catalog/rollout matching, fixed-cutoff replay, native coordinator wiring | 1 completed CLI pass; 2 valid pagination findings fixed | 2 | 235 unit tests, 48 E2E tests (including native Desktop baseline/lifecycle/restart/child cleanup), format/lint/type/build checks; [final CI run 35095217152](https://github.com/alxbra/agent-status-tiles/actions/runs/35095217152); [audit comment](https://github.com/alxbra/agent-status-tiles/pull/22#issuecomment-5697308237) | `31289719c43887d6037dd3730d30fb730956736b` |
 | [#23 `feat: connect Codex Desktop from Settings`](https://github.com/alxbra/agent-status-tiles/pull/23) | Live Codex slice 4: separate Desktop/CLI/Claude rows, validated native connection IPC, confirmed surface-local history removal, lost-reader coverage, and local E2E focus safeguard | 1 completed CLI pass; 2 valid wording findings fixed | 2 (QA1 fixed actionable-error precedence and optional Disconnect handler; QA2 no findings) | 237 unit tests, 33 headless browser E2E pass with 18 focus-capable native tests intentionally skipped locally, format/lint/type/build checks; [final macOS CI run 35104190642](https://github.com/alxbra/agent-status-tiles/actions/runs/35104190642) passed all 51 E2E tests including native Electron; [audit comment](https://github.com/alxbra/agent-status-tiles/pull/23#issuecomment-5698534181) | `ed236ec2b731f2f10761a9902fa6182fad6b2fd7` |
 | [#24 `feat: monitor Codex CLI sessions`](https://github.com/alxbra/agent-status-tiles/pull/24) | Live Codex slice 5: absolute-PATH CLI resolver, strict CLI catalog/rollout matching, independent concurrent surface monitoring, and surviving-owner reveal | 1 completed CLI pass; 3 valid findings fixed (catalog-child cleanup, ambiguous originator, executable-directory permissions) | 2 (QA1 fixed inherited custom-home handling; QA2 no findings) | 250 unit tests; local 33 headless E2E pass with 20 focus-capable native tests intentionally skipped; [post-review macOS CI run 35106322249](https://github.com/alxbra/agent-status-tiles/actions/runs/35106322249) passed all 53 E2E including native Electron; format/lint/type/build checks passed | `e1a4d0ec5cbd157d4c8543c47843055a8193d929` |
-| [#25 `fix: keep confirmed Codex Desktop status visible`](https://github.com/alxbra/agent-status-tiles/pull/25) | Keep confirmed Desktop observations available when legacy/ambiguous catalog entries or unsupported non-structural rollout records limit coverage; read archived metadata from its separate root; use bounded catalog pages and a 2 MiB rollout line limit; baseline newly confirmed sources to a fixed cutoff | 1 completed CLI pass; 0 findings; post-review fixes were not rerun through CodeRabbit | 2 (QA1 fixed historical completion replay for a later-confirmed source; QA2 preserved validated event source IDs through historical replay) | Local read-only live coordinator probe found a ready baseline, available Desktop health, partial-coverage warning, and visible confirmed sessions. Local format/lint/type/build, 256 unit tests, and 33 headless E2E passed; 20 focus-capable native tests intentionally skipped locally. [Post-review macOS CI run 35121651504](https://github.com/alxbra/agent-status-tiles/actions/runs/35121651504) passed 256 unit and all 53 E2E tests including native Electron. | Pending squash merge; record verified SHA in a later staging-based PR. |
+| [#25 `fix: keep confirmed Codex Desktop status visible`](https://github.com/alxbra/agent-status-tiles/pull/25) | Keep confirmed Desktop observations available when legacy/ambiguous catalog entries or unsupported non-structural rollout records limit coverage; read archived metadata from its separate root; use bounded catalog pages and a 2 MiB rollout line limit; baseline newly confirmed sources to a fixed cutoff | 1 completed CLI pass; 0 findings; post-review fixes were not rerun through CodeRabbit | 2 (QA1 fixed historical completion replay for a later-confirmed source; QA2 preserved validated event source IDs through historical replay) | Local read-only live coordinator probe found a ready baseline, available Desktop health, partial-coverage warning, and visible confirmed sessions. Local format/lint/type/build, 256 unit tests, and 33 headless E2E passed; 20 focus-capable native tests intentionally skipped locally. [Post-review macOS CI run 35121651504](https://github.com/alxbra/agent-status-tiles/actions/runs/35121651504) passed 256 unit and all 53 E2E tests including native Electron. | `c859329d6b34d75d07224b4d9f38a983a7d75ffa` |
 
 Foundation review corrections included strict IPC sender/frame validation, same-host renderer navigation checks, supported Node engine ranges, formatter coverage, and recovery after a failed settings-window load. No signing or notarization was claimed; Apple Developer credentials remain a release dependency.
 

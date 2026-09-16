@@ -243,9 +243,7 @@ process.stdin.on('data', chunk => {
     const desktop = settings.getByRole('group', { name: 'Codex Desktop connection' });
     const cli = settings.getByRole('group', { name: 'Codex CLI connection' });
     await expect(desktop).toContainText('Connected');
-    await expect(settings.getByRole('alert')).toContainText(
-      'Codex Desktop coverage is limited to confirmed sessions',
-    );
+    await expect(settings.getByRole('alert')).toHaveCount(0);
     await expect(desktop.getByRole('button', { name: 'Actions for Codex Desktop' })).toBeVisible();
     await expect(cli.getByRole('button', { name: 'Connect' })).toBeEnabled();
     await desktop.getByRole('button', { name: 'Actions for Codex Desktop' }).click();
