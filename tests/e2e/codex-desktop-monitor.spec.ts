@@ -236,7 +236,7 @@ process.stdin.on('data', chunk => {
     const desktop = settings.getByRole('group', { name: 'Codex Desktop connection' });
     const cli = settings.getByRole('group', { name: 'Codex CLI connection' });
     await expect(desktop.getByRole('button', { name: 'Actions for Codex Desktop' })).toBeVisible();
-    await expect(cli.getByRole('button', { name: 'Connect' })).toBeDisabled();
+    await expect(cli.getByRole('button', { name: 'Connect' })).toBeEnabled();
     await desktop.getByRole('button', { name: 'Actions for Codex Desktop' }).click();
     await settings.getByRole('menuitem', { name: 'Disconnect' }).click();
     const confirmation = settings.getByRole('alertdialog');

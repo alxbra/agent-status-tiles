@@ -48,7 +48,7 @@ test('renders the controlled settings fields with accessible names', async ({ pa
   ).toBeEnabled();
   await expect(
     page.locator('[data-provider="codexCli"]').getByRole('button', { name: 'Connect' }),
-  ).toBeDisabled();
+  ).toBeEnabled();
   await expect(
     page.locator('[data-provider="claudeCode"]').getByRole('button', { name: 'Connect' }),
   ).toBeDisabled();
@@ -173,7 +173,7 @@ test('serializes connect and disconnect operations for one provider', async ({ p
   ).toBe(1);
   await expect(
     page.locator('[data-provider="codexCli"]').getByRole('button', { name: 'Connect' }),
-  ).toBeDisabled();
+  ).toBeEnabled();
 
   await page.evaluate(() => {
     (

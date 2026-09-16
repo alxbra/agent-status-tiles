@@ -25,7 +25,7 @@ type FixtureState = {
 const initialState: FixtureState = {
   providers: {
     codexDesktop: { status: 'disconnected', canConnect: true, canDisconnect: false },
-    codexCli: { status: 'disconnected', canConnect: false, canDisconnect: false },
+    codexCli: { status: 'disconnected', canConnect: true, canDisconnect: false },
     claudeCode: { status: 'disconnected', canConnect: false, canDisconnect: false },
   },
   selectedDisplayId: 'primary',

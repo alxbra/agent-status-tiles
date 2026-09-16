@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os';
 import {
   CodexCatalogClient,
   type CodexCatalogDiagnosticCode,
+  type CodexCatalogTargetSurface,
 } from '../../src/main/providers/codex/catalog-client';
 
 const temporaryDirectories: string[] = [];
@@ -70,6 +71,7 @@ async function createFakeBinary(mode: string): Promise<string> {
   const script = `#!/usr/bin/env node
 const mode = ${JSON.stringify(mode)};
 const pages = ${pages};
+if (mode === 'require-default-home' && process.env.CODEX_HOME !== undefined) process.exit(6);
 let carry = '';
 let initializeResponseSent = false;
 let invalidUtf8Sent = false;
@@ -142,7 +144,9 @@ process.stdin.on('data', (chunk) => {
     const outputPage = { ...page, data: page.data.slice(0, request.params.limit) };
     if (mode === 'unsupported-record') outputPage.data[0] = { ...outputPage.data[0], source: 'ambiguous' };
     if (mode === 'ambiguous-unknown') outputPage.data[0] = { ...outputPage.data[0], source: 'unknown', originator: null, cwd: null };
-    if (mode === 'ambiguous-desktop') outputPage.data[0] = { ...outputPage.data[0], source: 'vscode', id: null };
+    if (mode === 'ambiguous-cli') outputPage.data[0] = { ...outputPage.data[0], source: 'cli', id: null };
+    if (mode === 'ambiguous-desktop') outputPage.data[0] = { ...outputPage.data[0], source: 'vscode', originator: 'Codex Desktop', id: null };
+    if (mode === 'ambiguous-subagent') outputPage.data[0] = { ...outputPage.data[0], source: { subAgent: 'review' }, id: null };
     if (mode === 'custom-source') {
       outputPage.data[0] = { ...outputPage.data[0], source: { custom: 'custom-connector' } };
     }
@@ -184,11 +188,13 @@ function createClient(
   binaryPath: string,
   diagnostics: CodexCatalogDiagnosticCode[],
   timeoutMs = 2_000,
+  targetSurface: CodexCatalogTargetSurface = 'desktop',
 ): CodexCatalogClient {
   return new CodexCatalogClient({
     binaryPath,
     codexHome: join(tmpdir(), 'codex-home-fixture'),
     requestTimeoutMs: timeoutMs,
+    targetSurface,
     onDiagnostic: ({ code }) => diagnostics.push(code),
   });
 }
@@ -202,6 +208,21 @@ afterEach(async () => {
 });
 
 describe('Codex catalog client', () => {
+  it('ignores an inherited custom home when no fixture home is requested', async () => {
+    const binaryPath = await createFakeBinary('require-default-home');
+    const previousHome = process.env.CODEX_HOME;
+    process.env.CODEX_HOME = '/private/unrelated-home';
+    const client = new CodexCatalogClient({ binaryPath });
+    try {
+      const result = await client.listThreads({ maxPages: 1 });
+      expect(result.records).toHaveLength(2);
+    } finally {
+      await client.stop();
+      if (previousHome === undefined) delete process.env.CODEX_HOME;
+      else process.env.CODEX_HOME = previousHome;
+    }
+  });
+
   it('completes the supported handshake and paginates a metadata-only projection', async () => {
     const diagnostics: CodexCatalogDiagnosticCode[] = [];
     const client = createClient(await createFakeBinary('pagination'), diagnostics);
@@ -361,13 +382,39 @@ describe('Codex catalog client', () => {
   it('skips malformed records with definitive CLI originator evidence', async () => {
     const diagnostics: CodexCatalogDiagnosticCode[] = [];
     const client = createClient(await createFakeBinary('unsupported-record'), diagnostics);
+    try {
+      const result = await client.listThreads({ maxPages: 1 });
+      expect(result.records).toHaveLength(1);
+      expect(result.records[0]?.sourceEvidence.source).toBe('subAgentReview');
+      expect(diagnostics).toEqual([]);
+    } finally {
+      await client.stop();
+    }
+  });
 
-    const result = await client.listThreads({ maxPages: 1 });
+  it('keeps malformed plausible CLI records ambiguous only for the CLI target', async () => {
+    const desktopDiagnostics: CodexCatalogDiagnosticCode[] = [];
+    const desktop = createClient(await createFakeBinary('ambiguous-cli'), desktopDiagnostics);
+    try {
+      const desktopResult = await desktop.listThreads({ maxPages: 1 });
+      expect(desktopResult.records).toHaveLength(1);
+      expect(desktopResult.records[0]?.sourceEvidence.source).toBe('subAgentReview');
+      expect(desktopDiagnostics).toEqual([]);
+    } finally {
+      await desktop.stop();
+    }
 
-    expect(result.records).toHaveLength(1);
-    expect(result.records[0]?.sourceEvidence.source).toBe('subAgentReview');
-    expect(diagnostics).toEqual([]);
-    await client.stop();
+    const cliDiagnostics: CodexCatalogDiagnosticCode[] = [];
+    const cli = createClient(await createFakeBinary('ambiguous-cli'), cliDiagnostics, 2_000, 'cli');
+    try {
+      await expect(cli.listThreads({ maxPages: 1 })).rejects.toMatchObject({
+        code: 'coverage-ambiguous',
+      });
+      expect(cliDiagnostics).toEqual(['coverage-ambiguous']);
+      expect(JSON.stringify(cliDiagnostics)).not.toContain('PRIVATE_');
+    } finally {
+      await cli.stop();
+    }
   });
 
   it('fails closed on malformed records that could be Desktop', async () => {
@@ -379,6 +426,23 @@ describe('Codex catalog client', () => {
     });
     expect(diagnostics).toEqual(['coverage-ambiguous']);
     await client.stop();
+  });
+
+  it('skips known Desktop and subagent records for the CLI target while completing pagination', async () => {
+    for (const mode of ['ambiguous-desktop', 'ambiguous-subagent']) {
+      const diagnostics: CodexCatalogDiagnosticCode[] = [];
+      const client = createClient(await createFakeBinary(mode), diagnostics, 2_000, 'cli');
+      try {
+        const result = await client.listThreads({ maxPages: 2 });
+        expect(result.complete).toBe(true);
+        expect(result.nextCursor).toBeNull();
+        expect(result.pagesRead).toBe(2);
+        expect(result.records).toHaveLength(2);
+        expect(diagnostics).toEqual([]);
+      } finally {
+        await client.stop();
+      }
+    }
   });
 
   it('fails closed on malformed unknown-source records without unrelated evidence', async () => {
@@ -637,6 +701,13 @@ describe('Codex catalog client', () => {
     );
     expect(
       () => new CodexCatalogClient({ binaryPath: '/tmp/codex', codexHome: 'relative' }),
+    ).toThrowError('Codex catalog invalid-options.');
+    expect(
+      () =>
+        new CodexCatalogClient({
+          binaryPath: '/tmp/codex',
+          targetSurface: 'mobile' as CodexCatalogTargetSurface,
+        }),
     ).toThrowError('Codex catalog invalid-options.');
   });
 });

@@ -1,6 +1,6 @@
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { makeSessionId, type SessionRecord } from '../../../shared/session';
+import { makeSessionId, type SessionRecord, type Surface } from '../../../shared/session';
 import type {
   ProviderSurfaceMonitor,
   RuntimeDiscoveryResult,
@@ -20,12 +20,28 @@ type Reader = Pick<
   'start' | 'stop' | 'inspectSessionMeta' | 'captureRolloutEndOffset' | 'read'
 >;
 
-export interface CodexDesktopMonitorOptions {
-  /** Test injection; production always resolves the signed app bundle. */
+export interface CodexMonitorOptions {
+  /** Test injection; production uses the configured surface's validated resolver. */
   catalog?: Catalog;
   reader?: Reader;
   sessionsRoot?: string;
-  resolveBinary?: typeof resolveBundledCodexBinary;
+  resolveBinary?: () => Promise<BinaryResolution>;
+}
+
+export type CodexDesktopMonitorOptions = CodexMonitorOptions;
+
+type BinaryResolution = { ok: true; binaryPath: string } | { ok: false; code: string };
+
+export interface QualifiedCodexCatalog {
+  sessions: readonly {
+    nativeId: string;
+    sessionId: string;
+    projectBasename: string;
+    rolloutPath?: string;
+    updatedAt: number;
+    isArchived: boolean;
+  }[];
+  issues: readonly unknown[];
 }
 
 interface DiscoveredFile {
@@ -37,7 +53,7 @@ const MAX_CATALOG_CONTINUATIONS = 16;
 const MAX_CATALOG_RECORDS = 1_024;
 
 function runtimeSourceId(cursorKey: string): string {
-  if (!cursorKey.startsWith('codex:')) throw new Error('desktop-invalid-cursor-key');
+  if (!cursorKey.startsWith('codex:')) throw new Error('invalid-codex-cursor-key');
   return cursorKey.slice('codex:'.length);
 }
 
@@ -46,19 +62,25 @@ function readerCursorKey(sourceId: string): string {
 }
 
 /** The only path-bearing state is transient and confined to the main process. */
-export class CodexDesktopMonitor implements ProviderSurfaceMonitor {
-  readonly key = 'codex:desktop' as const;
+export class CodexSurfaceMonitor implements ProviderSurfaceMonitor {
+  readonly key: 'codex:desktop' | 'codex:cli';
   private readonly sessionsRoot: string;
   private readonly reader: Reader;
-  private readonly resolveBinary: typeof resolveBundledCodexBinary;
+  private readonly resolveBinary: () => Promise<BinaryResolution>;
   private catalog: Catalog | undefined;
   private files = new Map<string, DiscoveredFile>();
   private started = false;
 
-  constructor(private readonly options: CodexDesktopMonitorOptions = {}) {
+  constructor(
+    private readonly options: CodexMonitorOptions,
+    private readonly surface: Extract<Surface, 'desktop' | 'cli'>,
+    private readonly qualify: (records: readonly CodexCatalogRecord[]) => QualifiedCodexCatalog,
+    defaultResolveBinary: () => Promise<BinaryResolution>,
+  ) {
+    this.key = `codex:${surface}`;
     this.sessionsRoot = options.sessionsRoot ?? join(homedir(), '.codex', 'sessions');
     this.reader = options.reader ?? new CodexRolloutReader(this.sessionsRoot);
-    this.resolveBinary = options.resolveBinary ?? resolveBundledCodexBinary;
+    this.resolveBinary = options.resolveBinary ?? defaultResolveBinary;
   }
 
   async start(): Promise<void> {
@@ -68,8 +90,11 @@ export class CodexDesktopMonitor implements ProviderSurfaceMonitor {
       this.catalog = suppliedCatalog;
     } else {
       const resolution = await this.resolveBinary();
-      if (!resolution.ok) throw new Error(`codex-desktop-${resolution.code}`);
-      this.catalog = new CodexCatalogClient({ binaryPath: resolution.binaryPath });
+      if (!resolution.ok) throw new Error(`codex-${this.surface}-${resolution.code}`);
+      this.catalog = new CodexCatalogClient({
+        binaryPath: resolution.binaryPath,
+        targetSurface: this.surface,
+      });
     }
     this.reader.start();
     try {
@@ -93,14 +118,14 @@ export class CodexDesktopMonitor implements ProviderSurfaceMonitor {
   }
 
   async discover(): Promise<RuntimeDiscoveryResult> {
-    if (!this.started || this.catalog === undefined) throw new Error('desktop-not-started');
+    if (!this.started || this.catalog === undefined) throw new Error(`${this.surface}-not-started`);
     const records: CodexCatalogRecord[] = [];
     const seenCursors = new Set<string>();
     let cursor: string | null = null;
     let complete = false;
     for (let iteration = 0; iteration < MAX_CATALOG_CONTINUATIONS; iteration += 1) {
       const remaining = MAX_CATALOG_RECORDS - records.length;
-      if (remaining < 1) throw new Error('desktop-catalog-incomplete');
+      if (remaining < 1) throw new Error(`${this.surface}-catalog-incomplete`);
       const page = await this.catalog.listThreads({
         includeArchived: true,
         cursor,
@@ -114,30 +139,31 @@ export class CodexDesktopMonitor implements ProviderSurfaceMonitor {
         break;
       }
       if (page.nextCursor === null || seenCursors.has(page.nextCursor)) {
-        throw new Error('desktop-catalog-incomplete');
+        throw new Error(`${this.surface}-catalog-incomplete`);
       }
       seenCursors.add(page.nextCursor);
       cursor = page.nextCursor;
     }
-    if (!complete) throw new Error('desktop-catalog-incomplete');
-    const qualified = qualifyCodexDesktopCatalog(records);
-    if (qualified.issues.length > 0) throw new Error('desktop-catalog-ambiguous');
+    if (!complete) throw new Error(`${this.surface}-catalog-incomplete`);
+    const qualified = this.qualify(records);
+    if (qualified.issues.length > 0) throw new Error(`${this.surface}-catalog-ambiguous`);
 
     const files = new Map<string, DiscoveredFile>();
     const seenSessions = new Set<string>();
     const sources: RuntimeMonitorSource[] = [];
     for (const session of qualified.sessions) {
-      if (session.rolloutPath === undefined) throw new Error('desktop-rollout-path-missing');
+      if (session.rolloutPath === undefined)
+        throw new Error(`${this.surface}-rollout-path-missing`);
       const meta = await this.reader.inspectSessionMeta(session.rolloutPath);
-      if (meta === undefined) throw new Error('desktop-rollout-identity-unavailable');
+      if (meta === undefined) throw new Error(`${this.surface}-rollout-identity-unavailable`);
       const candidates = new Set([session.nativeId, session.sessionId]);
       if (!candidates.has(meta.nativeSessionId))
-        throw new Error('desktop-rollout-identity-mismatch');
+        throw new Error(`${this.surface}-rollout-identity-mismatch`);
       const nativeSessionId = meta.nativeSessionId;
-      if (seenSessions.has(nativeSessionId)) throw new Error('desktop-duplicate-session');
+      if (seenSessions.has(nativeSessionId)) throw new Error(`${this.surface}-duplicate-session`);
       seenSessions.add(nativeSessionId);
       const id = runtimeSourceId(cursorKeyForPath(this.sessionsRoot, session.rolloutPath));
-      if (files.has(id)) throw new Error('desktop-duplicate-rollout');
+      if (files.has(id)) throw new Error(`${this.surface}-duplicate-rollout`);
       files.set(id, { path: session.rolloutPath, nativeSessionId });
       sources.push({
         id,
@@ -160,10 +186,10 @@ export class CodexDesktopMonitor implements ProviderSurfaceMonitor {
     for (const source of sources) {
       const file = this.files.get(source.id);
       if (file === undefined || file.nativeSessionId !== source.nativeSessionId) {
-        throw new Error('desktop-source-changed');
+        throw new Error(`${this.surface}-source-changed`);
       }
       const endOffset = await this.reader.captureRolloutEndOffset(file.path);
-      if (endOffset === undefined) throw new Error('desktop-rollout-capture-failed');
+      if (endOffset === undefined) throw new Error(`${this.surface}-rollout-capture-failed`);
       captured.push({ ...source, endOffset });
     }
     return captured;
@@ -173,7 +199,7 @@ export class CodexDesktopMonitor implements ProviderSurfaceMonitor {
     const sources: CodexRolloutSource[] = request.sources.map((source) => {
       const file = this.files.get(source.id);
       if (file === undefined || file.nativeSessionId !== source.nativeSessionId) {
-        throw new Error('desktop-source-changed');
+        throw new Error(`${this.surface}-source-changed`);
       }
       const record: SessionRecord | undefined =
         request.sessions[makeSessionId('codex', source.nativeSessionId)];
@@ -181,7 +207,7 @@ export class CodexDesktopMonitor implements ProviderSurfaceMonitor {
         path: file.path,
         session: {
           nativeSessionId: source.nativeSessionId,
-          surface: 'desktop',
+          surface: this.surface,
           isTopLevel: source.isTopLevel,
           ...(record?.activeTurnId === undefined ? {} : { activeTurnId: record.activeTurnId }),
           ...(record?.turnKey === undefined ? {} : { turnKey: record.turnKey }),
@@ -208,7 +234,7 @@ export class CodexDesktopMonitor implements ProviderSurfaceMonitor {
     // An inode replacement is replayed as historical by the reader and may
     // advance to a new safe cursor. Other diagnostics mean coverage is unknown.
     if (result.diagnostics.some((diagnostic) => diagnostic.code !== 'file-reset')) {
-      throw new Error('desktop-rollout-coverage-issue');
+      throw new Error(`${this.surface}-rollout-coverage-issue`);
     }
     return {
       events: result.events.map((entry) => ({
@@ -224,5 +250,11 @@ export class CodexDesktopMonitor implements ProviderSurfaceMonitor {
         ? {}
         : { exhaustedSourceIds: result.exhaustedSourceIds.map(runtimeSourceId) }),
     };
+  }
+}
+
+export class CodexDesktopMonitor extends CodexSurfaceMonitor {
+  constructor(options: CodexDesktopMonitorOptions = {}) {
+    super(options, 'desktop', qualifyCodexDesktopCatalog, resolveBundledCodexBinary);
   }
 }
