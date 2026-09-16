@@ -1,5 +1,5 @@
 import { realpath as defaultRealpath, stat as defaultStat } from 'node:fs/promises';
-import { delimiter, isAbsolute, join } from 'node:path';
+import { delimiter, dirname, isAbsolute, join } from 'node:path';
 
 const CODEX_EXECUTABLE_NAME = 'codex';
 const MAX_PATH_BYTES = 4096;
@@ -84,8 +84,10 @@ export async function resolvePathCodexBinary(
     foundCandidate = true;
 
     let binaryStat: CodexPathFileStat;
+    let directoryStat: CodexPathFileStat;
     try {
       binaryStat = await statPath(binaryPath);
+      directoryStat = await statPath(dirname(binaryPath));
     } catch {
       // A PATH candidate may disappear between realpath and stat. Continue
       // with the next absolute entry just as command lookup would.
@@ -95,14 +97,21 @@ export async function resolvePathCodexBinary(
       binaryStat === null ||
       typeof binaryStat !== 'object' ||
       typeof binaryStat.isFile !== 'function' ||
-      !Number.isSafeInteger(binaryStat.mode)
+      !Number.isSafeInteger(binaryStat.mode) ||
+      directoryStat === null ||
+      typeof directoryStat !== 'object' ||
+      !Number.isSafeInteger(directoryStat.mode)
     ) {
       return { ok: false, code: 'resolver-failed' };
     }
     if (!binaryStat.isFile()) return { ok: false, code: 'binary-not-regular' };
     // Owner execution is required. Group/world write would allow a different
     // account to replace the executable behind the trusted PATH entry.
-    if ((binaryStat.mode & 0o100) === 0 || (binaryStat.mode & 0o022) !== 0) {
+    if (
+      (binaryStat.mode & 0o100) === 0 ||
+      (binaryStat.mode & 0o022) !== 0 ||
+      (directoryStat.mode & 0o022) !== 0
+    ) {
       return { ok: false, code: 'binary-unsafe-permissions' };
     }
     return { ok: true, binaryPath };

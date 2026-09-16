@@ -91,9 +91,7 @@ export function qualifyCodexCliRecord(record: CodexCatalogRecord): CodexCliQuali
     }
     // A known Desktop originator is unrelated; any other missing CLI
     // originator is plausible but unconfirmed and therefore a coverage issue.
-    return originator === CODEX_DESKTOP_ORIGINATOR || originator !== undefined
-      ? { kind: 'skip' }
-      : ambiguous();
+    return originator === CODEX_DESKTOP_ORIGINATOR ? { kind: 'skip' } : ambiguous();
   }
 
   // A CLI originator under a non-CLI source is conflicting evidence. It could

@@ -635,10 +635,11 @@ export class CodexCatalogClient {
   private async startProcess(): Promise<void> {
     this.lineBuffer = Buffer.alloc(0);
     this.isDiscardingOversizedLine = false;
-    const env = {
-      ...process.env,
-      ...(this.options.codexHome === undefined ? {} : { CODEX_HOME: this.options.codexHome }),
-    };
+    // Monitor the default local Codex home unless a validated test fixture
+    // explicitly supplies one. A shell-launched app may inherit CODEX_HOME.
+    const env = { ...process.env };
+    delete env.CODEX_HOME;
+    if (this.options.codexHome !== undefined) env.CODEX_HOME = this.options.codexHome;
     let child: ChildProcessWithoutNullStreams;
     try {
       child = spawn(this.options.binaryPath, ['app-server'], {

@@ -86,6 +86,7 @@ describe('Codex CLI catalog qualification', () => {
   it('reports ambiguous CLI evidence with a fixed metadata-free issue', () => {
     const decisions = [
       qualifyCodexCliRecord(record({ originator: undefined })),
+      qualifyCodexCliRecord(record({ originator: 'future_cli' })),
       qualifyCodexCliRecord(record({ source: 'unknown', originator: undefined })),
       qualifyCodexCliRecord(record({ source: 'custom', originator: undefined })),
       qualifyCodexCliRecord(record({ source: 'unknown', originator: 'codex_cli_rs' })),

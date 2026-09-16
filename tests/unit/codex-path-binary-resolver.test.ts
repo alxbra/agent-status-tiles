@@ -13,6 +13,7 @@ const canonical = '/Applications/ChatGPT.app/Contents/Resources/codex';
 function options(overrides: Partial<CodexPathBinaryResolverOptions> = {}) {
   const stats = new Map<string, CodexPathFileStat>([
     [canonical, { mode: 0o100755, isFile: () => true }],
+    ['/Applications/ChatGPT.app/Contents/Resources', { mode: 0o40755, isFile: () => false }],
   ]);
   return {
     path: entry,
@@ -85,6 +86,18 @@ describe('PATH Codex binary resolver', () => {
         pathEntries: paths,
         realpath: async (path) => path,
         stat: async () => ({ mode: 0o100755 | 0o002, isFile: () => true }),
+      }),
+    );
+    expect(result).toEqual({ ok: false, code: 'binary-unsafe-permissions' });
+  });
+
+  it('rejects a writable resolved executable directory', async () => {
+    const result = await resolvePathCodexBinary(
+      options({
+        stat: async (path) => ({
+          mode: path === canonical ? 0o100755 : 0o40775,
+          isFile: () => path === canonical,
+        }),
       }),
     );
     expect(result).toEqual({ ok: false, code: 'binary-unsafe-permissions' });

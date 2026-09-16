@@ -71,6 +71,7 @@ async function createFakeBinary(mode: string): Promise<string> {
   const script = `#!/usr/bin/env node
 const mode = ${JSON.stringify(mode)};
 const pages = ${pages};
+if (mode === 'require-default-home' && process.env.CODEX_HOME !== undefined) process.exit(6);
 let carry = '';
 let initializeResponseSent = false;
 let invalidUtf8Sent = false;
@@ -207,6 +208,21 @@ afterEach(async () => {
 });
 
 describe('Codex catalog client', () => {
+  it('ignores an inherited custom home when no fixture home is requested', async () => {
+    const binaryPath = await createFakeBinary('require-default-home');
+    const previousHome = process.env.CODEX_HOME;
+    process.env.CODEX_HOME = '/private/unrelated-home';
+    const client = new CodexCatalogClient({ binaryPath });
+    try {
+      const result = await client.listThreads({ maxPages: 1 });
+      expect(result.records).toHaveLength(2);
+    } finally {
+      await client.stop();
+      if (previousHome === undefined) delete process.env.CODEX_HOME;
+      else process.env.CODEX_HOME = previousHome;
+    }
+  });
+
   it('completes the supported handshake and paginates a metadata-only projection', async () => {
     const diagnostics: CodexCatalogDiagnosticCode[] = [];
     const client = createClient(await createFakeBinary('pagination'), diagnostics);
@@ -366,32 +382,39 @@ describe('Codex catalog client', () => {
   it('skips malformed records with definitive CLI originator evidence', async () => {
     const diagnostics: CodexCatalogDiagnosticCode[] = [];
     const client = createClient(await createFakeBinary('unsupported-record'), diagnostics);
-
-    const result = await client.listThreads({ maxPages: 1 });
-
-    expect(result.records).toHaveLength(1);
-    expect(result.records[0]?.sourceEvidence.source).toBe('subAgentReview');
-    expect(diagnostics).toEqual([]);
-    await client.stop();
+    try {
+      const result = await client.listThreads({ maxPages: 1 });
+      expect(result.records).toHaveLength(1);
+      expect(result.records[0]?.sourceEvidence.source).toBe('subAgentReview');
+      expect(diagnostics).toEqual([]);
+    } finally {
+      await client.stop();
+    }
   });
 
   it('keeps malformed plausible CLI records ambiguous only for the CLI target', async () => {
     const desktopDiagnostics: CodexCatalogDiagnosticCode[] = [];
     const desktop = createClient(await createFakeBinary('ambiguous-cli'), desktopDiagnostics);
-    const desktopResult = await desktop.listThreads({ maxPages: 1 });
-    expect(desktopResult.records).toHaveLength(1);
-    expect(desktopResult.records[0]?.sourceEvidence.source).toBe('subAgentReview');
-    expect(desktopDiagnostics).toEqual([]);
-    await desktop.stop();
+    try {
+      const desktopResult = await desktop.listThreads({ maxPages: 1 });
+      expect(desktopResult.records).toHaveLength(1);
+      expect(desktopResult.records[0]?.sourceEvidence.source).toBe('subAgentReview');
+      expect(desktopDiagnostics).toEqual([]);
+    } finally {
+      await desktop.stop();
+    }
 
     const cliDiagnostics: CodexCatalogDiagnosticCode[] = [];
     const cli = createClient(await createFakeBinary('ambiguous-cli'), cliDiagnostics, 2_000, 'cli');
-    await expect(cli.listThreads({ maxPages: 1 })).rejects.toMatchObject({
-      code: 'coverage-ambiguous',
-    });
-    expect(cliDiagnostics).toEqual(['coverage-ambiguous']);
-    expect(JSON.stringify(cliDiagnostics)).not.toContain('PRIVATE_');
-    await cli.stop();
+    try {
+      await expect(cli.listThreads({ maxPages: 1 })).rejects.toMatchObject({
+        code: 'coverage-ambiguous',
+      });
+      expect(cliDiagnostics).toEqual(['coverage-ambiguous']);
+      expect(JSON.stringify(cliDiagnostics)).not.toContain('PRIVATE_');
+    } finally {
+      await cli.stop();
+    }
   });
 
   it('fails closed on malformed records that could be Desktop', async () => {
@@ -409,15 +432,16 @@ describe('Codex catalog client', () => {
     for (const mode of ['ambiguous-desktop', 'ambiguous-subagent']) {
       const diagnostics: CodexCatalogDiagnosticCode[] = [];
       const client = createClient(await createFakeBinary(mode), diagnostics, 2_000, 'cli');
-
-      const result = await client.listThreads({ maxPages: 2 });
-
-      expect(result.complete).toBe(true);
-      expect(result.nextCursor).toBeNull();
-      expect(result.pagesRead).toBe(2);
-      expect(result.records).toHaveLength(2);
-      expect(diagnostics).toEqual([]);
-      await client.stop();
+      try {
+        const result = await client.listThreads({ maxPages: 2 });
+        expect(result.complete).toBe(true);
+        expect(result.nextCursor).toBeNull();
+        expect(result.pagesRead).toBe(2);
+        expect(result.records).toHaveLength(2);
+        expect(diagnostics).toEqual([]);
+      } finally {
+        await client.stop();
+      }
     }
   });
 
