@@ -10,7 +10,13 @@ import {
   type RuntimeMonitorSource,
   type RuntimeReadRequest,
 } from '../../src/main/runtime/coordinator';
-import { loadSessionState } from '../../src/main/sessions/persistence';
+import {
+  createInitialMonitoringState,
+  loadSessionState,
+  saveSessionState,
+} from '../../src/main/sessions/persistence';
+import { reduceSessionState } from '../../src/main/sessions/reducer';
+import { createInitialSessionState, makeSessionId } from '../../src/shared/session';
 
 const roots: string[] = [];
 
@@ -201,6 +207,55 @@ describe('runtime coordinator', () => {
     await runtime.stop();
   });
 
+  it('acknowledges the published owner when both Codex surfaces retain one session', async () => {
+    const dataPath = await appDataPath();
+    const id = makeSessionId('codex', 'duplicate');
+    const completed = [
+      {
+        type: 'upsert' as const,
+        provider: 'codex' as const,
+        surface: 'cli' as const,
+        nativeSessionId: 'duplicate',
+        title: 'Fixture project',
+        isTopLevel: true,
+        isArchived: false,
+        canOpen: false,
+        updatedAt: 1,
+      },
+      { type: 'turn-started' as const, sessionId: id, turnId: 'turn', timestamp: 2 },
+      {
+        type: 'turn-completed' as const,
+        sessionId: id,
+        turnId: 'turn',
+        completionId: 'completion',
+        timestamp: 3,
+      },
+    ].reduce(reduceSessionState, createInitialSessionState());
+    const cliRecord = completed.sessions[id];
+    if (cliRecord === undefined) throw new Error('Expected fixture record');
+    const monitoring = createInitialMonitoringState();
+    for (const surface of ['desktop', 'cli'] as const) {
+      const partition = monitoring.partitions[`codex:${surface}`];
+      partition.enabled = true;
+      partition.baseline = { status: 'ready', cutoff: 4 };
+      partition.sessions = { [id]: { ...cliRecord, surface } };
+      partition.order = [id];
+    }
+    monitoring.globalOrder = [id];
+    monitoring.owners = { [id]: 'codex:cli' };
+    await saveSessionState(dataPath, monitoring);
+
+    const runtime = createRuntimeCoordinator({ appDataPath: dataPath });
+    await runtime.start();
+    expect(await runtime.acknowledge(id, 'completion')).toBe(true);
+    const saved = (await loadSessionState(dataPath)).monitoring;
+    expect(saved.partitions['codex:cli'].sessions[id]?.acknowledgedCompletionId).toBe('completion');
+    expect(
+      saved.partitions['codex:desktop'].sessions[id]?.acknowledgedCompletionId,
+    ).toBeUndefined();
+    await runtime.stop();
+  });
+
   it('rejects duplicate monitor ownership before any monitor starts', async () => {
     const duplicate = monitor(
       'codex:desktop',
@@ -282,6 +337,29 @@ describe('runtime coordinator', () => {
     expect(runtime.getHealth()['codex:desktop'].status).toBe('error');
     expect(runtime.getOverlayState().sessions).toEqual([]);
     expect(published.every((value) => !value.includes('incomplete'))).toBe(true);
+    await runtime.stop();
+  });
+
+  it('rejects capture metadata that changes a discovered source identity', async () => {
+    const dataPath = await appDataPath();
+    const item = source('qualified');
+    const read = vi.fn(async () => ({
+      events: [],
+      cursors: { [item.id]: { identity: 'fixture', offset: 10 } },
+      complete: true,
+    }));
+    const testMonitor = monitor('codex:desktop', [item], read);
+    testMonitor.capture = async () => [{ ...item, nativeSessionId: 'different' }];
+    const runtime = createRuntimeCoordinator({ appDataPath: dataPath, monitors: [testMonitor] });
+
+    await runtime.start();
+    await runtime.connect('codex', 'desktop');
+    expect(runtime.getMonitoringState().partitions['codex:desktop'].baseline).toEqual({
+      status: 'pending',
+    });
+    expect(runtime.getMonitoringState().partitions['codex:desktop'].sessions).toEqual({});
+    expect(runtime.getHealth()['codex:desktop'].status).toBe('error');
+    expect(read).not.toHaveBeenCalled();
     await runtime.stop();
   });
 
@@ -443,5 +521,64 @@ describe('runtime coordinator', () => {
     const stopsBeforeShutdown = stopCalls();
     await runtime.stop();
     expect(stopCalls()).toBe(stopsBeforeShutdown + 1);
+  });
+
+  it('does not let a late suspend stop overwrite resumed surface health', async () => {
+    const dataPath = await appDataPath();
+    const item = source('health-race');
+    const testMonitor = monitor('codex:desktop', [item], async () => ({
+      events: [],
+      cursors: { [item.id]: { identity: 'fixture', offset: 10 } },
+      complete: true,
+    }));
+    let releaseStop!: () => void;
+    const pendingStop = new Promise<void>((resolve) => {
+      releaseStop = resolve;
+    });
+    const runtime = createRuntimeCoordinator({ appDataPath: dataPath, monitors: [testMonitor] });
+    await runtime.start();
+    await runtime.connect('codex', 'desktop');
+    testMonitor.stop = vi
+      .fn()
+      .mockImplementationOnce(() => pendingStop)
+      .mockImplementation(async () => undefined);
+
+    const suspending = runtime.suspend();
+    await vi.waitFor(() => expect(testMonitor.stop).toHaveBeenCalledTimes(1));
+    const resuming = runtime.resume();
+    await vi.waitFor(() => expect(testMonitor.start).toHaveBeenCalledTimes(2));
+    releaseStop();
+    await Promise.all([suspending, resuming]);
+    expect(runtime.getHealth()['codex:desktop'].status).toBe('available');
+    await runtime.stop();
+  });
+
+  it('waits for a delayed monitor start before Disconnect stops that monitor', async () => {
+    const dataPath = await appDataPath();
+    const saved = createInitialMonitoringState();
+    saved.partitions['codex:desktop'].enabled = true;
+    await saveSessionState(dataPath, saved);
+    let releaseStart!: () => void;
+    const pendingStart = new Promise<void>((resolve) => {
+      releaseStart = resolve;
+    });
+    const read = vi.fn(async () => ({
+      events: [],
+      cursors: {},
+      complete: true,
+    }));
+    const testMonitor = monitor('codex:desktop', [], read);
+    testMonitor.start = vi.fn(() => pendingStart);
+    const runtime = createRuntimeCoordinator({ appDataPath: dataPath, monitors: [testMonitor] });
+
+    const starting = runtime.start();
+    await vi.waitFor(() => expect(testMonitor.start).toHaveBeenCalledTimes(1));
+    const disconnecting = runtime.disconnect('codex', 'desktop');
+    releaseStart();
+    await Promise.all([starting, disconnecting]);
+    expect(testMonitor.stop).toHaveBeenCalled();
+    expect(runtime.getMonitoringState().partitions['codex:desktop'].enabled).toBe(false);
+    expect(read).not.toHaveBeenCalled();
+    await runtime.stop();
   });
 });

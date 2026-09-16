@@ -162,6 +162,7 @@ interface SurfaceRuntime {
   retryMs: number;
   timer?: ReturnType<typeof setTimeout>;
   busy: boolean;
+  starting?: Promise<void>;
   inFlight?: Promise<void>;
   generation: number;
 }
@@ -961,6 +962,20 @@ export function createRuntimeCoordinator(options: RuntimeCoordinatorOptions): Ru
     ) {
       throw new Error('source-capture-cohort-mismatch');
     }
+    const discoveryById = new Map(discovered.map((source) => [source.id, source]));
+    for (const source of result) {
+      const original = discoveryById.get(source.id);
+      if (
+        original === undefined ||
+        original.nativeSessionId !== source.nativeSessionId ||
+        original.title !== source.title ||
+        original.updatedAt !== source.updatedAt ||
+        original.isTopLevel !== source.isTopLevel ||
+        original.isArchived !== source.isArchived
+      ) {
+        throw new Error('source-capture-metadata-mismatch');
+      }
+    }
     return result;
   };
 
@@ -1162,8 +1177,10 @@ export function createRuntimeCoordinator(options: RuntimeCoordinatorOptions): Ru
     if (!runtime.monitor || !monitoring.partitions[runtime.key].enabled) return;
     const expectedSurfaceGeneration = ++runtime.generation;
     setHealth(runtime.key, 'starting');
+    const starting = Promise.resolve().then(() => runtime.monitor!.start());
+    runtime.starting = starting;
     try {
-      await runtime.monitor.start();
+      await starting;
     } catch {
       if (
         expectedGeneration !== generation ||
@@ -1192,6 +1209,8 @@ export function createRuntimeCoordinator(options: RuntimeCoordinatorOptions): Ru
         void startSurface(runtime, retryGlobalGeneration);
       }, delay);
       return;
+    } finally {
+      if (runtime.starting === starting) runtime.starting = undefined;
     }
     if (
       expectedGeneration !== generation ||
@@ -1205,13 +1224,15 @@ export function createRuntimeCoordinator(options: RuntimeCoordinatorOptions): Ru
 
   const stopSurface = async (runtime: SurfaceRuntime): Promise<void> => {
     runtime.generation += 1;
+    const stoppingGeneration = runtime.generation;
     clearTimer(runtime);
     runtime.sources = [];
     runtime.lastCatalogAt = 0;
     runtime.retryMs = filePollIntervalMs;
+    if (runtime.starting !== undefined) await runtime.starting.catch(() => undefined);
     if (runtime.monitor) await Promise.resolve(runtime.monitor.stop()).catch(() => undefined);
     if (runtime.inFlight !== undefined) await runtime.inFlight.catch(() => undefined);
-    setHealth(runtime.key, 'stopped');
+    if (runtime.generation === stoppingGeneration) setHealth(runtime.key, 'stopped');
   };
 
   const ensureLoaded = async (): Promise<void> => {
@@ -1238,9 +1259,15 @@ export function createRuntimeCoordinator(options: RuntimeCoordinatorOptions): Ru
     await ensureLoaded();
     if (stopped) return false;
     return withCommitLock(async () => {
-      const owner = SURFACE_KEYS.find((key) =>
-        own(monitoring.partitions[key].sessions, event.sessionId),
-      );
+      const explicitOwner = own(monitoring.owners, event.sessionId);
+      const eligible = (key: SurfaceKey): boolean =>
+        monitoring.partitions[key].enabled &&
+        monitoring.partitions[key].baseline.status === 'ready' &&
+        own(monitoring.partitions[key].sessions, event.sessionId) !== undefined;
+      const owner =
+        explicitOwner !== undefined && eligible(explicitOwner)
+          ? explicitOwner
+          : SURFACE_KEYS.find(eligible);
       if (owner === undefined) return false;
       const candidate = cloneMonitoringState(monitoring);
       const partition = candidate.partitions[owner];
@@ -1309,6 +1336,7 @@ export function createRuntimeCoordinator(options: RuntimeCoordinatorOptions): Ru
       const runtime = surfaces.get(key);
       const wasEnabled = monitoring.partitions[key].enabled;
       if (runtime) await stopSurface(runtime);
+      const stoppedGeneration = runtime?.generation;
       try {
         await withCommitLock(async () => {
           const candidate = connectMonitoringSurface(monitoring, provider, surface);
@@ -1319,12 +1347,26 @@ export function createRuntimeCoordinator(options: RuntimeCoordinatorOptions): Ru
           publish();
         });
       } catch (error) {
-        if (runtime && started && !suspended && !stopped && wasEnabled) {
+        if (
+          runtime &&
+          started &&
+          !suspended &&
+          !stopped &&
+          wasEnabled &&
+          runtime.generation === stoppedGeneration &&
+          monitoring.partitions[key].enabled
+        ) {
           await startSurface(runtime, generation);
         }
         throw error;
       }
-      if (runtime && started && !suspended) {
+      if (
+        runtime &&
+        started &&
+        !suspended &&
+        runtime.generation === stoppedGeneration &&
+        monitoring.partitions[key].enabled
+      ) {
         const expectedGeneration = generation;
         await startSurface(runtime, expectedGeneration);
       }
@@ -1336,6 +1378,7 @@ export function createRuntimeCoordinator(options: RuntimeCoordinatorOptions): Ru
       const key = surfaceKey(provider, surface);
       const runtime = surfaces.get(key);
       if (runtime) await stopSurface(runtime);
+      const stoppedGeneration = runtime?.generation;
       try {
         await withCommitLock(async () => {
           const candidate = disconnectMonitoringSurface(monitoring, provider, surface);
@@ -1347,7 +1390,14 @@ export function createRuntimeCoordinator(options: RuntimeCoordinatorOptions): Ru
       } catch (error) {
         // The checkpoint failed, so the prior enabled state is still the
         // source of truth. Restore its monitor before surfacing the failure.
-        if (runtime && started && !suspended && !stopped) {
+        if (
+          runtime &&
+          started &&
+          !suspended &&
+          !stopped &&
+          runtime.generation === stoppedGeneration &&
+          monitoring.partitions[key].enabled
+        ) {
           await startSurface(runtime, generation);
         }
         throw error;
