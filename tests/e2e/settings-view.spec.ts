@@ -106,6 +106,42 @@ test('keeps failed async changes visible without optimistic state', async ({ pag
   await expect(reduceMotion).not.toBeChecked();
 });
 
+test('shows an action failure even when a coverage warning is already visible', async ({
+  page,
+}) => {
+  await openFixture(page);
+  await page.evaluate(() => {
+    const fixture = (
+      window as Window & {
+        __settingsFixture?: {
+          setExternalError: (error: string) => void;
+          rejectNextAction: () => void;
+        };
+      }
+    ).__settingsFixture;
+    fixture?.setExternalError('Coverage is incomplete.');
+    fixture?.rejectNextAction();
+  });
+  await page.getByRole('switch', { name: 'Reduce motion' }).click();
+  await expect(page.getByRole('alert')).toHaveText('Could not change Reduce motion. Try again.');
+});
+
+test('names Claude Code in a retained connection disconnect confirmation', async ({ page }) => {
+  await openFixture(page);
+  await page.evaluate(() => {
+    (
+      window as Window & {
+        __settingsFixture?: { markProviderConnected: (connection: 'claudeCode') => void };
+      }
+    ).__settingsFixture?.markProviderConnected('claudeCode');
+  });
+  await page.getByRole('button', { name: 'Actions for Claude Code' }).click();
+  await page.getByRole('menuitem', { name: 'Disconnect' }).click();
+  await expect(page.getByRole('alertdialog')).toContainText(
+    "Disconnect removes this app's local status history but does not change Claude Code data.",
+  );
+});
+
 test('serializes connect and disconnect operations for one provider', async ({ page }) => {
   await openFixture(page);
 

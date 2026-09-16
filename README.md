@@ -26,10 +26,11 @@ full contribution and review requirements.
 Use a supported Node.js line (`^20.19.0`, `^22.13.0`, or `>=24.0.0`; CI uses
 Node.js 24), then install dependencies with `pnpm install`. Use `pnpm dev` for
 the Electron development shell. The foundation checks are `pnpm format:check`,
-`pnpm lint`, `pnpm typecheck`, and `pnpm test`. Run `pnpm test:e2e` to build and
-exercise the packaged Electron entry point with an isolated temporary
-user-data directory. Local runs skip native Electron tests because their windows
-can take focus; browser fixture tests still run headlessly. Native tests run in
-GitHub Actions, or locally only with explicit
+`pnpm lint`, `pnpm typecheck`, and `pnpm test`. `pnpm test:e2e` builds the app
+and runs headless browser fixtures locally. It skips native Electron tests by
+default because their windows can take focus; a local pass is not native E2E
+evidence. GitHub Actions runs the native tests against the built Electron entry
+point with an isolated temporary user-data directory. To run them locally,
+explicitly opt in with
 `AGENT_STATUS_TILES_ALLOW_FOCUS_E2E=1 pnpm test:e2e`. `pnpm run pack` creates an
 unsigned unpacked application under `release/`.

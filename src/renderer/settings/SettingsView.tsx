@@ -67,12 +67,14 @@ function ProviderAction({
   connection,
   state,
   isPending,
+  canDisconnect,
   onConnect,
   onRequestDisconnect,
 }: {
   connection: SettingsConnectionKey;
   state: SettingsProviderState;
   isPending: (action: SettingsAction) => boolean;
+  canDisconnect: boolean;
   onConnect?: (connection: SettingsConnectionKey) => void | Promise<void>;
   onRequestDisconnect: (connection: SettingsConnectionKey) => void;
 }): ReactElement {
@@ -101,9 +103,10 @@ function ProviderAction({
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end">
             <DropdownMenuItem
-              disabled={!state.canDisconnect || isProviderPending}
+              disabled={!state.canDisconnect || !canDisconnect || isProviderPending}
               onSelect={() => {
-                if (state.canDisconnect && !isProviderPending) onRequestDisconnect(connection);
+                if (state.canDisconnect && canDisconnect && !isProviderPending)
+                  onRequestDisconnect(connection);
               }}
             >
               {isProviderPending ? 'Working…' : 'Disconnect'}
@@ -251,7 +254,7 @@ export function SettingsView({
     [onReduceMotionChange, runAction],
   );
 
-  const visibleError = error ?? actionError;
+  const visibleError = actionError ?? error;
 
   return (
     <div className="min-h-svh w-full bg-background text-foreground" data-testid="settings-view">
@@ -270,6 +273,7 @@ export function SettingsView({
                 <SettingRow label={CONNECTION_LABEL[connection]}>
                   <ProviderAction
                     isPending={isPending}
+                    canDisconnect={onDisconnect !== undefined}
                     onConnect={onConnect === undefined ? undefined : connect}
                     onRequestDisconnect={setDisconnectTarget}
                     connection={connection}
@@ -351,8 +355,8 @@ export function SettingsView({
               Disconnect {disconnectTarget === undefined ? '' : CONNECTION_LABEL[disconnectTarget]}?
             </AlertDialogTitle>
             <AlertDialogDescription>
-              Disconnect removes this app&apos;s local status history but does not change Codex
-              data.
+              Disconnect removes this app&apos;s local status history but does not change{' '}
+              {disconnectTarget === 'claudeCode' ? 'Claude Code' : 'Codex'} data.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

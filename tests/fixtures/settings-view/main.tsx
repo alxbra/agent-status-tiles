@@ -19,6 +19,7 @@ type FixtureState = {
   selectedDisplayId: string;
   launchAtLogin: boolean;
   reduceMotion: boolean;
+  error?: string;
 };
 
 const initialState: FixtureState = {
@@ -39,6 +40,7 @@ type FixtureWindow = Window & {
     markProviderConnected: (connection: SettingsConnectionKey) => void;
     rejectNextAction: () => void;
     resolveDeferredAction: () => void;
+    setExternalError: (error: string) => void;
   };
 };
 
@@ -105,12 +107,14 @@ function SettingsFixture(): ReactElement {
       deferredAction.current = undefined;
       complete?.();
     },
+    setExternalError: (error) => setState((current) => ({ ...current, error })),
   };
 
   return (
     <>
       <SettingsView
         displays={displays}
+        error={state.error}
         launchAtLogin={state.launchAtLogin}
         onConnect={(provider) => {
           providerActionCalls.current[provider] += 1;
