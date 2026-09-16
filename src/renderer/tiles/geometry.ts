@@ -1,17 +1,28 @@
 import type { SessionSnapshot } from '../../shared/session';
+import {
+  DEFAULT_STRIP_HEIGHT,
+  DEFAULT_STRIP_WIDTH,
+  EXPANDED_TILE_SIZE,
+  RIGHT_EDGE_INSET,
+} from '../../shared/dock-backdrop';
+export {
+  DEFAULT_STRIP_HEIGHT,
+  DEFAULT_STRIP_WIDTH,
+  DOCK_BACKDROP_PADDING,
+  EXPANDED_TILE_SIZE,
+  RIGHT_EDGE_INSET,
+  dockBackdropBounds,
+} from '../../shared/dock-backdrop';
+export type { DockBackdropBounds } from '../../shared/dock-backdrop';
 
 export const TILE_SIZE = 10;
 export const TILE_RADIUS = 3;
-export const EXPANDED_TILE_SIZE = 40;
 export const EXPANDED_TILE_RADIUS = 8;
 export const SLOT_SPACING = 24;
-export const RIGHT_EDGE_INSET = 12;
 export const TILE_HIT_SIZE = 24;
 export const MIN_SURFACE_GAP = 6;
 export const MAGNIFICATION_RADIUS_SLOTS = 2;
 export const MAX_VISIBLE_TILES = 12;
-export const DEFAULT_STRIP_WIDTH = 88;
-export const DEFAULT_STRIP_HEIGHT = 480;
 export const TILE_CONTENT_SIZE = 38;
 
 export interface TilePoint {

@@ -7,6 +7,32 @@
   user-select: none;
 }
 
+.status-tiles__backdrop {
+  position: absolute;
+  z-index: 0;
+  box-sizing: border-box;
+  border: 1px solid rgb(255 255 255 / 55%);
+  border-radius: 14px;
+  background: rgb(147 153 164 / 32%);
+  box-shadow:
+    0 7px 24px rgb(17 19 21 / 16%),
+    inset 0 1px rgb(255 255 255 / 38%);
+  backdrop-filter: blur(20px) saturate(170%);
+  -webkit-backdrop-filter: blur(20px) saturate(170%);
+  pointer-events: none;
+  transition:
+    top 160ms ease,
+    height 160ms ease;
+}
+
+.status-tiles--dark .status-tiles__backdrop {
+  border-color: rgb(255 255 255 / 22%);
+  background: rgb(30 34 40 / 62%);
+  box-shadow:
+    0 9px 28px rgb(0 0 0 / 30%),
+    inset 0 1px rgb(255 255 255 / 12%);
+}
+
 .status-tiles__tile {
   position: absolute;
   z-index: 1;
@@ -95,12 +121,8 @@
   pointer-events: none;
 }
 
-.status-tiles__indicator--previous {
-  top: 5px;
-}
-
-.status-tiles__indicator--next {
-  bottom: 5px;
+.status-tiles--dark .status-tiles__indicator {
+  color: #f1f1ed;
 }
 
 .status-tiles__tooltip {
@@ -113,6 +135,7 @@
 }
 
 .status-tiles--reduced-motion .status-tiles__tile,
+.status-tiles--reduced-motion .status-tiles__backdrop,
 .status-tiles--reduced-motion .status-tiles__tile-surface,
 .status-tiles--reduced-motion .status-tiles__provider-icon,
 .status-tiles--reduced-motion .status-tiles__status-icon {

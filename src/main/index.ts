@@ -150,9 +150,8 @@ function getSettingsState(): SettingsState {
     const health = coordinator.getHealth()[key].status;
     if (!coordinator.getMonitoringState().partitions[key].enabled) return [];
     const label = connection === 'codexDesktop' ? 'Codex Desktop' : 'Codex CLI';
-    if (health === 'available' && coordinator.getHealth()[key].coverageIncomplete) {
-      return [`${label} coverage is limited to confirmed sessions; some sessions may be missing.`];
-    }
+    // Partial catalog coverage is not a connection failure. Keep confirmed
+    // sessions visible without showing a persistent Settings error.
     if (health !== 'error' && health !== 'unavailable') return [];
     return [
       `${label} connection or coverage is incomplete. Check the installation, then disconnect and reconnect.`,

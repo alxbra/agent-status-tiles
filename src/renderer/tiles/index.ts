@@ -2,6 +2,8 @@ export { StatusTiles, type StatusTilesProps } from './StatusTiles';
 export {
   DEFAULT_STRIP_HEIGHT,
   DEFAULT_STRIP_WIDTH,
+  dockBackdropBounds,
+  DOCK_BACKDROP_PADDING,
   EXPANDED_TILE_RADIUS,
   EXPANDED_TILE_SIZE,
   layoutTiles,
@@ -22,6 +24,7 @@ export {
   tileSizeForInfluence,
   visibleSlotCount,
   type TileGeometry,
+  type DockBackdropBounds,
   type TileHitRegion,
   type TileLayout,
   type TileLayoutOptions,

@@ -16,6 +16,7 @@ import type { SessionSnapshot } from '../../shared/session';
 import {
   DEFAULT_STRIP_HEIGHT,
   DEFAULT_STRIP_WIDTH,
+  dockBackdropBounds,
   layoutTiles,
   normalizeStripWidth,
   TILE_CONTENT_SIZE,
@@ -29,13 +30,7 @@ import {
 } from './interaction';
 import { TileContextMenu } from './context-menu';
 import { ProviderIcon, StatusIcon } from './icons';
-import {
-  PROVIDER_LABEL,
-  sessionDisplayTitle,
-  STATUS_COLOR,
-  statusLabel,
-  TILE_COLORS,
-} from './theme';
+import { PROVIDER_LABEL, sessionDisplayTitle, STATUS_COLOR, statusLabel } from './theme';
 import './tiles.css';
 
 export interface StatusTilesProps {
@@ -50,7 +45,7 @@ export interface StatusTilesProps {
   /** Tests and the future overlay controller can provide a measured viewport. */
   width?: number;
   height?: number;
-  /** The transparent strip's current backdrop tone, used for indicator contrast. */
+  /** Optional visual-fixture override; the native overlay follows system appearance. */
   backgroundTone?: 'light' | 'dark';
 }
 
@@ -71,6 +66,21 @@ function usePrefersReducedMotion(): boolean {
   }, []);
 
   return prefersReducedMotion;
+}
+
+function usePrefersDarkAppearance(): boolean {
+  const [prefersDark, setPrefersDark] = useState(
+    () =>
+      typeof window !== 'undefined' && window.matchMedia('(prefers-color-scheme: dark)').matches,
+  );
+  useEffect(() => {
+    const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
+    const update = (): void => setPrefersDark(mediaQuery.matches);
+    update();
+    mediaQuery.addEventListener('change', update);
+    return () => mediaQuery.removeEventListener('change', update);
+  }, []);
+  return prefersDark;
 }
 
 function sameTileSnapshot(left: SessionSnapshot, right: SessionSnapshot): boolean {
@@ -144,7 +154,7 @@ export function StatusTiles({
   reducedMotion,
   width = DEFAULT_STRIP_WIDTH,
   height,
-  backgroundTone = 'light',
+  backgroundTone,
 }: StatusTilesProps): ReactElement | null {
   const rootRef = useRef<HTMLDivElement>(null);
   const tileRefs = useRef<(HTMLButtonElement | null)[]>([]);
@@ -166,7 +176,9 @@ export function StatusTiles({
     visibleTileSessions(sessions),
   );
   const prefersReducedMotion = usePrefersReducedMotion();
+  const prefersDarkAppearance = usePrefersDarkAppearance();
   const motionReduced = prefersReducedMotion || reducedMotion === true;
+  const isDark = (backgroundTone ?? (prefersDarkAppearance ? 'dark' : 'light')) === 'dark';
   const effectiveWidth = normalizeStripWidth(width);
   const visibleSessions = useMemo(() => visibleTileSessions(sessions), [sessions]);
   const isStripMounted = displayedSessions.length > 0 || visibleSessions.length > 0;
@@ -224,6 +236,10 @@ export function StatusTiles({
         scrollOffset,
       }),
     [displayedSessions, effectivePointerY, effectiveWidth, measuredHeight, scrollOffset],
+  );
+  const backdrop = useMemo(
+    () => dockBackdropBounds(layout.hitRegions, effectiveWidth, measuredHeight),
+    [layout.hitRegions, effectiveWidth, measuredHeight],
   );
 
   useEffect(() => {
@@ -410,13 +426,26 @@ export function StatusTiles({
   if (!isStripMounted) return null;
 
   const rootStyle = { width: `${effectiveWidth}px` } satisfies CSSProperties;
-  const indicatorStyle = {
-    color: backgroundTone === 'dark' ? TILE_COLORS.neutral : TILE_COLORS.glyph,
-  } satisfies CSSProperties;
+  const backdropStyle = backdrop
+    ? ({
+        left: `${backdrop.x}px`,
+        top: `${backdrop.y}px`,
+        width: `${backdrop.width}px`,
+        height: `${backdrop.height}px`,
+      } satisfies CSSProperties)
+    : undefined;
+  const previousIndicatorStyle = backdrop
+    ? ({ top: `${Math.max(0, backdrop.y - 14)}px` } satisfies CSSProperties)
+    : undefined;
+  const nextIndicatorStyle = backdrop
+    ? ({
+        top: `${Math.min(Math.max(0, (Number.isFinite(measuredHeight) ? measuredHeight : DEFAULT_STRIP_HEIGHT) - 10), backdrop.y + backdrop.height + 6)}px`,
+      } satisfies CSSProperties)
+    : undefined;
   return (
     <div
       ref={rootRef}
-      className={`status-tiles${motionReduced ? ' status-tiles--reduced-motion' : ''}`}
+      className={`status-tiles${motionReduced ? ' status-tiles--reduced-motion' : ''}${isDark ? ' status-tiles--dark' : ''}`}
       style={rootStyle}
       role="listbox"
       aria-label="Agent status sessions"
@@ -441,10 +470,13 @@ export function StatusTiles({
       onBlurCapture={handleBlur}
       onWheel={handleWheel}
     >
+      {backdropStyle ? (
+        <div className="status-tiles__backdrop" style={backdropStyle} aria-hidden="true" />
+      ) : null}
       {layout.hasPrevious ? (
         <span
           className="status-tiles__indicator status-tiles__indicator--previous"
-          style={indicatorStyle}
+          style={previousIndicatorStyle}
           aria-hidden="true"
         >
           ▲
@@ -530,7 +562,7 @@ export function StatusTiles({
       {layout.hasNext ? (
         <span
           className="status-tiles__indicator status-tiles__indicator--next"
-          style={indicatorStyle}
+          style={nextIndicatorStyle}
           aria-hidden="true"
         >
           ▼

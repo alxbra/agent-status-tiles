@@ -101,6 +101,59 @@ test.describe('rounded-square tile fixtures', () => {
   }
 });
 
+test('shows a click-through frosted dock material around visible tiles', async ({ page }) => {
+  await openFixture(page, 1);
+  const backdrop = page.locator('.status-tiles__backdrop');
+  await expect(backdrop).toHaveCount(1);
+  await expect(backdrop).toHaveCSS('pointer-events', 'none');
+  await expect(backdrop).toHaveCSS('border-radius', '14px');
+  await expect(backdrop).toHaveCSS('backdrop-filter', /blur\(20px\)/u);
+  const collapsed = await backdrop.boundingBox();
+  expect(collapsed).toMatchObject({ width: 56, height: 40 });
+  await expect
+    .poll(() => page.evaluate(() => window.__fixtureHitRegions))
+    .toMatchObject([{ width: 24, height: 24 }]);
+
+  const tile = page.locator('.status-tiles__tile');
+  const tileBox = await tile.boundingBox();
+  if (tileBox === null) throw new Error('Missing tile target');
+  await page.mouse.move(tileBox.x + tileBox.width / 2, tileBox.y + tileBox.height / 2);
+  await expect(tile.locator('.status-tiles__tile-surface')).toHaveCSS('width', '40px');
+  await expect.poll(async () => (await backdrop.boundingBox())?.height).toBe(56);
+  await expect
+    .poll(() => page.evaluate(() => window.__fixtureHitRegions))
+    .toMatchObject([{ width: 40, height: 40 }]);
+
+  await page.goto(fixtureUrl('count=0'));
+  await expect(backdrop).toHaveCount(0);
+});
+
+test('keeps overflow cues close to the frosted dock', async ({ page }) => {
+  await openFixture(page, 30);
+  const backdrop = page.locator('.status-tiles__backdrop');
+  const next = page.locator('.status-tiles__indicator--next');
+  const panelBox = await backdrop.boundingBox();
+  const nextBox = await next.boundingBox();
+  if (panelBox === null || nextBox === null) throw new Error('Missing dock overflow geometry');
+  expect(nextBox.y - (panelBox.y + panelBox.height)).toBeGreaterThanOrEqual(0);
+  expect(nextBox.y - (panelBox.y + panelBox.height)).toBeLessThanOrEqual(12);
+
+  await page.locator('.status-tiles').dispatchEvent('wheel', {
+    bubbles: true,
+    cancelable: true,
+    deltaY: 120,
+  });
+  const previous = page.locator('.status-tiles__indicator--previous');
+  await expect(previous).toBeVisible();
+  const previousBox = await previous.boundingBox();
+  const scrolledPanelBox = await backdrop.boundingBox();
+  if (previousBox === null || scrolledPanelBox === null) {
+    throw new Error('Missing scrolled dock overflow geometry');
+  }
+  expect(scrolledPanelBox.y - (previousBox.y + previousBox.height)).toBeGreaterThanOrEqual(0);
+  expect(scrolledPanelBox.y - (previousBox.y + previousBox.height)).toBeLessThanOrEqual(12);
+});
+
 for (const width of ['72', 'NaN', 'Infinity']) {
   test(`normalizes ${width} strip width to the safe minimum`, async ({ page }) => {
     await openFixture(page, 1, `&width=${width}`);
