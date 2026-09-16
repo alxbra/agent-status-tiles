@@ -110,7 +110,11 @@ describe('CodexRolloutReader', () => {
     await writeFile(file, await readFile(FIXTURE));
 
     const reader = new CodexRolloutReader(root);
-    expect(await reader.inspectSessionMeta(file)).toEqual({ nativeSessionId: SESSION_ID });
+    expect(await reader.inspectSessionMeta(file)).toEqual({
+      nativeSessionId: SESSION_ID,
+      source: 'cli',
+      originator: 'codex-cli',
+    });
     expect(await reader.captureRolloutEndOffset(file)).toBe((await readFile(file)).byteLength);
     const empty = await reader.read([]);
     expect(empty.events).toEqual([]);

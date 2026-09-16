@@ -68,6 +68,38 @@ afterEach(async () => {
 });
 
 describe('Codex Desktop monitor', () => {
+  it('uses validated rollout originator when the catalog omits it', async () => {
+    const { monitor, catalog, record, rolloutPath } = await fixture();
+    catalog.listThreads.mockResolvedValue({
+      records: [{ ...record, sourceEvidence: { ...record.sourceEvidence, originator: undefined } }],
+      nextCursor: null,
+      pagesRead: 1,
+      complete: true,
+    });
+    try {
+      await monitor.start();
+      const confirmed = await monitor.discover();
+      expect(confirmed.sources.map((source) => source.nativeSessionId)).toEqual([catalogId]);
+      expect(confirmed.coverageIncomplete).toBeUndefined();
+
+      for (const [source, originator] of [
+        ['vscode', 'Other Editor'],
+        ['vscode', undefined],
+        ['cli', 'Codex Desktop'],
+      ] as const) {
+        await writeFile(
+          rolloutPath,
+          `${JSON.stringify({ type: 'session_meta', payload: { id: nativeId, source, originator } })}\n`,
+        );
+        const rejected = await monitor.discover();
+        expect(rejected.sources).toEqual([]);
+        expect(rejected.coverageIncomplete).toBe(true);
+      }
+    } finally {
+      await monitor.stop();
+    }
+  });
+
   it('keeps distinct thread IDs with one rollout session ID separate and rejects a shared rollout file', async () => {
     const { monitor, catalog, record, rolloutPath } = await fixture();
     const secondId = '44444444-4444-7444-8444-444444444444';
@@ -249,7 +281,7 @@ describe('Codex Desktop monitor', () => {
           ...record,
           nativeId: '33333333-3333-7333-8333-333333333333',
           sessionId: '33333333-3333-7333-8333-333333333333',
-          sourceEvidence: { ...record.sourceEvidence, originator: undefined },
+          sourceEvidence: { ...record.sourceEvidence, source: 'unknown', originator: undefined },
         },
       ],
       nextCursor: null,

@@ -43,6 +43,7 @@ export interface QualifiedCodexCatalog {
     updatedAt: number;
     isArchived: boolean;
   }[];
+  needsRolloutProof?: QualifiedCodexCatalog['sessions'];
   issues: readonly unknown[];
 }
 
@@ -173,7 +174,10 @@ export class CodexSurfaceMonitor implements ProviderSurfaceMonitor {
     const sources: RuntimeMonitorSource[] = [];
     // Keep active sources before archive-only metadata sources so the reader's
     // continuation index remains stable while archived files are never replayed.
-    const orderedSessions = [...qualified.sessions].sort(
+    // A missing catalog originator can be resolved only by the matching,
+    // validated rollout SessionMeta, never by a filename or project path.
+    const proofCandidates = new Set(qualified.needsRolloutProof ?? []);
+    const orderedSessions = [...qualified.sessions, ...proofCandidates].sort(
       (left, right) => Number(left.isArchived) - Number(right.isArchived),
     );
     const pathCounts = new Map<string, number>();
@@ -197,6 +201,13 @@ export class CodexSurfaceMonitor implements ProviderSurfaceMonitor {
         continue;
       }
       if (meta.nativeSessionId !== session.sessionId) {
+        coverageIncomplete = true;
+        continue;
+      }
+      if (
+        proofCandidates.has(session) &&
+        (meta.source !== 'vscode' || meta.originator !== 'Codex Desktop')
+      ) {
         coverageIncomplete = true;
         continue;
       }

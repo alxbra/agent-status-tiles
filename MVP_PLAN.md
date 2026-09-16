@@ -314,6 +314,7 @@ Adapt the existing project’s catalog client, incremental event reader, reducer
 - Use observed local task events for work performed in another Codex process.
 - Use explicitly installed and trusted hooks to improve approval detection.
 - Include Desktop and CLI top-level threads, including user-created forks; exclude archived, ephemeral, and spawned child threads. Use the catalog thread `id` as identity and validate rollout events against the separate session ID.
+- For a Codex Desktop catalog record with `vscode` source but no originator, require the validated rollout SessionMeta to confirm both `vscode` and `Codex Desktop` before showing it. Report missing or contradictory proof as incomplete coverage.
 - Keep private/local file parsing isolated and covered by recorded, sanitized fixtures.
 - Detect unsupported formats and surface an integration issue instead of guessing.
 - Do not start, resume, or modify tasks to observe them.
