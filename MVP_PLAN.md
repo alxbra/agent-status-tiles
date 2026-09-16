@@ -15,14 +15,14 @@ The first publishable release targets macOS and supports:
 - Claude Code local sessions in Claude Desktop.
 - Claude Code terminal sessions.
 
-Each top-level task or session gets one tile. Spawned subagents remain represented by their parent session.
+Each eligible top-level thread or task gets one tile. The dock shows the five most recently updated items across connected harnesses by default, configurable from one to ten. Spawned subagents remain represented by their parent.
 
 The main interface is a vertical row of tiny colored rounded-square tiles on the right desktop edge. Hovering produces macOS Dock-style magnification. Expanded tiles display the AI lab icon and a status icon. Clicking foregrounds the owning harness and selects the specific session where supported.
 
 ### Fixed scope
 
-- Show working, waiting, failed, and unread-completed sessions.
-- Hide idle sessions and acknowledged completions.
+- Show the most recently updated eligible items, including idle and acknowledged completions.
+- Keep working, waiting, failed, and unread-completed statuses distinct.
 - Use one selected display, defaulting to the primary display.
 - Appear across macOS Spaces and full-screen applications.
 - Use Electron, React, TypeScript, Tailwind CSS, and stock shadcn/ui.
@@ -75,7 +75,7 @@ Reuse the exact palette and status meanings from [the existing theme module](/Us
 
 Use `#111315` for dark glyphs over filled status backgrounds.
 
-Idle exists in the state model but is not normally displayed. Unavailable status is distinct from idle and is used only when a previously visible session can no longer be observed reliably.
+Idle is visible when its item is within the recent limit. Unavailable status is distinct from idle and is used when a previously observed item can no longer be observed reliably.
 
 ### 2.2 Collapsed strip
 
@@ -113,9 +113,9 @@ An expanded tile shows:
 - One status icon.
 - Nothing else.
 
-Fade icons in only when the tile is large enough to render them clearly. Use a single-line stock tooltip for the session title. If no title is available, use the project folder name; append a short session ID only when necessary to distinguish duplicates.
+Fade icons in only when the tile is large enough to render them clearly. Use a single-line stock tooltip for the task title. For Codex, use a validated catalog `name`, falling back to the project folder name. The user authorized storing this bounded name locally; never derive a title from `preview`, a transcript, or a rollout payload.
 
-Do not derive titles from prompt content.
+Keep titles out of logs and diagnostics.
 
 #### Interaction mockup
 
@@ -136,15 +136,15 @@ The labels above explain the mockup; they must not appear inside actual tiles. S
 
 ### 2.4 Ordering, overflow, and removal
 
-- New turns move their session to the top.
-- Progress, waiting, errors, and completion do not reorder sessions.
+- Sort eligible items by confirmed provider update or task activity, newest first, with a stable ID tie-break. Local acknowledgement and error dismissal do not change recency.
+- Apply the global Recent threads limit (default five, range one to ten) across connected harnesses, including idle items.
 - Freeze ordering and automatic removals while the pointer is inside the strip.
 - Apply pending list changes after pointer exit.
 - Bind clicks to the session ID captured on pointer-down.
 - Show at most 12 collapsed slots, further limited by available display height.
 - Allow scrolling through overflow while hovering.
 - Show a small directional indicator only when additional sessions exist outside the viewport.
-- Do not silently discard active or waiting sessions.
+- Items outside the configured recent limit remain in local state and return when they become recent enough.
 - Successful opening acknowledges the completion that was visible when clicked.
 - A newer completion arriving during navigation must remain unread.
 - Failed navigation must not acknowledge completion.
@@ -247,7 +247,7 @@ type SessionStatus =
   | "unavailable";
 
 interface SessionSnapshot {
-  id: string; // Namespaced by provider and native session ID.
+  id: string; // Namespaced by provider and native thread/task ID.
   provider: Provider;
   surface: Surface;
   title: string;
@@ -273,7 +273,7 @@ interface ProviderAdapter {
 }
 ```
 
-Persist provider-native IDs separately from display titles. Deduplicate a session visible through multiple surfaces using provider plus native session ID, and retain the most recently confirmed owning surface.
+Persist provider-native IDs separately from display titles. Codex uses the catalog thread ID for deduplication and navigation; the rollout session ID is a separate, validated file identity. Retain the most recently confirmed owning surface.
 
 Renderer commands are limited to:
 
@@ -294,10 +294,10 @@ The renderer never receives arbitrary filesystem access, shell execution, hook p
 - Confirmed successful turn completion → unread.
 - Terminal turn failure → error.
 - Ordinary recoverable tool failures do not automatically make the entire session red.
-- Acknowledged completion → idle, then hidden.
+- Acknowledged completion → idle; it remains eligible for the recent-item limit.
 - New turn clears prior completion acknowledgement and prior terminal errors.
 - Archived sessions disappear.
-- Ended idle sessions disappear; ended unread sessions remain until acknowledged.
+- Ended items disappear when their connected adapter no longer reports them; idle and acknowledged items may remain visible while eligible.
 - Ignore stale events from previous turns.
 - Parent completion must not be inferred from a subagent stopping.
 - Silence alone must not be interpreted as success, failure, or a stopped session.
@@ -313,7 +313,7 @@ Adapt the existing project’s catalog client, incremental event reader, reducer
 - Use local app-server queries for task metadata.
 - Use observed local task events for work performed in another Codex process.
 - Use explicitly installed and trusted hooks to improve approval detection.
-- Include Desktop and CLI sessions; exclude archived, ephemeral, and child sessions.
+- Include Desktop and CLI top-level threads, including user-created forks; exclude archived, ephemeral, and spawned child threads. Use the catalog thread `id` as identity and validate rollout events against the separate session ID.
 - Keep private/local file parsing isolated and covered by recorded, sanitized fixtures.
 - Detect unsupported formats and surface an integration issue instead of guessing.
 - Do not start, resume, or modify tasks to observe them.
@@ -493,7 +493,7 @@ interaction and visual-baseline acceptance remain unchecked.
 
 - [x] Implement shared session types and the deterministic status reducer.
 - [x] Namespace identities and deduplicate surfaces.
-- [x] Implement new-turn ordering and active/unread filtering.
+- [x] Implement deterministic session ordering and filtering (the recent-item visibility policy supersedes the initial active-only projection).
 - [x] Persist unread state, acknowledgement IDs, ordering, and cursors atomically (merged PR #5).
 - [ ] Suppress historical unread completions on first installation (persistence and reader emit baseline markers; applying them in live app replay remains pending).
 - [x] Handle late events, duplicate events, overlapping input requests, and archived sessions.
@@ -654,6 +654,7 @@ Maintain this table in the plan:
 | [#24 `feat: monitor Codex CLI sessions`](https://github.com/alxbra/agent-status-tiles/pull/24) | Live Codex slice 5: absolute-PATH CLI resolver, strict CLI catalog/rollout matching, independent concurrent surface monitoring, and surviving-owner reveal | 1 completed CLI pass; 3 valid findings fixed (catalog-child cleanup, ambiguous originator, executable-directory permissions) | 2 (QA1 fixed inherited custom-home handling; QA2 no findings) | 250 unit tests; local 33 headless E2E pass with 20 focus-capable native tests intentionally skipped; [post-review macOS CI run 35106322249](https://github.com/alxbra/agent-status-tiles/actions/runs/35106322249) passed all 53 E2E including native Electron; format/lint/type/build checks passed | `e1a4d0ec5cbd157d4c8543c47843055a8193d929` |
 | [#25 `fix: keep confirmed Codex Desktop status visible`](https://github.com/alxbra/agent-status-tiles/pull/25) | Keep confirmed Desktop observations available when legacy/ambiguous catalog entries or unsupported non-structural rollout records limit coverage; read archived metadata from its separate root; use bounded catalog pages and a 2 MiB rollout line limit; baseline newly confirmed sources to a fixed cutoff | 1 completed CLI pass; 0 findings; post-review fixes were not rerun through CodeRabbit | 2 (QA1 fixed historical completion replay for a later-confirmed source; QA2 preserved validated event source IDs through historical replay) | Local read-only live coordinator probe found a ready baseline, available Desktop health, partial-coverage warning, and visible confirmed sessions. Local format/lint/type/build, 256 unit tests, and 33 headless E2E passed; 20 focus-capable native tests intentionally skipped locally. [Post-review macOS CI run 35121651504](https://github.com/alxbra/agent-status-tiles/actions/runs/35121651504) passed 256 unit and all 53 E2E tests including native Electron. | `c859329d6b34d75d07224b4d9f38a983a7d75ffa` |
 | [#26 `feat: add frosted status dock and quiet healthy coverage`](https://github.com/alxbra/agent-status-tiles/pull/26) | Suppress persistent partial-coverage warnings for otherwise healthy Codex connections; add a rounded, click-through dock backdrop with native macOS vibrancy beneath unchanged tile hit regions | 1 completed CLI pass; 0 findings; post-review QA fix was not rerun through CodeRabbit | 2 (QA1 found that CSS blur alone does not establish desktop blur and added a native non-focusable backing surface; QA2 found no further issues) | Local format/lint/type/build, 259 unit tests, and 35 headless E2E passed; 20 focus-capable native tests intentionally skipped locally. [Post-review macOS CI run 35141830645](https://github.com/alxbra/agent-status-tiles/actions/runs/35141830645) passed 259 unit and all 55 E2E tests including native Electron backing-window assertions. | Pending squash merge; record verified SHA after merge. |
+| [#27 `feat: show recent threads across harnesses`](https://github.com/alxbra/agent-status-tiles/pull/27) | Canonical Codex thread IDs, separate rollout validation, bounded task titles, recent top-level items across connected harnesses, and a persistent 1–10 limit defaulting to five | 1 completed CLI pass; 2 valid findings fixed (acknowledgement contract, stable ID tie-break) | 2 (QA1 verified cross-surface ID migration and title fallback; QA2 removed an obsolete selector and duplicate path tracking) | Local format/lint/type/build, 265 unit tests, and all 55 E2E tests passed, including 20 native Electron tests; CI pending. | Pending merge. |
 
 Foundation review corrections included strict IPC sender/frame validation, same-host renderer navigation checks, supported Node engine ranges, formatter coverage, and recovery after a failed settings-window load. No signing or notarization was claimed; Apple Developer credentials remain a release dependency.
 
@@ -773,7 +774,7 @@ Record corrections made after review and the commit used for final validation.
 - [ ] Dock magnification is stable and matches the specified geometry.
 - [ ] Expanded tiles contain only lab and status icons.
 - [ ] Settings use stock shadcn without redundant copy.
-- [ ] Idle and acknowledged sessions disappear.
+- [ ] The configured number of recent eligible items appears, including idle and acknowledged items.
 - [ ] Clicks foreground the correct owning app.
 - [ ] Transparent regions do not block underlying applications.
 - [ ] Spaces, full-screen, display changes, and sleep/wake work.

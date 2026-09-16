@@ -67,25 +67,50 @@ describe('desktop preference store', () => {
     const raw = JSON.parse(
       readFileSync(join(directory, DESKTOP_PREFERENCES_FILE), 'utf8'),
     ) as unknown;
-    expect(raw).toEqual({ schemaVersion: 1, preferredDisplayId: '42', reduceMotion: true });
+    expect(raw).toEqual({
+      schemaVersion: 2,
+      preferredDisplayId: '42',
+      reduceMotion: true,
+      recentThreadLimit: 5,
+    });
     expect(new DesktopPreferencesStore(directory).get()).toEqual(raw);
   });
 
   it('uses an atomic replacement and leaves no temporary preference files', () => {
     const directory = temporaryDirectory();
     saveDesktopPreferences(directory, {
-      schemaVersion: 1,
+      schemaVersion: 2,
       preferredDisplayId: 'primary',
       reduceMotion: false,
+      recentThreadLimit: 5,
     });
     saveDesktopPreferences(directory, {
-      schemaVersion: 1,
+      schemaVersion: 2,
       preferredDisplayId: '7',
       reduceMotion: true,
+      recentThreadLimit: 5,
     });
 
     expect(readdirSync(directory)).toEqual([DESKTOP_PREFERENCES_FILE]);
     expect(loadDesktopPreferences(directory).preferredDisplayId).toBe('7');
+  });
+
+  it('migrates version 1 preferences to the five-thread default and validates the new limit', () => {
+    const directory = temporaryDirectory();
+    writeFileSync(
+      join(directory, DESKTOP_PREFERENCES_FILE),
+      JSON.stringify({ schemaVersion: 1, preferredDisplayId: '7', reduceMotion: true }),
+    );
+    const store = new DesktopPreferencesStore(directory);
+    expect(store.get()).toMatchObject({
+      schemaVersion: 2,
+      preferredDisplayId: '7',
+      reduceMotion: true,
+      recentThreadLimit: 5,
+    });
+    expect(store.setRecentThreadLimit(10).recentThreadLimit).toBe(10);
+    expect(() => store.setRecentThreadLimit(11)).toThrow();
+    expect(new DesktopPreferencesStore(directory).get().recentThreadLimit).toBe(10);
   });
 
   it('fails closed without reading beyond the fixed preference bound', () => {

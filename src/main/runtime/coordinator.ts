@@ -27,7 +27,8 @@ import {
   saveSessionState,
   type SessionLoadResult,
 } from '../sessions/persistence';
-import { reduceSessionState, selectVisibleSessionSnapshots } from '../sessions/reducer';
+import { reduceSessionState, selectSessionSnapshots } from '../sessions/reducer';
+import { DEFAULT_RECENT_THREAD_LIMIT, isRecentThreadLimit } from '../../shared/settings';
 
 /** Catalog/source limits intentionally mirror the persistence bounds. */
 export const MAX_RUNTIME_SOURCES = 512;
@@ -52,6 +53,8 @@ export interface RuntimeMonitorSource {
   /** Relative, monitor-owned source identifier used as the cursor key. */
   id: string;
   nativeSessionId: string;
+  /** Previous Codex rollout identity, used only for one-to-one local state migration. */
+  legacySessionId?: string;
   title: string;
   updatedAt: number;
   isTopLevel: boolean;
@@ -129,6 +132,7 @@ export interface RuntimeSurfaceHealth {
 
 export interface RuntimeCoordinatorOptions {
   appDataPath: string;
+  recentThreadLimit?: number;
   monitors?: readonly ProviderSurfaceMonitor[];
   now?: () => number;
   setTimeout?: (callback: () => void, delayMs: number) => ReturnType<typeof setTimeout>;
@@ -159,6 +163,7 @@ export interface RuntimeCoordinator {
   getHealth(): Readonly<Record<SurfaceKey, RuntimeSurfaceHealth>>;
   getOverlayState(): OverlayState;
   getCoverageWarning(): string | undefined;
+  setRecentThreadLimit(limit: number): void;
 }
 
 interface SurfaceRuntime {
@@ -277,6 +282,7 @@ function sanitizeSources(
       seen.has(source.id) ||
       !validTitle(source.title) ||
       !validSourceId(source.nativeSessionId) ||
+      (source.legacySessionId !== undefined && !validSourceId(source.legacySessionId)) ||
       !validTimestamp(source.updatedAt) ||
       typeof source.isTopLevel !== 'boolean' ||
       typeof source.isArchived !== 'boolean' ||
@@ -289,6 +295,7 @@ function sanitizeSources(
     result.push({
       id: source.id,
       nativeSessionId: source.nativeSessionId,
+      ...(source.legacySessionId === undefined ? {} : { legacySessionId: source.legacySessionId }),
       title: source.title,
       updatedAt: source.updatedAt,
       isTopLevel: source.isTopLevel,
@@ -606,10 +613,12 @@ function overlaySessions(
   monitoring: MonitoringState,
   health: Readonly<Record<SurfaceKey, RuntimeSurfaceHealth>>,
   surfaces: ReadonlyMap<SurfaceKey, SurfaceRuntime>,
+  limit: number = MAX_OVERLAY_RUNTIME_SESSIONS,
 ): { sessions: readonly SessionSnapshot[]; omittedCount: number } {
   const sessionState = effectiveSessionState(monitoring, health);
-  const visible = selectVisibleSessionSnapshots(sessionState);
-  const orderIndex = new Map(monitoring.globalOrder.map((id, index) => [id, index]));
+  const visible = selectSessionSnapshots(sessionState).filter(
+    (session) => session.isTopLevel && !session.isArchived,
+  );
   const confirmedIds = new Map(
     [...surfaces].map(([key, runtime]) => [
       key,
@@ -637,15 +646,10 @@ function overlaySessions(
         own(monitoring.partitions[key].sessions, id) !== undefined,
     );
   };
-  const ordered = [...visible].sort((left, right) => {
-    const statusRank = (status: SessionSnapshot['status']): number =>
-      status === 'working' ? 0 : status === 'needs-input' ? 1 : status === 'error' ? 2 : 3;
-    return (
-      statusRank(left.status) - statusRank(right.status) ||
-      (orderIndex.get(left.id) ?? Number.MAX_SAFE_INTEGER) -
-        (orderIndex.get(right.id) ?? Number.MAX_SAFE_INTEGER)
-    );
-  });
+  const ordered = [...visible].sort(
+    (left, right) =>
+      right.updatedAt - left.updatedAt || (left.id < right.id ? -1 : left.id > right.id ? 1 : 0),
+  );
   const mapped = ordered.map((snapshot) => {
     const owner = ownerFor(snapshot.id);
     return owner !== undefined &&
@@ -654,27 +658,8 @@ function overlaySessions(
       ? { ...snapshot, status: 'unavailable' as const }
       : snapshot;
   });
-  // Unavailable sessions are still useful during a transient provider outage,
-  // but they do not outrank active task states. Re-sort after the health overlay.
-  mapped.sort((left, right) => {
-    const statusRank = (status: SessionSnapshot['status']): number =>
-      status === 'working'
-        ? 0
-        : status === 'needs-input'
-          ? 1
-          : status === 'error'
-            ? 2
-            : status === 'unread'
-              ? 3
-              : 4;
-    return (
-      statusRank(left.status) - statusRank(right.status) ||
-      (orderIndex.get(left.id) ?? Number.MAX_SAFE_INTEGER) -
-        (orderIndex.get(right.id) ?? Number.MAX_SAFE_INTEGER)
-    );
-  });
   return {
-    sessions: mapped.slice(0, MAX_OVERLAY_RUNTIME_SESSIONS),
+    sessions: mapped.slice(0, Math.min(limit, MAX_OVERLAY_RUNTIME_SESSIONS)),
     omittedCount: Math.max(0, mapped.length - MAX_OVERLAY_RUNTIME_SESSIONS),
   };
 }
@@ -696,6 +681,8 @@ function surfaceFromKey(key: SurfaceKey): Surface {
 }
 
 export function createRuntimeCoordinator(options: RuntimeCoordinatorOptions): RuntimeCoordinator {
+  let recentThreadLimit = options.recentThreadLimit ?? DEFAULT_RECENT_THREAD_LIMIT;
+  if (!isRecentThreadLimit(recentThreadLimit)) throw new Error('Invalid recent thread limit');
   const now = options.now ?? Date.now;
   const schedule = options.setTimeout ?? ((callback, delay) => setTimeout(callback, delay));
   const cancel = options.clearTimeout ?? ((timer) => clearTimeout(timer));
@@ -758,7 +745,7 @@ export function createRuntimeCoordinator(options: RuntimeCoordinatorOptions): Ru
   }
 
   const publish = (): void => {
-    const projected = overlaySessions(monitoring, health, surfaces);
+    const projected = overlaySessions(monitoring, health, surfaces, recentThreadLimit);
     overlay = { sessions: projected.sessions, reducedMotion: overlay.reducedMotion };
     coverageWarning =
       projected.omittedCount > 0
@@ -1001,6 +988,7 @@ export function createRuntimeCoordinator(options: RuntimeCoordinatorOptions): Ru
       if (
         original === undefined ||
         original.nativeSessionId !== source.nativeSessionId ||
+        original.legacySessionId !== source.legacySessionId ||
         original.title !== source.title ||
         original.updatedAt !== source.updatedAt ||
         original.isTopLevel !== source.isTopLevel ||
@@ -1010,6 +998,93 @@ export function createRuntimeCoordinator(options: RuntimeCoordinatorOptions): Ru
       }
     }
     return result;
+  };
+
+  const migrateCodexThreadIds = async (
+    runtime: SurfaceRuntime,
+    expectedGeneration: number,
+    expectedSurfaceGeneration: number,
+  ): Promise<void> => {
+    if (!runtime.key.startsWith('codex:')) return;
+    const aliases = new Map<string, string[]>();
+    const currentIds = new Set(
+      runtime.sources.map((source) => makeSessionId('codex', source.nativeSessionId)),
+    );
+    for (const source of runtime.sources) {
+      if (source.legacySessionId === undefined) continue;
+      const oldId = makeSessionId('codex', source.legacySessionId);
+      const newId = makeSessionId('codex', source.nativeSessionId);
+      aliases.set(oldId, [...(aliases.get(oldId) ?? []), newId]);
+    }
+    if (aliases.size === 0) return;
+    await withCommitLock(async () => {
+      if (
+        stopped ||
+        expectedGeneration !== generation ||
+        expectedSurfaceGeneration !== runtime.generation
+      )
+        return;
+      const candidate = cloneMonitoringState(monitoring);
+      const partition = candidate.partitions[runtime.key];
+      const sessions = { ...partition.sessions };
+      const replacements = new Map<string, string>();
+      const removedIds = new Set<string>();
+      let changed = false;
+      for (const [oldId, targets] of aliases) {
+        if (currentIds.has(oldId)) continue;
+        const old = own(sessions, oldId);
+        if (old === undefined) continue;
+        const target = targets.length === 1 ? targets[0] : undefined;
+        if (target !== undefined && own(sessions, target) === undefined) {
+          sessions[target] = { ...old, id: target, nativeSessionId: target.slice('codex:'.length) };
+          replacements.set(oldId, target);
+        }
+        delete sessions[oldId];
+        removedIds.add(oldId);
+        changed = true;
+      }
+      if (!changed) return;
+      partition.sessions = sessions;
+      const replaceOrder = (order: readonly string[]): string[] => [
+        ...new Set(
+          order
+            .map((id) => replacements.get(id) ?? id)
+            .filter((id) => own(sessions, id) !== undefined || !id.startsWith('codex:')),
+        ),
+      ];
+      partition.order = replaceOrder(partition.order);
+      const otherOwner = (id: string): SurfaceKey | undefined =>
+        SURFACE_KEYS.find(
+          (key) => key !== runtime.key && own(candidate.partitions[key].sessions, id) !== undefined,
+        );
+      candidate.globalOrder = [
+        ...new Set(
+          candidate.globalOrder.flatMap((id) =>
+            removedIds.has(id)
+              ? [replacements.get(id), otherOwner(id) === undefined ? undefined : id].filter(
+                  (value): value is string => value !== undefined,
+                )
+              : [id],
+          ),
+        ),
+      ];
+      const owners = { ...candidate.owners };
+      for (const oldId of removedIds) {
+        const target = replacements.get(oldId);
+        if (target !== undefined) owners[target] = runtime.key;
+        if (owners[oldId] === runtime.key) {
+          const replacementOwner = otherOwner(oldId);
+          if (replacementOwner === undefined) delete owners[oldId];
+          else owners[oldId] = replacementOwner;
+        }
+      }
+      candidate.owners = owners;
+      await saveAndPublish(
+        candidate,
+        expectedGeneration,
+        () => expectedSurfaceGeneration === runtime.generation,
+      );
+    });
   };
 
   async function runSurface(
@@ -1052,6 +1127,7 @@ export function createRuntimeCoordinator(options: RuntimeCoordinatorOptions): Ru
         )
           throw new Error('invalid-catalog-coverage');
         runtime.sources = await captureSources(monitor, discovery);
+        await migrateCodexThreadIds(runtime, expectedGeneration, expectedSurfaceGeneration);
         runtime.coverageIncomplete ||= discovery.coverageIncomplete === true;
         if (
           monitoring.partitions[runtime.key].baseline.status === 'pending' &&
@@ -1506,6 +1582,11 @@ export function createRuntimeCoordinator(options: RuntimeCoordinatorOptions): Ru
       reducedMotion: overlay.reducedMotion,
     }),
     getCoverageWarning: (): string | undefined => coverageWarning,
+    setRecentThreadLimit: (limit): void => {
+      if (!isRecentThreadLimit(limit)) throw new Error('Invalid recent thread limit');
+      recentThreadLimit = limit;
+      publish();
+    },
   };
 
   return coordinator;

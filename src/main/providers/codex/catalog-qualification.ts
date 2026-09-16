@@ -14,6 +14,7 @@ export interface CodexDesktopQualification {
   nativeId: string;
   sessionId: string;
   projectBasename: string;
+  name?: string;
   rolloutPath?: string;
   createdAt: number;
   updatedAt: number;
@@ -65,8 +66,7 @@ export function qualifyCodexDesktopRecord(record: CodexCatalogRecord): CodexQual
   if (
     record.isEphemeral ||
     record.sourceEvidence.isSubAgent ||
-    record.parentThreadId !== undefined ||
-    record.forkedFromId !== undefined
+    record.parentThreadId !== undefined
   ) {
     return { kind: 'skip' };
   }
@@ -90,6 +90,7 @@ export function qualifyCodexDesktopRecord(record: CodexCatalogRecord): CodexQual
       nativeId: record.nativeId,
       sessionId: record.sessionId,
       projectBasename: record.projectBasename,
+      ...(record.name === undefined ? {} : { name: record.name }),
       ...(record.rolloutPath === undefined ? {} : { rolloutPath: record.rolloutPath }),
       createdAt: record.createdAt,
       updatedAt: record.updatedAt,

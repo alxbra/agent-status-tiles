@@ -11,7 +11,6 @@ import {
   selectProviderHealth,
   selectSession,
   selectSessionSnapshots,
-  selectVisibleSessionSnapshots,
 } from '../../src/main/sessions/reducer';
 
 const codexId = makeSessionId('codex', 'thread-1');
@@ -485,7 +484,6 @@ describe('selectors and provider health', () => {
       },
     ]);
 
-    expect(selectVisibleSessionSnapshots(state).map(({ id }) => id)).toEqual([codexId]);
     expect(selectSession(state, codexId)?.status).toBe('unread');
     expect(selectSession(state, archivedId)?.status).toBe('working');
     expect(selectSession(state, childId)?.status).toBe('needs-input');
@@ -526,13 +524,6 @@ describe('selectors and provider health', () => {
       status: 'unavailable',
       updatedAt: 120,
     });
-    expect(selectVisibleSessionSnapshots(state)).toEqual([
-      expect.objectContaining({
-        id: codexId,
-        status: 'unavailable',
-        completionId: 'done',
-      }),
-    ]);
 
     state = reduceSessionState(state, {
       type: 'provider-health',
@@ -610,16 +601,6 @@ describe('selectors and provider health', () => {
       },
     ]);
 
-    expect(
-      Object.fromEntries(
-        selectVisibleSessionSnapshots(state).map(({ id, status }) => [id, status]),
-      ),
-    ).toEqual({
-      [workingId]: 'unavailable',
-      [waitingId]: 'unavailable',
-      [errorId]: 'unavailable',
-      [unreadId]: 'unavailable',
-    });
     expect(selectSession(state, workingId)?.status).toBe('working');
     expect(selectSession(state, waitingId)?.status).toBe('needs-input');
     expect(selectSession(state, errorId)?.status).toBe('error');
@@ -634,9 +615,7 @@ describe('selectors and provider health', () => {
       status: 'error',
       timestamp: 210,
     });
-    expect(
-      selectVisibleSessionSnapshots(state).every(({ status }) => status === 'unavailable'),
-    ).toBe(true);
+    expect(selectProviderHealth(state, 'codex').status).toBe('error');
 
     state = reduceSessionState(state, {
       type: 'provider-health',
@@ -644,17 +623,7 @@ describe('selectors and provider health', () => {
       status: 'available',
       timestamp: 220,
     });
-    expect(
-      Object.fromEntries(
-        selectVisibleSessionSnapshots(state).map(({ id, status }) => [id, status]),
-      ),
-    ).toEqual({
-      [workingId]: 'working',
-      [waitingId]: 'needs-input',
-      [errorId]: 'error',
-      [unreadId]: 'unread',
-    });
-    expect(selectVisibleSessionSnapshots(state).map(({ id }) => id)).not.toContain(idleId);
+    expect(selectSessionSnapshots(state).map(({ id }) => id)).toContain(idleId);
   });
 });
 

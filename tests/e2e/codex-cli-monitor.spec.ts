@@ -155,7 +155,7 @@ process.stdin.on('data', chunk => {
       .poll(() =>
         overlay.evaluate(async () => (await window.agentStatusTilesOverlay.getState()).sessions),
       )
-      .toEqual([]);
+      .toMatchObject([{ id: 'codex:22222222-2222-7222-8222-222222222222', status: 'idle' }]);
     await appendFile(
       desktopPath,
       line('2026-09-15T10:00:03.000Z', 'event_msg', {
@@ -192,7 +192,7 @@ process.stdin.on('data', chunk => {
           ),
         ),
       )
-      .toEqual(['desktop-project']);
+      .toEqual(['desktop-project', 'cli-project']);
     const persisted = await loadSessionState(userDataDir);
     expect(persisted.monitoring.partitions['codex:desktop'].enabled).toBe(true);
     expect(persisted.monitoring.partitions['codex:cli'].enabled).toBe(true);
@@ -212,10 +212,12 @@ process.stdin.on('data', chunk => {
           ),
         ),
       )
-      .toEqual(['cli-project']);
-    expect((await loadSessionState(userDataDir)).monitoring.owners[`codex:${nativeId}`]).toBe(
-      'codex:cli',
-    );
+      .toEqual(['cli-project', 'desktop-project']);
+    expect(
+      (await loadSessionState(userDataDir)).monitoring.owners[
+        'codex:33333333-3333-7333-8333-333333333333'
+      ],
+    ).toBe('codex:cli');
     const cliFileBefore = await readFile(cliPath, 'utf8');
     await cli.getByRole('button', { name: 'Actions for Codex CLI' }).click();
     await settings.getByRole('menuitem', { name: 'Disconnect' }).click();

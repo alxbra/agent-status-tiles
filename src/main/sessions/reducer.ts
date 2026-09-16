@@ -289,7 +289,7 @@ export function reduceSessionState(state: SessionState, event: SessionEvent): Se
       }
       return replaceRecord(state, event.sessionId, {
         ...previous,
-        updatedAt: Math.max(previous.updatedAt, event.timestamp),
+        updatedAt: previous.updatedAt,
         acknowledgedCompletionId: event.expectedCompletionId,
       });
     }
@@ -297,7 +297,7 @@ export function reduceSessionState(state: SessionState, event: SessionEvent): Se
       if (!previous.isFailed || previous.isErrorDismissed) return state;
       return replaceRecord(state, event.sessionId, {
         ...previous,
-        updatedAt: Math.max(previous.updatedAt, event.timestamp),
+        updatedAt: previous.updatedAt,
         isErrorDismissed: true,
       });
     }
@@ -313,26 +313,6 @@ export function selectSessionSnapshots(state: SessionState): readonly SessionSna
   return state.order.flatMap((id) => {
     const record = ownSession(state.sessions, id);
     return record === undefined ? [] : [snapshotOf(record)];
-  });
-}
-
-export function selectVisibleSessionSnapshots(state: SessionState): readonly SessionSnapshot[] {
-  return state.order.flatMap((id) => {
-    const record = ownSession(state.sessions, id);
-    if (
-      record === undefined ||
-      !record.isTopLevel ||
-      record.isArchived ||
-      record.status === 'idle'
-    ) {
-      return [];
-    }
-
-    const snapshot = snapshotOf(record);
-    const health = state.providerHealth[record.provider].status;
-    return health === 'unavailable' || health === 'error'
-      ? [{ ...snapshot, status: 'unavailable' }]
-      : [snapshot];
   });
 }
 

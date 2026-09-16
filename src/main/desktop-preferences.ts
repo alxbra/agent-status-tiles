@@ -17,6 +17,8 @@ import { isAbsolute, join, resolve } from 'node:path';
 
 import {
   DESKTOP_PREFERENCES_SCHEMA_VERSION,
+  DEFAULT_RECENT_THREAD_LIMIT,
+  isRecentThreadLimit,
   isSerializedDisplayId,
   PRIMARY_DISPLAY_ID,
 } from '../shared/settings';
@@ -28,6 +30,7 @@ export interface DesktopPreferences {
   schemaVersion: typeof DESKTOP_PREFERENCES_SCHEMA_VERSION;
   preferredDisplayId: string;
   reduceMotion: boolean;
+  recentThreadLimit: number;
 }
 
 export type DesktopPreferencesErrorCode = 'corrupt' | 'oversized' | 'unsafe' | 'io';
@@ -47,9 +50,15 @@ export const DEFAULT_DESKTOP_PREFERENCES: DesktopPreferences = Object.freeze({
   schemaVersion: DESKTOP_PREFERENCES_SCHEMA_VERSION,
   preferredDisplayId: PRIMARY_DISPLAY_ID,
   reduceMotion: false,
+  recentThreadLimit: DEFAULT_RECENT_THREAD_LIMIT,
 });
 
-const PREFERENCES_KEYS = ['schemaVersion', 'preferredDisplayId', 'reduceMotion'] as const;
+const PREFERENCES_KEYS = [
+  'schemaVersion',
+  'preferredDisplayId',
+  'reduceMotion',
+  'recentThreadLimit',
+] as const;
 const NO_FOLLOW = constants.O_NOFOLLOW ?? 0;
 const NONBLOCK = constants.O_NONBLOCK ?? 0;
 
@@ -62,20 +71,19 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function hasExactKeys(value: Record<string, unknown>): boolean {
+  const allowed = value.schemaVersion === 1 ? PREFERENCES_KEYS.slice(0, 3) : PREFERENCES_KEYS;
   const keys = Object.keys(value);
-  return (
-    keys.length === PREFERENCES_KEYS.length &&
-    keys.every((key) => PREFERENCES_KEYS.includes(key as never))
-  );
+  return keys.length === allowed.length && keys.every((key) => allowed.includes(key as never));
 }
 
 function decodePreferences(value: unknown): DesktopPreferences {
   if (
     !isRecord(value) ||
     !hasExactKeys(value) ||
-    value.schemaVersion !== DESKTOP_PREFERENCES_SCHEMA_VERSION ||
+    (value.schemaVersion !== 1 && value.schemaVersion !== DESKTOP_PREFERENCES_SCHEMA_VERSION) ||
     !isSerializedDisplayId(value.preferredDisplayId) ||
-    typeof value.reduceMotion !== 'boolean'
+    typeof value.reduceMotion !== 'boolean' ||
+    (value.schemaVersion === 2 && !isRecentThreadLimit(value.recentThreadLimit))
   ) {
     throw new DesktopPreferencesError('corrupt', 'Desktop preferences are malformed.');
   }
@@ -84,6 +92,8 @@ function decodePreferences(value: unknown): DesktopPreferences {
     schemaVersion: DESKTOP_PREFERENCES_SCHEMA_VERSION,
     preferredDisplayId: value.preferredDisplayId,
     reduceMotion: value.reduceMotion,
+    recentThreadLimit:
+      value.schemaVersion === 1 ? DEFAULT_RECENT_THREAD_LIMIT : (value.recentThreadLimit as number),
   };
 }
 
@@ -294,6 +304,15 @@ export class DesktopPreferencesStore {
       ...this.preferences,
       reduceMotion,
     };
+    saveDesktopPreferences(this.userDataPath, next);
+    this.preferences = next;
+    return this.get();
+  }
+
+  setRecentThreadLimit(recentThreadLimit: number): DesktopPreferences {
+    if (!isRecentThreadLimit(recentThreadLimit))
+      throw new DesktopPreferencesError('corrupt', 'Recent thread limit is invalid.');
+    const next: DesktopPreferences = { ...this.preferences, recentThreadLimit };
     saveDesktopPreferences(this.userDataPath, next);
     this.preferences = next;
     return this.get();

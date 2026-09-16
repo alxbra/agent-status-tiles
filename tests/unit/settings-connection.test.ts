@@ -34,6 +34,7 @@ describe('settings connection boundary', () => {
       selectedDisplayId: 'primary',
       launchAtLogin: false,
       reduceMotion: false,
+      recentThreadLimit: 5,
     };
     expect(isSettingsState(state)).toBe(true);
     expect(

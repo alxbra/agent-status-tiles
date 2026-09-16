@@ -71,7 +71,12 @@ describe('Codex CLI monitor', () => {
         expect.objectContaining({ includeArchived: true }),
       );
       expect(discovery.sources).toMatchObject([
-        { nativeSessionId: nativeId, title: 'cli-project', canOpen: false },
+        {
+          nativeSessionId: '22222222-2222-7222-8222-222222222222',
+          legacySessionId: nativeId,
+          title: 'cli-project',
+          canOpen: false,
+        },
       ]);
       const captured = await monitor.capture(discovery.sources);
       await appendFile(

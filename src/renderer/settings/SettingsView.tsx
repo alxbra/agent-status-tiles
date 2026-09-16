@@ -53,12 +53,14 @@ export interface SettingsViewProps {
   selectedDisplayId: string;
   launchAtLogin: boolean;
   reduceMotion: boolean;
+  recentThreadLimit: number;
   error?: string;
   onConnect?: (connection: SettingsConnectionKey) => void | Promise<void>;
   onDisconnect?: (connection: SettingsConnectionKey) => void | Promise<void>;
   onDisplayChange: (displayId: string) => void | Promise<void>;
   onLaunchAtLoginChange: (enabled: boolean) => void | Promise<void>;
   onReduceMotionChange: (enabled: boolean) => void | Promise<void>;
+  onRecentThreadLimitChange: (limit: number) => void | Promise<void>;
   onOpenAdvanced?: () => void;
   advancedDisabled?: boolean;
 }
@@ -157,7 +159,11 @@ function SettingRow({
 }
 
 type SettingsAction =
-  `provider:${SettingsConnectionKey}` | 'display' | 'launch-at-login' | 'reduce-motion';
+  | `provider:${SettingsConnectionKey}`
+  | 'display'
+  | 'launch-at-login'
+  | 'reduce-motion'
+  | 'recent-threads';
 
 type SettingsActionRunner = (
   action: SettingsAction,
@@ -171,12 +177,14 @@ export function SettingsView({
   selectedDisplayId,
   launchAtLogin,
   reduceMotion,
+  recentThreadLimit,
   error,
   onConnect,
   onDisconnect,
   onDisplayChange,
   onLaunchAtLoginChange,
   onReduceMotionChange,
+  onRecentThreadLimitChange,
   onOpenAdvanced,
   advancedDisabled = false,
 }: SettingsViewProps): ReactElement {
@@ -254,6 +262,14 @@ export function SettingsView({
     [onReduceMotionChange, runAction],
   );
 
+  const changeRecentThreadLimit = useCallback<SettingsViewProps['onRecentThreadLimitChange']>(
+    (limit) =>
+      runAction('recent-threads', 'Could not change Recent threads. Try again.', () =>
+        onRecentThreadLimitChange(limit),
+      ),
+    [onRecentThreadLimitChange, runAction],
+  );
+
   const visibleError = actionError ?? error;
 
   return (
@@ -291,6 +307,24 @@ export function SettingsView({
           )}
 
           <div className="grid gap-4">
+            <SettingRow label="Recent threads">
+              <Select
+                disabled={isPending('recent-threads')}
+                onValueChange={(value) => void changeRecentThreadLimit(Number(value))}
+                value={String(recentThreadLimit)}
+              >
+                <SelectTrigger aria-label="Recent threads" size="sm">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent align="end">
+                  {Array.from({ length: 10 }, (_, index) => index + 1).map((limit) => (
+                    <SelectItem key={limit} value={String(limit)}>
+                      {limit}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </SettingRow>
             <SettingRow label="Display">
               <Select
                 disabled={displays.length === 0 || isPending('display')}

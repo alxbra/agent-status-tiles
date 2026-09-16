@@ -38,6 +38,7 @@ export interface QualifiedCodexCatalog {
     nativeId: string;
     sessionId: string;
     projectBasename: string;
+    name?: string;
     rolloutPath?: string;
     updatedAt: number;
     isArchived: boolean;
@@ -48,6 +49,7 @@ export interface QualifiedCodexCatalog {
 interface DiscoveredFile {
   path: string;
   nativeSessionId: string;
+  rolloutSessionId: string;
   isArchived: boolean;
 }
 
@@ -167,15 +169,24 @@ export class CodexSurfaceMonitor implements ProviderSurfaceMonitor {
     coverageIncomplete ||= qualified.issues.length > 0;
 
     const files = new Map<string, DiscoveredFile>();
-    const seenSessions = new Set<string>();
+    const seenThreads = new Set<string>();
     const sources: RuntimeMonitorSource[] = [];
     // Keep active sources before archive-only metadata sources so the reader's
     // continuation index remains stable while archived files are never replayed.
     const orderedSessions = [...qualified.sessions].sort(
       (left, right) => Number(left.isArchived) - Number(right.isArchived),
     );
+    const pathCounts = new Map<string, number>();
+    for (const session of orderedSessions) {
+      if (session.rolloutPath !== undefined)
+        pathCounts.set(session.rolloutPath, (pathCounts.get(session.rolloutPath) ?? 0) + 1);
+    }
     for (const session of orderedSessions) {
       if (session.rolloutPath === undefined) {
+        coverageIncomplete = true;
+        continue;
+      }
+      if ((pathCounts.get(session.rolloutPath) ?? 0) > 1) {
         coverageIncomplete = true;
         continue;
       }
@@ -185,17 +196,16 @@ export class CodexSurfaceMonitor implements ProviderSurfaceMonitor {
         coverageIncomplete = true;
         continue;
       }
-      const candidates = new Set([session.nativeId, session.sessionId]);
-      if (!candidates.has(meta.nativeSessionId)) {
+      if (meta.nativeSessionId !== session.sessionId) {
         coverageIncomplete = true;
         continue;
       }
-      const nativeSessionId = meta.nativeSessionId;
-      if (seenSessions.has(nativeSessionId)) {
+      const nativeSessionId = session.nativeId;
+      if (seenThreads.has(nativeSessionId)) {
         coverageIncomplete = true;
         continue;
       }
-      seenSessions.add(nativeSessionId);
+      seenThreads.add(nativeSessionId);
       const root = session.isArchived ? this.archivedSessionsRoot : this.sessionsRoot;
       const cursorId = runtimeSourceId(cursorKeyForPath(root, session.rolloutPath));
       const id = session.isArchived ? `archived:${cursorId}` : cursorId;
@@ -203,11 +213,17 @@ export class CodexSurfaceMonitor implements ProviderSurfaceMonitor {
         coverageIncomplete = true;
         continue;
       }
-      files.set(id, { path: session.rolloutPath, nativeSessionId, isArchived: session.isArchived });
+      files.set(id, {
+        path: session.rolloutPath,
+        nativeSessionId,
+        rolloutSessionId: session.sessionId,
+        isArchived: session.isArchived,
+      });
       sources.push({
         id,
         nativeSessionId,
-        title: session.projectBasename,
+        ...(session.sessionId === nativeSessionId ? {} : { legacySessionId: session.sessionId }),
+        title: session.name ?? session.projectBasename,
         updatedAt: session.updatedAt,
         isTopLevel: true,
         isArchived: session.isArchived,
@@ -265,7 +281,8 @@ export class CodexSurfaceMonitor implements ProviderSurfaceMonitor {
       return {
         path: file.path,
         session: {
-          nativeSessionId: source.nativeSessionId,
+          nativeSessionId: file.rolloutSessionId,
+          threadId: source.nativeSessionId,
           surface: this.surface,
           isTopLevel: source.isTopLevel,
           ...(record?.activeTurnId === undefined ? {} : { activeTurnId: record.activeTurnId }),

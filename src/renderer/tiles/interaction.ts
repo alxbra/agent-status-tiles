@@ -8,9 +8,7 @@ export interface OpenSessionTarget {
 export function visibleTileSessions(
   sessions: readonly SessionSnapshot[],
 ): readonly SessionSnapshot[] {
-  return sessions.filter(
-    (session) => session.isTopLevel && !session.isArchived && session.status !== 'idle',
-  );
+  return sessions.filter((session) => session.isTopLevel && !session.isArchived);
 }
 
 /** Capture both IDs before asynchronous navigation can change the snapshot. */

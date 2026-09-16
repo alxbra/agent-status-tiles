@@ -37,6 +37,7 @@ const INITIAL_SETTINGS: SettingsState = {
   selectedDisplayId: PRIMARY_DISPLAY_ID,
   launchAtLogin: false,
   reduceMotion: false,
+  recentThreadLimit: 5,
 };
 
 export function App(): ReactElement {
@@ -104,7 +105,13 @@ export function App(): ReactElement {
         setError(undefined);
         setSettings(nextSettings);
       }}
+      onRecentThreadLimitChange={async (limit) => {
+        const nextSettings = await window.agentStatusTiles.setRecentThreadLimit(limit);
+        setError(undefined);
+        setSettings(nextSettings);
+      }}
       providers={settings.providers}
+      recentThreadLimit={settings.recentThreadLimit}
       reduceMotion={settings.reduceMotion}
       selectedDisplayId={settings.selectedDisplayId}
     />

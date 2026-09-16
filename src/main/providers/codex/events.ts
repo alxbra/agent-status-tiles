@@ -35,7 +35,7 @@ export interface CodexRolloutEvent {
 export type CodexSessionQualification = Pick<
   SessionRecord,
   'nativeSessionId' | 'surface' | 'isTopLevel' | 'activeTurnId' | 'turnKey' | 'inputRequests'
->;
+> & { threadId?: string };
 
 export interface CodexRolloutSource {
   path: string;

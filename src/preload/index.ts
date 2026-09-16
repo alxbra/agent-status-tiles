@@ -5,6 +5,7 @@ import {
   isDisplayPreferenceChangeRequest,
   isLaunchAtLoginChangeRequest,
   isReduceMotionPreferenceChangeRequest,
+  isRecentThreadLimitChangeRequest,
   isSettingsState,
   isSettingsConnectionRequest,
   isSettingsDisconnectRequest,
@@ -46,6 +47,12 @@ const api: AgentStatusTilesApi = {
       return Promise.reject(new Error('Reduce motion preference request is invalid'));
     }
     return invokeSettingsState(IPC_CHANNELS.settingsReduceMotionChange, request);
+  },
+  setRecentThreadLimit: (limit) => {
+    const request = { limit };
+    if (!isRecentThreadLimitChangeRequest(request))
+      return Promise.reject(new Error('Recent thread limit request is invalid'));
+    return invokeSettingsState(IPC_CHANNELS.settingsRecentThreadLimitChange, request);
   },
   setLaunchAtLogin: (enabled) => {
     const request = { enabled };

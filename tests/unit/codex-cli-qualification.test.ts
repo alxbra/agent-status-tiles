@@ -74,7 +74,9 @@ describe('Codex CLI catalog qualification', () => {
     ).toEqual({ kind: 'skip' });
     expect(qualifyCodexCliRecord(record({ isEphemeral: true }))).toEqual({ kind: 'skip' });
     expect(qualifyCodexCliRecord(record({ parentThreadId: 'parent' }))).toEqual({ kind: 'skip' });
-    expect(qualifyCodexCliRecord(record({ forkedFromId: 'parent' }))).toEqual({ kind: 'skip' });
+    expect(qualifyCodexCliRecord(record({ forkedFromId: 'parent' }))).toMatchObject({
+      kind: 'qualified',
+    });
     expect(
       qualifyCodexCliRecord({
         ...record(),
