@@ -6,6 +6,9 @@ import {
   isLaunchAtLoginChangeRequest,
   isReduceMotionPreferenceChangeRequest,
   isSettingsState,
+  isSettingsConnectionRequest,
+  isSettingsDisconnectRequest,
+  type SettingsConnectionKey,
   type SettingsState,
 } from '../shared/ipc';
 
@@ -15,6 +18,8 @@ export interface SettingsIpcOptions {
   setDisplayPreference: (displayId: string) => SettingsState | Promise<SettingsState>;
   setReduceMotion: (enabled: boolean) => SettingsState | Promise<SettingsState>;
   setLaunchAtLogin: (enabled: boolean) => SettingsState | Promise<SettingsState>;
+  connectSurface: (connection: SettingsConnectionKey) => SettingsState | Promise<SettingsState>;
+  disconnectSurface: (connection: SettingsConnectionKey) => SettingsState | Promise<SettingsState>;
 }
 
 function assertSettingsSender(
@@ -76,6 +81,22 @@ export function registerSettingsIpcHandlers(options: SettingsIpcOptions): () => 
     return assertState(await options.setLaunchAtLogin(payload.enabled));
   });
 
+  ipcMain.handle(IPC_CHANNELS.settingsSurfaceConnect, async (event, payload: unknown) => {
+    assertSender(event);
+    if (!isSettingsConnectionRequest(payload)) {
+      throw new Error('Connection request is invalid');
+    }
+    return assertState(await options.connectSurface(payload.connection));
+  });
+
+  ipcMain.handle(IPC_CHANNELS.settingsSurfaceDisconnect, async (event, payload: unknown) => {
+    assertSender(event);
+    if (!isSettingsDisconnectRequest(payload)) {
+      throw new Error('Disconnect request is invalid');
+    }
+    return assertState(await options.disconnectSurface(payload.connection));
+  });
+
   let isRegistered = true;
   return () => {
     if (!isRegistered) return;
@@ -85,6 +106,8 @@ export function registerSettingsIpcHandlers(options: SettingsIpcOptions): () => 
       IPC_CHANNELS.settingsDisplayChange,
       IPC_CHANNELS.settingsReduceMotionChange,
       IPC_CHANNELS.settingsLaunchAtLoginChange,
+      IPC_CHANNELS.settingsSurfaceConnect,
+      IPC_CHANNELS.settingsSurfaceDisconnect,
     ]) {
       ipcMain.removeHandler(channel);
     }

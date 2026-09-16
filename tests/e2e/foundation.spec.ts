@@ -4,6 +4,11 @@ import { spawn } from 'node:child_process';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
+import { nativeElectronE2eEnabled } from './native-focus';
+
+test.beforeEach(() => {
+  test.skip(!nativeElectronE2eEnabled(), 'Native Electron tests may take focus; opt in explicitly');
+});
 
 const projectRoot = process.cwd();
 const mainEntry = resolve(projectRoot, 'out/main/index.js');
@@ -194,8 +199,10 @@ test('wires production settings through preload, overlay state, and restart pers
     const overlay = await overlayWindow(application);
 
     await expect(page.getByRole('combobox', { name: 'Display' })).toContainText('Primary');
-    await expect(page.getByRole('button', { name: 'Connect' })).toHaveCount(2);
-    await expect(page.getByRole('button', { name: 'Connect' }).first()).toBeDisabled();
+    await expect(page.getByRole('button', { name: 'Connect' })).toHaveCount(3);
+    await expect(page.getByRole('button', { name: 'Connect' }).first()).toBeEnabled();
+    await expect(page.getByRole('button', { name: 'Connect' }).nth(1)).toBeDisabled();
+    await expect(page.getByRole('button', { name: 'Connect' }).nth(2)).toBeDisabled();
     await expect(page.getByRole('button', { name: 'Open Advanced settings' })).toBeDisabled();
     await expect(page.getByRole('switch', { name: 'Reduce motion' })).not.toBeChecked();
     const settings = await page.evaluate(() => window.agentStatusTiles.getSettings());

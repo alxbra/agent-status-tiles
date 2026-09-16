@@ -28,5 +28,8 @@ Node.js 24), then install dependencies with `pnpm install`. Use `pnpm dev` for
 the Electron development shell. The foundation checks are `pnpm format:check`,
 `pnpm lint`, `pnpm typecheck`, and `pnpm test`. Run `pnpm test:e2e` to build and
 exercise the packaged Electron entry point with an isolated temporary
-user-data directory. `pnpm run pack` creates an unsigned unpacked application
-under `release/`.
+user-data directory. Local runs skip native Electron tests because their windows
+can take focus; browser fixture tests still run headlessly. Native tests run in
+GitHub Actions, or locally only with explicit
+`AGENT_STATUS_TILES_ALLOW_FOCUS_E2E=1 pnpm test:e2e`. `pnpm run pack` creates an
+unsigned unpacked application under `release/`.

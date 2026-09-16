@@ -20,8 +20,9 @@ import { IPC_CHANNELS, type SettingsState } from '../../src/shared/ipc';
 function settingsState(): SettingsState {
   return {
     providers: {
-      codex: { status: 'unavailable', canConnect: false, canDisconnect: false },
-      claude: { status: 'unavailable', canConnect: false, canDisconnect: false },
+      codexDesktop: { status: 'disconnected', canConnect: true, canDisconnect: false },
+      codexCli: { status: 'unavailable', canConnect: false, canDisconnect: false },
+      claudeCode: { status: 'unavailable', canConnect: false, canDisconnect: false },
     },
     displays: [
       { id: 'primary', label: 'Primary' },
@@ -63,6 +64,8 @@ describe('settings IPC', () => {
       }),
       setReduceMotion: vi.fn(() => settingsState()),
       setLaunchAtLogin: vi.fn(() => settingsState()),
+      connectSurface: vi.fn(() => settingsState()),
+      disconnectSurface: vi.fn(() => settingsState()),
     };
     const cleanup = registerSettingsIpcHandlers(options);
     const mainFrame = window.webContents.mainFrame;
@@ -73,6 +76,8 @@ describe('settings IPC', () => {
       IPC_CHANNELS.settingsDisplayChange,
       IPC_CHANNELS.settingsReduceMotionChange,
       IPC_CHANNELS.settingsLaunchAtLoginChange,
+      IPC_CHANNELS.settingsSurfaceConnect,
+      IPC_CHANNELS.settingsSurfaceDisconnect,
     ]) {
       const handler = electronMocks.handlers.get(channel)!;
       await expect(
@@ -113,10 +118,43 @@ describe('settings IPC', () => {
         }),
       ),
     ).rejects.toThrow('Reduce motion preference request is invalid');
+    await expect(
+      Promise.resolve().then(() =>
+        electronMocks.handlers.get(IPC_CHANNELS.settingsSurfaceConnect)!(validEvent, {
+          connection: 'codexDesktop',
+          path: '/private',
+        }),
+      ),
+    ).rejects.toThrow('Connection request is invalid');
+    await expect(
+      Promise.resolve().then(() =>
+        electronMocks.handlers.get(IPC_CHANNELS.settingsSurfaceDisconnect)!(validEvent, {
+          connection: 'codexDesktop',
+          confirmed: false,
+        }),
+      ),
+    ).rejects.toThrow('Disconnect request is invalid');
+    await expect(
+      Promise.resolve().then(() =>
+        electronMocks.handlers.get(IPC_CHANNELS.settingsSurfaceConnect)!(validEvent, {
+          connection: 'codexDesktop',
+        }),
+      ),
+    ).resolves.toEqual(settingsState());
+    await expect(
+      Promise.resolve().then(() =>
+        electronMocks.handlers.get(IPC_CHANNELS.settingsSurfaceDisconnect)!(validEvent, {
+          connection: 'codexDesktop',
+          confirmed: true,
+        }),
+      ),
+    ).resolves.toEqual(settingsState());
+    expect(options.connectSurface).toHaveBeenCalledWith('codexDesktop');
+    expect(options.disconnectSurface).toHaveBeenCalledWith('codexDesktop');
 
     cleanup();
     cleanup();
-    expect(electronMocks.ipcMain.removeHandler).toHaveBeenCalledTimes(4);
+    expect(electronMocks.ipcMain.removeHandler).toHaveBeenCalledTimes(6);
   });
 
   it('publishes only validated state to the current Settings window', async () => {

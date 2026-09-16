@@ -1,6 +1,10 @@
 import { useEffect, useState, type ReactElement } from 'react';
 
-import { PRIMARY_DISPLAY_ID, type SettingsState } from '../shared/settings';
+import {
+  PRIMARY_DISPLAY_ID,
+  type SettingsConnectionKey,
+  type SettingsState,
+} from '../shared/settings';
 import { SettingsView, type SettingsProviderState } from './settings';
 import { SettingsLoadSequence } from './settings-load-sequence';
 
@@ -25,8 +29,9 @@ const unavailableProvider: SettingsProviderState = {
 
 const INITIAL_SETTINGS: SettingsState = {
   providers: {
-    codex: unavailableProvider,
-    claude: unavailableProvider,
+    codexDesktop: unavailableProvider,
+    codexCli: unavailableProvider,
+    claudeCode: unavailableProvider,
   },
   displays: [{ id: PRIMARY_DISPLAY_ID, label: 'Primary' }],
   selectedDisplayId: PRIMARY_DISPLAY_ID,
@@ -74,6 +79,16 @@ export function App(): ReactElement {
       displays={settings.displays}
       error={error ?? settings.error}
       launchAtLogin={settings.launchAtLogin}
+      onConnect={async (connection: SettingsConnectionKey) => {
+        const nextSettings = await window.agentStatusTiles.connectSurface(connection);
+        setError(undefined);
+        setSettings(nextSettings);
+      }}
+      onDisconnect={async (connection: SettingsConnectionKey) => {
+        const nextSettings = await window.agentStatusTiles.disconnectSurface(connection, true);
+        setError(undefined);
+        setSettings(nextSettings);
+      }}
       onDisplayChange={async (displayId) => {
         const nextSettings = await window.agentStatusTiles.setDisplayPreference(displayId);
         setError(undefined);

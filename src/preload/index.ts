@@ -6,6 +6,8 @@ import {
   isLaunchAtLoginChangeRequest,
   isReduceMotionPreferenceChangeRequest,
   isSettingsState,
+  isSettingsConnectionRequest,
+  isSettingsDisconnectRequest,
   type AgentStatusTilesApi,
   type SettingsState,
 } from '../shared/ipc';
@@ -51,6 +53,20 @@ const api: AgentStatusTilesApi = {
       return Promise.reject(new Error('Launch-at-login request is invalid'));
     }
     return invokeSettingsState(IPC_CHANNELS.settingsLaunchAtLoginChange, request);
+  },
+  connectSurface: (connection) => {
+    const request = { connection };
+    if (!isSettingsConnectionRequest(request)) {
+      return Promise.reject(new Error('Connection request is invalid'));
+    }
+    return invokeSettingsState(IPC_CHANNELS.settingsSurfaceConnect, request);
+  },
+  disconnectSurface: (connection, confirmed) => {
+    const request = { connection, confirmed };
+    if (!isSettingsDisconnectRequest(request)) {
+      return Promise.reject(new Error('Disconnect request is invalid'));
+    }
+    return invokeSettingsState(IPC_CHANNELS.settingsSurfaceDisconnect, request);
   },
 };
 

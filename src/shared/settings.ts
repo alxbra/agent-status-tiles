@@ -1,5 +1,3 @@
-import type { Provider } from './session';
-
 /** The synthetic selection that always resolves to the current primary display. */
 export const PRIMARY_DISPLAY_ID = 'primary';
 
@@ -9,6 +7,8 @@ export const MAX_DISPLAY_LABEL_BYTES = 256;
 
 export type SettingsProviderConnectionStatus =
   'connected' | 'connecting' | 'disconnected' | 'unavailable';
+
+export type SettingsConnectionKey = 'codexDesktop' | 'codexCli' | 'claudeCode';
 
 export interface SettingsProviderState {
   status: SettingsProviderConnectionStatus;
@@ -23,7 +23,7 @@ export interface SettingsDisplayOption {
 
 /** The complete state projection exposed to the Settings renderer. */
 export interface SettingsState {
-  providers: Readonly<Record<Provider, SettingsProviderState>>;
+  providers: Readonly<Record<SettingsConnectionKey, SettingsProviderState>>;
   displays: readonly SettingsDisplayOption[];
   selectedDisplayId: string;
   launchAtLogin: boolean;
@@ -44,13 +44,21 @@ export interface LaunchAtLoginChangeRequest {
   enabled: boolean;
 }
 
+export interface SettingsConnectionRequest {
+  connection: SettingsConnectionKey;
+}
+
+export interface SettingsDisconnectRequest extends SettingsConnectionRequest {
+  confirmed: true;
+}
+
 const CONNECTION_STATUSES = new Set<SettingsProviderConnectionStatus>([
   'connected',
   'connecting',
   'disconnected',
   'unavailable',
 ]);
-const PROVIDER_KEYS = ['codex', 'claude'] as const;
+const PROVIDER_KEYS = ['codexDesktop', 'codexCli', 'claudeCode'] as const;
 const STATE_KEYS = [
   'providers',
   'displays',
@@ -63,6 +71,8 @@ const PROVIDER_STATE_KEYS = ['status', 'canConnect', 'canDisconnect'] as const;
 const DISPLAY_KEYS = ['id', 'label'] as const;
 const DISPLAY_REQUEST_KEYS = ['displayId'] as const;
 const BOOLEAN_REQUEST_KEYS = ['enabled'] as const;
+const CONNECTION_REQUEST_KEYS = ['connection'] as const;
+const DISCONNECT_REQUEST_KEYS = ['connection', 'confirmed'] as const;
 const CONTROL_CHARACTER_PATTERN = /\p{Cc}/u;
 const MAX_DISPLAY_ID_BYTES = 128;
 
@@ -102,6 +112,27 @@ function isProviderState(value: unknown): value is SettingsProviderState {
     CONNECTION_STATUSES.has(value.status as SettingsProviderConnectionStatus) &&
     typeof value.canConnect === 'boolean' &&
     typeof value.canDisconnect === 'boolean'
+  );
+}
+
+export function isSettingsConnectionKey(value: unknown): value is SettingsConnectionKey {
+  return typeof value === 'string' && PROVIDER_KEYS.some((key) => key === value);
+}
+
+export function isSettingsConnectionRequest(value: unknown): value is SettingsConnectionRequest {
+  return (
+    isRecord(value) &&
+    hasExactKeys(value, CONNECTION_REQUEST_KEYS) &&
+    isSettingsConnectionKey(value.connection)
+  );
+}
+
+export function isSettingsDisconnectRequest(value: unknown): value is SettingsDisconnectRequest {
+  return (
+    isRecord(value) &&
+    hasExactKeys(value, DISCONNECT_REQUEST_KEYS) &&
+    isSettingsConnectionKey(value.connection) &&
+    value.confirmed === true
   );
 }
 

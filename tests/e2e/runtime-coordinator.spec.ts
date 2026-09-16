@@ -3,13 +3,17 @@ import { _electron as electron, type ElectronApplication, type Page } from 'play
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-
 import {
   createInitialMonitoringState,
   saveSessionState,
 } from '../../src/main/sessions/persistence';
 import { reduceSessionState } from '../../src/main/sessions/reducer';
 import { createInitialSessionState, makeSessionId } from '../../src/shared/session';
+import { nativeElectronE2eEnabled } from './native-focus';
+
+test.beforeEach(() => {
+  test.skip(!nativeElectronE2eEnabled(), 'Native Electron tests may take focus; opt in explicitly');
+});
 
 const projectRoot = process.cwd();
 const mainEntry = resolve(projectRoot, 'out/main/index.js');
