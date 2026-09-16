@@ -8,6 +8,11 @@ import {
   loadSessionState,
   saveSessionState,
 } from '../../src/main/sessions/persistence';
+import { nativeElectronE2eEnabled } from './native-focus';
+
+test.beforeEach(() => {
+  test.skip(!nativeElectronE2eEnabled(), 'Native Electron tests may take focus; opt in explicitly');
+});
 
 const projectRoot = process.cwd();
 const mainEntry = resolve(projectRoot, 'out/main/index.js');
@@ -219,6 +224,117 @@ process.stdin.on('data', chunk => {
         ),
       )
       .toContain('unread');
+    await expect
+      .poll(() =>
+        application!.windows().some((window) => window.url().includes('/renderer/index.html')),
+      )
+      .toBe(true);
+    const settings = application
+      .windows()
+      .find((window) => window.url().includes('/renderer/index.html'));
+    if (settings === undefined) throw new Error('Expected native Settings window');
+    const desktop = settings.getByRole('group', { name: 'Codex Desktop connection' });
+    const cli = settings.getByRole('group', { name: 'Codex CLI connection' });
+    await expect(desktop.getByRole('button', { name: 'Actions for Codex Desktop' })).toBeVisible();
+    await expect(cli.getByRole('button', { name: 'Connect' })).toBeDisabled();
+    await desktop.getByRole('button', { name: 'Actions for Codex Desktop' }).click();
+    await settings.getByRole('menuitem', { name: 'Disconnect' }).click();
+    const confirmation = settings.getByRole('alertdialog');
+    await expect(confirmation).toContainText(
+      "Disconnect removes this app's local status history but does not change Codex data.",
+    );
+    await confirmation.getByRole('button', { name: 'Cancel' }).click();
+    expect(
+      (await loadSessionState(userDataDir)).monitoring.partitions['codex:desktop'].enabled,
+    ).toBe(true);
+    const codexFileBefore = await readFile(rolloutPath, 'utf8');
+    await desktop.getByRole('button', { name: 'Actions for Codex Desktop' }).click();
+    await settings.getByRole('menuitem', { name: 'Disconnect' }).click();
+    await settings.getByRole('alertdialog').getByRole('button', { name: 'Disconnect' }).click();
+    await expect
+      .poll(
+        async () =>
+          (await loadSessionState(userDataDir)).monitoring.partitions['codex:desktop'].enabled,
+      )
+      .toBe(false);
+    const disconnected = (await loadSessionState(userDataDir)).monitoring.partitions[
+      'codex:desktop'
+    ];
+    expect(disconnected.sessions).toEqual({});
+    expect(disconnected.cursors).toEqual({});
+    expect(await readFile(rolloutPath, 'utf8')).toBe(codexFileBefore);
+    await expect
+      .poll(() =>
+        restartedOverlay.evaluate(
+          async () => (await window.agentStatusTilesOverlay.getState()).sessions,
+        ),
+      )
+      .toEqual([]);
+    await desktop.getByRole('button', { name: 'Connect' }).click();
+    await expect
+      .poll(
+        async () =>
+          (await loadSessionState(userDataDir)).monitoring.partitions['codex:desktop'].baseline
+            .status,
+      )
+      .toBe('ready');
+    await expect
+      .poll(() =>
+        restartedOverlay.evaluate(
+          async () => (await window.agentStatusTilesOverlay.getState()).sessions,
+        ),
+      )
+      .toEqual([]);
+  } finally {
+    await application?.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('enabled Desktop connection remains disconnectable when its reader is lost', async () => {
+  test.skip(process.platform !== 'darwin', 'native overlay targets macOS');
+  const root = await mkdtemp(join(tmpdir(), 'agent-status-tiles-lost-reader-e2e-'));
+  const userDataDir = join(root, 'user-data');
+  const sessionsRoot = join(root, 'sessions');
+  let application: ElectronApplication | undefined;
+  try {
+    await mkdir(userDataDir);
+    await mkdir(sessionsRoot);
+    const monitoring = createInitialMonitoringState();
+    monitoring.partitions['codex:desktop'].enabled = true;
+    await saveSessionState(userDataDir, monitoring);
+    application = await electron.launch({
+      args: [`--user-data-dir=${userDataDir}`, mainEntry],
+      cwd: projectRoot,
+      env: {
+        ...process.env,
+        NODE_ENV: 'test',
+        AGENT_STATUS_TILES_TEST_CODEX_BINARY: join(root, 'missing-codex'),
+        AGENT_STATUS_TILES_TEST_CODEX_SESSIONS_ROOT: sessionsRoot,
+      },
+    });
+    await expect
+      .poll(() =>
+        application!.windows().some((window) => window.url().includes('/renderer/index.html')),
+      )
+      .toBe(true);
+    const settings = application
+      .windows()
+      .find((window) => window.url().includes('/renderer/index.html'));
+    if (settings === undefined) throw new Error('Expected native Settings window');
+    const desktop = settings.getByRole('group', { name: 'Codex Desktop connection' });
+    await expect(desktop).toContainText('Unavailable');
+    await expect(settings.getByRole('alert')).toContainText('coverage is incomplete');
+    await desktop.getByRole('button', { name: 'Actions for Codex Desktop' }).click();
+    await settings.getByRole('menuitem', { name: 'Disconnect' }).click();
+    await settings.getByRole('alertdialog').getByRole('button', { name: 'Disconnect' }).click();
+    await expect
+      .poll(
+        async () =>
+          (await loadSessionState(userDataDir)).monitoring.partitions['codex:desktop'].enabled,
+      )
+      .toBe(false);
+    await expect(desktop.getByRole('button', { name: 'Connect' })).toBeEnabled();
   } finally {
     await application?.close();
     await rm(root, { recursive: true, force: true });

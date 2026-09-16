@@ -1,12 +1,22 @@
 import { ChevronRight, MoreHorizontal } from 'lucide-react';
 import { useCallback, useRef, useState, type ReactElement } from 'react';
 
-import type { Provider } from '../../shared/session';
 import type {
   SettingsDisplayOption,
+  SettingsConnectionKey,
   SettingsProviderConnectionStatus,
   SettingsProviderState,
 } from '../../shared/settings';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '../components/ui/alert-dialog';
 import { Button } from '../components/ui/button';
 import {
   DropdownMenu,
@@ -23,23 +33,29 @@ import {
 } from '../components/ui/select';
 import { Switch } from '../components/ui/switch';
 
-const PROVIDER_LABEL: Readonly<Record<Provider, string>> = {
-  codex: 'Codex',
-  claude: 'Claude Code',
+const CONNECTION_LABEL: Readonly<Record<SettingsConnectionKey, string>> = {
+  codexDesktop: 'Codex Desktop',
+  codexCli: 'Codex CLI',
+  claudeCode: 'Claude Code',
 };
+const CONNECTION_KEYS: readonly SettingsConnectionKey[] = [
+  'codexDesktop',
+  'codexCli',
+  'claudeCode',
+];
 
 export type ProviderConnectionStatus = SettingsProviderConnectionStatus;
 export type { SettingsDisplayOption, SettingsProviderState };
 
 export interface SettingsViewProps {
-  providers: Readonly<Record<Provider, SettingsProviderState>>;
+  providers: Readonly<Record<SettingsConnectionKey, SettingsProviderState>>;
   displays: readonly SettingsDisplayOption[];
   selectedDisplayId: string;
   launchAtLogin: boolean;
   reduceMotion: boolean;
   error?: string;
-  onConnect?: (provider: Provider) => void | Promise<void>;
-  onDisconnect?: (provider: Provider) => void | Promise<void>;
+  onConnect?: (connection: SettingsConnectionKey) => void | Promise<void>;
+  onDisconnect?: (connection: SettingsConnectionKey) => void | Promise<void>;
   onDisplayChange: (displayId: string) => void | Promise<void>;
   onLaunchAtLoginChange: (enabled: boolean) => void | Promise<void>;
   onReduceMotionChange: (enabled: boolean) => void | Promise<void>;
@@ -48,24 +64,32 @@ export interface SettingsViewProps {
 }
 
 function ProviderAction({
-  provider,
+  connection,
   state,
   isPending,
+  canDisconnect,
   onConnect,
-  onDisconnect,
+  onRequestDisconnect,
 }: {
-  provider: Provider;
+  connection: SettingsConnectionKey;
   state: SettingsProviderState;
   isPending: (action: SettingsAction) => boolean;
-  onConnect?: (provider: Provider) => void | Promise<void>;
-  onDisconnect?: (provider: Provider) => void | Promise<void>;
+  canDisconnect: boolean;
+  onConnect?: (connection: SettingsConnectionKey) => void | Promise<void>;
+  onRequestDisconnect: (connection: SettingsConnectionKey) => void;
 }): ReactElement {
-  const label = PROVIDER_LABEL[provider];
-  const isProviderPending = isPending(`provider:${provider}`);
-  if (state.status === 'connected') {
+  const label = CONNECTION_LABEL[connection];
+  const isProviderPending = isPending(`provider:${connection}`);
+  if (state.status === 'connected' || state.canDisconnect) {
+    const statusLabel =
+      state.status === 'connected'
+        ? 'Connected'
+        : state.status === 'connecting'
+          ? 'Connecting…'
+          : 'Unavailable';
     return (
       <div className="flex items-center gap-2">
-        <span className="text-sm text-muted-foreground">Connected</span>
+        <span className="text-sm text-muted-foreground">{statusLabel}</span>
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <Button
@@ -79,9 +103,10 @@ function ProviderAction({
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end">
             <DropdownMenuItem
-              disabled={!state.canDisconnect || onDisconnect === undefined || isProviderPending}
+              disabled={!state.canDisconnect || !canDisconnect || isProviderPending}
               onSelect={() => {
-                if (onDisconnect !== undefined) void onDisconnect(provider);
+                if (state.canDisconnect && canDisconnect && !isProviderPending)
+                  onRequestDisconnect(connection);
               }}
             >
               {isProviderPending ? 'Working…' : 'Disconnect'}
@@ -97,7 +122,7 @@ function ProviderAction({
     <Button
       disabled={isConnecting || !state.canConnect || onConnect === undefined}
       onClick={() => {
-        if (onConnect !== undefined) void onConnect(provider);
+        if (onConnect !== undefined) void onConnect(connection);
       }}
       size="sm"
       type="button"
@@ -131,7 +156,8 @@ function SettingRow({
   );
 }
 
-type SettingsAction = `provider:${Provider}` | 'display' | 'launch-at-login' | 'reduce-motion';
+type SettingsAction =
+  `provider:${SettingsConnectionKey}` | 'display' | 'launch-at-login' | 'reduce-motion';
 
 type SettingsActionRunner = (
   action: SettingsAction,
@@ -157,6 +183,7 @@ export function SettingsView({
   const pendingRef = useRef<Set<SettingsAction>>(new Set());
   const [pendingActions, setPendingActions] = useState<ReadonlySet<SettingsAction>>(new Set());
   const [actionError, setActionError] = useState<string>();
+  const [disconnectTarget, setDisconnectTarget] = useState<SettingsConnectionKey>();
 
   const runAction = useCallback<SettingsActionRunner>((action, failureMessage, operation) => {
     if (pendingRef.current.has(action)) return;
@@ -180,24 +207,24 @@ export function SettingsView({
   );
 
   const connect = useCallback(
-    (provider: Provider): void => {
+    (connection: SettingsConnectionKey): void => {
       if (onConnect === undefined) return;
       runAction(
-        `provider:${provider}`,
-        `Could not connect to ${PROVIDER_LABEL[provider]}. Try again.`,
-        () => onConnect(provider),
+        `provider:${connection}`,
+        `Could not connect to ${CONNECTION_LABEL[connection]}. Try again.`,
+        () => onConnect(connection),
       );
     },
     [onConnect, runAction],
   );
 
   const disconnect = useCallback(
-    (provider: Provider): void => {
+    (connection: SettingsConnectionKey): void => {
       if (onDisconnect === undefined) return;
       runAction(
-        `provider:${provider}`,
-        `Could not disconnect ${PROVIDER_LABEL[provider]}. Try again.`,
-        () => onDisconnect(provider),
+        `provider:${connection}`,
+        `Could not disconnect ${CONNECTION_LABEL[connection]}. Try again.`,
+        () => onDisconnect(connection),
       );
     },
     [onDisconnect, runAction],
@@ -227,7 +254,7 @@ export function SettingsView({
     [onReduceMotionChange, runAction],
   );
 
-  const visibleError = error ?? actionError;
+  const visibleError = actionError ?? error;
 
   return (
     <div className="min-h-svh w-full bg-background text-foreground" data-testid="settings-view">
@@ -236,20 +263,21 @@ export function SettingsView({
 
         <div className="grid gap-7">
           <div aria-label="Providers" className="grid gap-4" role="group">
-            {(Object.keys(PROVIDER_LABEL) as Provider[]).map((provider) => (
+            {CONNECTION_KEYS.map((connection) => (
               <div
-                key={provider}
-                aria-label={`${PROVIDER_LABEL[provider]} connection`}
-                data-provider={provider}
+                key={connection}
+                aria-label={`${CONNECTION_LABEL[connection]} connection`}
+                data-provider={connection}
                 role="group"
               >
-                <SettingRow label={PROVIDER_LABEL[provider]}>
+                <SettingRow label={CONNECTION_LABEL[connection]}>
                   <ProviderAction
                     isPending={isPending}
+                    canDisconnect={onDisconnect !== undefined}
                     onConnect={onConnect === undefined ? undefined : connect}
-                    onDisconnect={onDisconnect === undefined ? undefined : disconnect}
-                    provider={provider}
-                    state={providers[provider]}
+                    onRequestDisconnect={setDisconnectTarget}
+                    connection={connection}
+                    state={providers[connection]}
                   />
                 </SettingRow>
               </div>
@@ -314,6 +342,41 @@ export function SettingsView({
           </Button>
         </div>
       </main>
+
+      <AlertDialog
+        open={disconnectTarget !== undefined}
+        onOpenChange={(open) => {
+          if (!open) setDisconnectTarget(undefined);
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              Disconnect {disconnectTarget === undefined ? '' : CONNECTION_LABEL[disconnectTarget]}?
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              Disconnect removes this app&apos;s local status history but does not change{' '}
+              {disconnectTarget === 'claudeCode' ? 'Claude Code' : 'Codex'} data.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel type="button">Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              disabled={
+                disconnectTarget === undefined ||
+                isPending(`provider:${disconnectTarget}`) ||
+                onDisconnect === undefined
+              }
+              onClick={() => {
+                if (disconnectTarget !== undefined) disconnect(disconnectTarget);
+              }}
+              type="button"
+            >
+              Disconnect
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

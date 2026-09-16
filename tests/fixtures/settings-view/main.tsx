@@ -1,7 +1,7 @@
 import { StrictMode, useRef, useState, type ReactElement } from 'react';
 import { createRoot } from 'react-dom/client';
 
-import type { Provider } from '../../../src/shared/session';
+import type { SettingsConnectionKey } from '../../../src/shared/settings';
 import {
   SettingsView,
   type SettingsDisplayOption,
@@ -15,16 +15,18 @@ const displays: readonly SettingsDisplayOption[] = [
 ];
 
 type FixtureState = {
-  providers: Readonly<Record<Provider, SettingsProviderState>>;
+  providers: Readonly<Record<SettingsConnectionKey, SettingsProviderState>>;
   selectedDisplayId: string;
   launchAtLogin: boolean;
   reduceMotion: boolean;
+  error?: string;
 };
 
 const initialState: FixtureState = {
   providers: {
-    codex: { status: 'disconnected', canConnect: true, canDisconnect: false },
-    claude: { status: 'disconnected', canConnect: true, canDisconnect: false },
+    codexDesktop: { status: 'disconnected', canConnect: true, canDisconnect: false },
+    codexCli: { status: 'disconnected', canConnect: false, canDisconnect: false },
+    claudeCode: { status: 'disconnected', canConnect: false, canDisconnect: false },
   },
   selectedDisplayId: 'primary',
   launchAtLogin: false,
@@ -34,10 +36,11 @@ const initialState: FixtureState = {
 type FixtureWindow = Window & {
   __settingsFixture?: {
     deferNextAction: () => void;
-    getProviderActionCalls: (provider: Provider) => number;
-    markProviderConnected: (provider: Provider) => void;
+    getProviderActionCalls: (connection: SettingsConnectionKey) => number;
+    markProviderConnected: (connection: SettingsConnectionKey) => void;
     rejectNextAction: () => void;
     resolveDeferredAction: () => void;
+    setExternalError: (error: string) => void;
   };
 };
 
@@ -46,7 +49,11 @@ function SettingsFixture(): ReactElement {
   const [isAdvancedOpen, setIsAdvancedOpen] = useState(false);
   const hasDeferredNextAction = useRef(false);
   const deferredAction = useRef<(() => void) | undefined>(undefined);
-  const providerActionCalls = useRef<Record<Provider, number>>({ codex: 0, claude: 0 });
+  const providerActionCalls = useRef<Record<SettingsConnectionKey, number>>({
+    codexDesktop: 0,
+    codexCli: 0,
+    claudeCode: 0,
+  });
   const hasRejectedNextAction = useRef(false);
 
   const update = (change: (current: FixtureState) => FixtureState): Promise<void> =>
@@ -69,12 +76,15 @@ function SettingsFixture(): ReactElement {
       }
     });
 
-  const setProviderStatus = (provider: Provider, status: SettingsProviderState['status']): void => {
+  const setProviderStatus = (
+    connection: SettingsConnectionKey,
+    status: SettingsProviderState['status'],
+  ): void => {
     setState((current) => ({
       ...current,
       providers: {
         ...current.providers,
-        [provider]: {
+        [connection]: {
           status,
           canConnect: status !== 'connected',
           canDisconnect: status === 'connected',
@@ -97,12 +107,14 @@ function SettingsFixture(): ReactElement {
       deferredAction.current = undefined;
       complete?.();
     },
+    setExternalError: (error) => setState((current) => ({ ...current, error })),
   };
 
   return (
     <>
       <SettingsView
         displays={displays}
+        error={state.error}
         launchAtLogin={state.launchAtLogin}
         onConnect={(provider) => {
           providerActionCalls.current[provider] += 1;
@@ -114,13 +126,13 @@ function SettingsFixture(): ReactElement {
             },
           }));
         }}
-        onDisconnect={(provider) => {
-          providerActionCalls.current[provider] += 1;
+        onDisconnect={(connection) => {
+          providerActionCalls.current[connection] += 1;
           return update((current) => ({
             ...current,
             providers: {
               ...current.providers,
-              [provider]: { status: 'disconnected', canConnect: true, canDisconnect: false },
+              [connection]: { status: 'disconnected', canConnect: true, canDisconnect: false },
             },
           }));
         }}

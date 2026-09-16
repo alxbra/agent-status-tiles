@@ -14,12 +14,13 @@ import { publishSettingsState, registerSettingsIpcHandlers } from './settings-ip
 import { evaluateLoginItemSettings, shouldOpenSettingsAtStartup } from './login-item';
 import { createStartupOverlayState, isKeyboardEntryTestHookEnabled } from './test-session-source';
 import packageJson from '../../package.json';
-import { IPC_CHANNELS, type SettingsState } from '../shared/ipc';
+import { IPC_CHANNELS, type SettingsConnectionKey, type SettingsState } from '../shared/ipc';
 import type { OverlayState } from '../shared/overlay-ipc';
 import type { SessionSnapshot } from '../shared/session';
 import { PRIMARY_DISPLAY_ID } from '../shared/settings';
 import { createAppLifecycleController } from './app-lifecycle';
 import { createRuntimeCoordinator, type RuntimeCoordinator } from './runtime/coordinator';
+import type { Provider, Surface } from '../shared/session';
 import {
   CodexDesktopMonitor,
   type CodexDesktopMonitorOptions,
@@ -37,9 +38,17 @@ let overlayState: OverlayState = createStartupOverlayState(app.isPackaged);
 let requestedLoginItemState: boolean | undefined;
 let removeRuntimeLifecycleListeners: (() => void) | null = null;
 let runtimeCoordinator: RuntimeCoordinator | null = null;
+let runtimeStartPromise: Promise<void> | null = null;
 let monitoringCoverageWarning: string | undefined;
 let isQuitting = false;
 let runtimeInitialized = false;
+const pendingConnectionActions = new Set<SettingsConnectionKey>();
+
+const CONNECTION_TARGETS: Readonly<Record<SettingsConnectionKey, readonly [Provider, Surface]>> = {
+  codexDesktop: ['codex', 'desktop'],
+  codexCli: ['codex', 'cli'],
+  claudeCode: ['claude', 'desktop'],
+};
 
 function desktopMonitorOptions(): CodexDesktopMonitorOptions {
   // Native E2E supplies a controlled app-server and rollout root. This path is
@@ -79,11 +88,35 @@ function assertSettingsSender(event: IpcMainInvokeEvent): void {
   }
 }
 
-function unavailableProviderState(): SettingsState['providers']['codex'] {
+function unavailableProviderState(): SettingsState['providers'][SettingsConnectionKey] {
   return {
     status: 'unavailable',
     canConnect: false,
     canDisconnect: false,
+  };
+}
+
+function connectionState(
+  connection: SettingsConnectionKey,
+): SettingsState['providers'][SettingsConnectionKey] {
+  const coordinator = runtimeCoordinator;
+  if (coordinator === null) return unavailableProviderState();
+  const [provider, surface] = CONNECTION_TARGETS[connection];
+  const key = `${provider}:${surface}` as const;
+  const enabled = coordinator.getMonitoringState().partitions[key].enabled;
+  if (!enabled) {
+    return {
+      status: connection === 'codexDesktop' ? 'disconnected' : 'unavailable',
+      canConnect: connection === 'codexDesktop',
+      canDisconnect: false,
+    };
+  }
+  const health = coordinator.getHealth()[key].status;
+  return {
+    status:
+      health === 'available' ? 'connected' : health === 'starting' ? 'connecting' : 'unavailable',
+    canConnect: false,
+    canDisconnect: true,
   };
 }
 
@@ -97,11 +130,20 @@ function getSettingsState(): SettingsState {
       ? { enabled: false }
       : evaluateLoginItemSettings(loginSettings, requestedLoginItemState);
   if (loginItemState.error === undefined) requestedLoginItemState = undefined;
-  const settingsError = loginItemState.error ?? monitoringCoverageWarning;
+  const desktopHealth = runtimeCoordinator?.getHealth()['codex:desktop'];
+  const desktopConnectionIssue =
+    runtimeCoordinator?.getMonitoringState().partitions['codex:desktop'].enabled &&
+    (desktopHealth?.status === 'error' || desktopHealth?.status === 'unavailable')
+      ? 'Codex Desktop connection or coverage is incomplete. Check the installation, then disconnect and reconnect.'
+      : undefined;
+  const settingsError = [loginItemState.error, monitoringCoverageWarning, desktopConnectionIssue]
+    .filter((message): message is string => message !== undefined)
+    .join(' ');
   return {
     providers: {
-      codex: unavailableProviderState(),
-      claude: unavailableProviderState(),
+      codexDesktop: connectionState('codexDesktop'),
+      codexCli: connectionState('codexCli'),
+      claudeCode: connectionState('claudeCode'),
     },
     displays: displayOptionsWithPreference(connectedDisplays(), preferredDisplayId),
     selectedDisplayId: preferredDisplayId,
@@ -220,6 +262,7 @@ if (!hasSingleInstanceLock) {
         overlayState = { ...state, reducedMotion: desktopPreferences?.get().reduceMotion ?? false };
         overlayController?.setQualifyingSessionCount(qualifyingSessionCount(overlayState.sessions));
         publishOverlayState(overlayController?.getWindow() ?? null, overlayState);
+        publishCurrentSettings();
       },
       onCoverageWarning: (omittedCount) => {
         monitoringCoverageWarning =
@@ -228,6 +271,7 @@ if (!hasSingleInstanceLock) {
             : undefined;
         publishCurrentSettings();
       },
+      onHealthChanged: () => publishCurrentSettings(),
     });
     removeOverlayIpcHandlers = registerOverlayIpcHandlers({
       getWindow: () => overlayController?.getWindow() ?? null,
@@ -282,8 +326,48 @@ if (!hasSingleInstanceLock) {
         publishSettingsState(getSettingsWindow(), state);
         return state;
       },
+      connectSurface: async (connection) => {
+        if (connection !== 'codexDesktop') throw new Error('Connection is not available');
+        await runtimeStartPromise;
+        if (pendingConnectionActions.has(connection))
+          throw new Error('Connection action is pending');
+        const coordinator = runtimeCoordinator;
+        if (coordinator === null) throw new Error('Monitoring is unavailable');
+        if (coordinator.getMonitoringState().partitions['codex:desktop'].enabled) {
+          throw new Error('Connection is already enabled');
+        }
+        pendingConnectionActions.add(connection);
+        try {
+          await coordinator.connect('codex', 'desktop');
+          const state = getSettingsState();
+          publishSettingsState(getSettingsWindow(), state);
+          return state;
+        } finally {
+          pendingConnectionActions.delete(connection);
+        }
+      },
+      disconnectSurface: async (connection) => {
+        await runtimeStartPromise;
+        if (pendingConnectionActions.has(connection))
+          throw new Error('Connection action is pending');
+        const coordinator = runtimeCoordinator;
+        if (coordinator === null) throw new Error('Monitoring is unavailable');
+        const [provider, surface] = CONNECTION_TARGETS[connection];
+        if (!coordinator.getMonitoringState().partitions[`${provider}:${surface}`].enabled) {
+          throw new Error('Connection is not enabled');
+        }
+        pendingConnectionActions.add(connection);
+        try {
+          await coordinator.disconnect(provider, surface);
+          const state = getSettingsState();
+          publishSettingsState(getSettingsWindow(), state);
+          return state;
+        } finally {
+          pendingConnectionActions.delete(connection);
+        }
+      },
     });
-    void runtimeCoordinator.start().catch(() => undefined);
+    runtimeStartPromise = runtimeCoordinator.start().catch(() => undefined);
     const onDisplayTopologyChanged = (): void => publishCurrentSettings();
     const onActivate = (): void => lifecycle.handleActivate();
     const onSystemSuspend = (): void => {
