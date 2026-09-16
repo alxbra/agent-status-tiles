@@ -14,6 +14,8 @@ const MAX_CURSOR_BYTES = 1024;
 const MAX_ID_BYTES = 256;
 const MAX_PATH_BYTES = 4096;
 const MAX_LABEL_BYTES = 256;
+const ARCHIVED_CURSOR_PREFIX = 'archived:';
+const ARCHIVED_START_CURSOR = 'start';
 
 const DIRECT_SOURCE_KINDS = new Set(['cli', 'vscode', 'exec', 'appServer', 'unknown']);
 
@@ -58,7 +60,8 @@ export type CodexCatalogDiagnosticCode =
   | 'stopped'
   | 'termination-failed'
   | 'cursor-repeated'
-  | 'unsupported-record';
+  | 'cursor-omitted'
+  | 'coverage-ambiguous';
 
 export interface CodexCatalogDiagnostic {
   code: CodexCatalogDiagnosticCode;
@@ -102,6 +105,8 @@ export interface CodexCatalogRecord {
   parentThreadId?: string;
   forkedFromId?: string;
   isEphemeral: boolean;
+  /** Which list route produced this record; never inferred from source metadata. */
+  isArchived?: boolean;
   projectBasename: string;
   rolloutPath?: string;
   sourceEvidence: CodexSourceEvidence;
@@ -112,12 +117,19 @@ export interface CodexListThreadsOptions {
   pageSize?: number;
   maxPages?: number;
   maxRecords?: number;
+  /** Include archived records after the complete unarchived route. */
+  includeArchived?: boolean;
+  /** Select one route. Defaults to the unarchived route. */
+  archived?: boolean;
 }
 
 export interface CodexListThreadsResult {
   records: readonly CodexCatalogRecord[];
   nextCursor: string | null;
   pagesRead: number;
+  /** False when bounded pagination stopped before exhausting the selected route(s). */
+  complete: boolean;
+  incompleteReason?: 'page-cap' | 'record-cap';
 }
 
 interface PendingRequest {
@@ -136,6 +148,7 @@ interface ProtocolMessage {
 interface ListPage {
   data: readonly unknown[];
   nextCursor: string | null;
+  hasNextCursor: boolean;
 }
 
 interface ParsedSource {
@@ -233,7 +246,7 @@ function parseSource(value: unknown): ParsedSource | undefined {
   return undefined;
 }
 
-function projectThread(value: unknown): CodexCatalogRecord | undefined {
+function projectThread(value: unknown, isArchived: boolean): CodexCatalogRecord | undefined {
   if (!isRecord(value)) return undefined;
   const nativeId = value.id;
   const sessionId = value.sessionId;
@@ -310,6 +323,7 @@ function projectThread(value: unknown): CodexCatalogRecord | undefined {
     ...(parentThreadId === undefined ? {} : { parentThreadId }),
     ...(forkedFromId === undefined ? {} : { forkedFromId }),
     isEphemeral: value.ephemeral,
+    isArchived,
     projectBasename,
     ...(rolloutPath === undefined ? {} : { rolloutPath }),
     sourceEvidence: {
@@ -327,6 +341,7 @@ function projectThread(value: unknown): CodexCatalogRecord | undefined {
 
 function parseListPage(value: unknown): ListPage | undefined {
   if (!isRecord(value) || !Array.isArray(value.data)) return undefined;
+  const hasNextCursor = hasOwn(value, 'nextCursor');
   const nextCursor = value.nextCursor;
   if (
     nextCursor !== undefined &&
@@ -338,7 +353,33 @@ function parseListPage(value: unknown): ListPage | undefined {
   return {
     data: value.data,
     nextCursor: nextCursor ?? null,
+    hasNextCursor,
   };
+}
+
+/**
+ * Inspect source evidence before validating any other metadata. A known
+ * non-Desktop source must not turn malformed private fields into a coverage
+ * warning. Only plausible Desktop records are eligible for that warning.
+ */
+function isConfidentlyUnrelatedSource(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  if (value.originator === 'Codex Desktop' && value.source !== 'vscode') return false;
+  if (value.originator === 'codex_cli_rs' && value.source !== 'vscode') return true;
+  if (value.ephemeral === true) return true;
+  if (
+    safeString(value.parentThreadId, MAX_ID_BYTES) ||
+    safeString(value.forkedFromId, MAX_ID_BYTES) ||
+    (typeof value.threadSource === 'string' && SUBAGENT_THREAD_SOURCE_KINDS.has(value.threadSource))
+  ) {
+    return true;
+  }
+  const source = value.source;
+  if (typeof source === 'string') {
+    return source !== 'vscode' && source !== 'unknown' && DIRECT_SOURCE_KINDS.has(source);
+  }
+  if (!isRecord(source)) return false;
+  return hasOwn(source, 'subAgent') && !(hasOwn(source, 'custom') && hasOwn(source, 'subAgent'));
 }
 
 function validOption(value: number, minimum: number, maximum: number): boolean {
@@ -446,10 +487,21 @@ export class CodexCatalogClient {
       throw new CodexCatalogError('invalid-options');
     }
 
+    const includeArchived = options.includeArchived ?? false;
+    let archivedRoute = options.archived ?? false;
     let cursor = options.cursor ?? null;
     if (cursor !== null && !safeString(cursor, MAX_CURSOR_BYTES)) {
       this.report('invalid-options');
       throw new CodexCatalogError('invalid-options');
+    }
+    if (includeArchived && cursor?.startsWith(ARCHIVED_CURSOR_PREFIX)) {
+      archivedRoute = true;
+      const encodedCursor = cursor.slice(ARCHIVED_CURSOR_PREFIX.length);
+      cursor = encodedCursor === ARCHIVED_START_CURSOR ? null : encodedCursor;
+      if (cursor !== null && !safeString(cursor, MAX_CURSOR_BYTES)) {
+        this.report('invalid-options');
+        throw new CodexCatalogError('invalid-options');
+      }
     }
 
     await this.start();
@@ -460,9 +512,11 @@ export class CodexCatalogClient {
     }
 
     const seenCursors = new Set<string>();
-    if (cursor !== null) seenCursors.add(cursor);
+    if (cursor !== null) seenCursors.add(`${archivedRoute ? 'archived' : 'active'}:${cursor}`);
     const records: CodexCatalogRecord[] = [];
     let pagesRead = 0;
+    let complete = false;
+    let didReadArchivedPage = false;
 
     while (pagesRead < maxPages && records.length < maxRecords) {
       const limit = Math.min(pageSize, maxRecords - records.length);
@@ -471,7 +525,7 @@ export class CodexCatalogClient {
         limit,
         sortKey: 'updated_at',
         sortDirection: 'desc',
-        archived: false,
+        archived: archivedRoute,
         modelProviders: [],
         sourceKinds: [...DISCOVERY_SOURCE_KINDS],
       });
@@ -480,28 +534,58 @@ export class CodexCatalogClient {
         this.report('protocol-malformed');
         throw new CodexCatalogError('protocol-malformed');
       }
+      if (!page.hasNextCursor) {
+        this.report('cursor-omitted');
+        throw new CodexCatalogError('cursor-omitted');
+      }
       pagesRead += 1;
+      if (archivedRoute) didReadArchivedPage = true;
       for (const value of page.data) {
-        const record = projectThread(value);
+        const record = projectThread(value, archivedRoute);
         if (record === undefined) {
-          this.report('unsupported-record');
-          continue;
+          if (isConfidentlyUnrelatedSource(value)) continue;
+          this.report('coverage-ambiguous');
+          throw new CodexCatalogError('coverage-ambiguous');
         }
         records.push(record);
       }
       if (page.nextCursor === null) {
         cursor = null;
+        if (includeArchived && !archivedRoute) {
+          archivedRoute = true;
+          continue;
+        }
+        complete = true;
         break;
       }
-      if (seenCursors.has(page.nextCursor)) {
+      const cursorKey = `${archivedRoute ? 'archived' : 'active'}:${page.nextCursor}`;
+      if (seenCursors.has(cursorKey)) {
         this.report('cursor-repeated');
         throw new CodexCatalogError('cursor-repeated');
       }
-      seenCursors.add(page.nextCursor);
+      seenCursors.add(cursorKey);
       cursor = page.nextCursor;
     }
 
-    return { records, nextCursor: cursor, pagesRead };
+    if (!complete) {
+      const archivedRouteNeedsStart = includeArchived && !didReadArchivedPage && cursor === null;
+      const nextCursor =
+        cursor === null
+          ? archivedRouteNeedsStart
+            ? `${ARCHIVED_CURSOR_PREFIX}${ARCHIVED_START_CURSOR}`
+            : null
+          : archivedRoute
+            ? `${ARCHIVED_CURSOR_PREFIX}${cursor}`
+            : cursor;
+      return {
+        records,
+        nextCursor,
+        pagesRead,
+        complete: false,
+        incompleteReason: records.length >= maxRecords ? 'record-cap' : 'page-cap',
+      };
+    }
+    return { records, nextCursor: null, pagesRead, complete: true };
   }
 
   private async startProcess(): Promise<void> {

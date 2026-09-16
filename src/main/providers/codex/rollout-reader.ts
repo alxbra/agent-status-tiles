@@ -14,6 +14,8 @@ import type {
   CodexRolloutSource,
   CodexSessionQualification,
   CodexSessionEvent,
+  CodexRolloutReadOptions,
+  CodexSessionMetaInspection,
   RolloutReadResult,
 } from './events';
 
@@ -65,7 +67,12 @@ interface FileReadResult {
   cursor?: FileCursor;
   /** Complete records remain unread in this file and need the same source index. */
   hasMore: boolean;
+  /** The source reached its immutable EOF boundary for this pass. */
+  exhausted: boolean;
 }
+
+const MAX_META_SCAN_BYTES = 256 * 1024;
+const MAX_META_SCAN_LINES = 128;
 
 function clearTerminalContext(context: FileContext, turnId: string): void {
   if (context.activeTurnId !== turnId) return;
@@ -121,35 +128,126 @@ export class CodexRolloutReader {
     this.isStopped = false;
   }
 
+  /**
+   * Capture a regular rollout's current EOF without exposing its path or
+   * contents. The caller should retain this value for the whole baseline
+   * replay and pass it in `frozenCutoffs` under the source cursor key.
+   */
+  async captureRolloutEndOffset(rolloutPath: string): Promise<number | undefined> {
+    const validated = await this.validateFilePath(rolloutPath);
+    if (!validated) return undefined;
+    const file = await open(validated.candidate, constants.O_RDONLY | NOFOLLOW | NONBLOCK).catch(
+      () => undefined,
+    );
+    if (!file) return undefined;
+    try {
+      const metadata = await file.stat();
+      if (!metadata.isFile() || !Number.isSafeInteger(metadata.size) || metadata.size < 0)
+        return undefined;
+      const current = await lstat(validated.candidate).catch(() => undefined);
+      if (
+        !current ||
+        current.isSymbolicLink() ||
+        !current.isFile() ||
+        fileIdentity(current) !== fileIdentity(metadata)
+      )
+        return undefined;
+      return metadata.size;
+    } catch {
+      return undefined;
+    } finally {
+      await file.close().catch(() => undefined);
+    }
+  }
+
+  /**
+   * Read only the bounded protocol SessionMeta identity from a validated
+   * rollout. No prompts, transcript, tool arguments, or other payload fields
+   * cross this boundary. An absent or malformed identity returns undefined.
+   */
+  async inspectSessionMeta(rolloutPath: string): Promise<CodexSessionMetaInspection | undefined> {
+    const validated = await this.validateFilePath(rolloutPath);
+    if (!validated) return undefined;
+    const file = await open(validated.candidate, constants.O_RDONLY | NOFOLLOW | NONBLOCK).catch(
+      () => undefined,
+    );
+    if (!file) return undefined;
+    try {
+      const metadata = await file.stat();
+      if (!metadata.isFile()) return undefined;
+      const current = await lstat(validated.candidate).catch(() => undefined);
+      if (
+        !current ||
+        current.isSymbolicLink() ||
+        !current.isFile() ||
+        fileIdentity(current) !== fileIdentity(metadata)
+      )
+        return undefined;
+      const readLength = Math.min(metadata.size, MAX_META_SCAN_BYTES);
+      const buffer = Buffer.allocUnsafe(readLength);
+      let total = 0;
+      while (total < readLength) {
+        const result = await file.read(buffer, total, readLength - total, total);
+        if (result.bytesRead === 0) break;
+        total += result.bytesRead;
+      }
+      let text: string;
+      try {
+        text = new TextDecoder('utf-8', { fatal: true }).decode(buffer.subarray(0, total));
+      } catch {
+        return undefined;
+      }
+      const lines = text.split('\n');
+      for (let index = 0; index < Math.min(lines.length, MAX_META_SCAN_LINES); index += 1) {
+        const line = lines[index];
+        if (!line || line.length > MAX_LINE_BYTES) continue;
+        let record: unknown;
+        try {
+          record = JSON.parse(line.replace(/\r$/u, ''));
+        } catch {
+          continue;
+        }
+        const id = sessionMetaId(record);
+        if (id) return { nativeSessionId: id };
+      }
+      return undefined;
+    } catch {
+      return undefined;
+    } finally {
+      await file.close().catch(() => undefined);
+    }
+  }
+
   async read(
     sources: readonly CodexRolloutSource[],
     storedCursors: Readonly<Record<string, FileCursor>> = {},
-    options: { firstInstallBaseline?: boolean; sourceStart?: number } = {},
+    options: CodexRolloutReadOptions = {},
   ): Promise<RolloutReadResult> {
     const events: CodexRolloutEvent[] = [];
     const diagnostics: CodexDiagnostic[] = [];
     const cursors: Record<string, FileCursor> = {};
+    const exhaustedSourceIds: string[] = [];
     for (const [key, cursor] of Object.entries(storedCursors)) {
       // Cursor keys are relative source identifiers. Never carry an absolute
       // path back into a checkpoint, even if an older caller supplied one.
       const normalized = this.normalizeCursor(cursor);
       if (!path.isAbsolute(key) && normalized) cursors[key] = normalized;
     }
-    if (this.isStopped) return { events, cursors, diagnostics };
+    if (this.isStopped) return { events, cursors, diagnostics, complete: false };
 
     if (!path.isAbsolute(this.sessionsRoot)) {
       this.addDiagnostic(diagnostics, 'invalid-root', hashPath(path.resolve(this.sessionsRoot)));
-      return { events, cursors, diagnostics };
+      return { events, cursors, diagnostics, complete: false };
     }
     const root = await this.safeRealpath(this.sessionsRoot);
     if (!root) {
       this.addDiagnostic(diagnostics, 'invalid-root', hashPath(this.sessionsRoot));
-      return { events, cursors, diagnostics };
+      return { events, cursors, diagnostics, complete: false };
     }
     const rootStat = await lstat(root).catch(() => undefined);
     if (!rootStat?.isDirectory()) {
       this.addDiagnostic(diagnostics, 'invalid-root', hashPath(root));
-      return { events, cursors, diagnostics };
+      return { events, cursors, diagnostics, complete: false };
     }
 
     const seenPaths = new Set<string>();
@@ -194,6 +292,16 @@ export class CodexRolloutReader {
       const resultKey = cursorKeyForPath(this.sessionsRoot, candidate);
       const inputCursor = storedCursors[resultKey];
       const initialCursor = this.normalizeCursor(inputCursor) ?? { offset: 0, identity: '' };
+      const hasFrozenCutoff =
+        options.frozenCutoffs !== undefined && Object.hasOwn(options.frozenCutoffs, resultKey);
+      const frozenCutoff = hasFrozenCutoff
+        ? normalizeCutoff(options.frozenCutoffs?.[resultKey])
+        : undefined;
+      if (hasFrozenCutoff && frozenCutoff === undefined) {
+        this.addDiagnostic(diagnostics, 'invalid-cutoff', pathKey);
+        nextSourceIndex = sourceIndex + 1;
+        continue;
+      }
       const session = this.normalizeSession(source?.session, pathKey, diagnostics);
       if (!session) {
         nextSourceIndex = sourceIndex + 1;
@@ -205,11 +313,13 @@ export class CodexRolloutReader {
         session,
         initialCursor,
         options.firstInstallBaseline === true,
+        frozenCutoff,
         events,
         diagnostics,
         budget,
       );
       if (fileResult.cursor) cursors[resultKey] = fileResult.cursor;
+      if (fileResult.exhausted) exhaustedSourceIds.push(resultKey);
       if (fileResult.hasMore) {
         nextSourceIndex = sourceIndex;
         break;
@@ -217,9 +327,22 @@ export class CodexRolloutReader {
       nextSourceIndex = sourceIndex + 1;
     }
     if (nextSourceIndex !== undefined && nextSourceIndex < sources.length) {
-      return { events, cursors, diagnostics, nextSourceIndex };
+      return {
+        events,
+        cursors,
+        diagnostics,
+        exhaustedSourceIds,
+        complete: false,
+        nextSourceIndex,
+      };
     }
-    return { events, cursors, diagnostics };
+    return {
+      events,
+      cursors,
+      diagnostics,
+      exhaustedSourceIds,
+      complete: true,
+    };
   }
 
   private async checkPath(
@@ -248,6 +371,22 @@ export class CodexRolloutReader {
       return false;
     }
     return true;
+  }
+
+  private async validateFilePath(
+    rolloutPath: string,
+  ): Promise<{ candidate: string; root: string } | undefined> {
+    if (!path.isAbsolute(this.sessionsRoot) || !path.isAbsolute(rolloutPath)) return undefined;
+    const candidate = path.resolve(rolloutPath);
+    if (!candidate.endsWith('.jsonl')) return undefined;
+    const root = await this.safeRealpath(this.sessionsRoot);
+    if (!root) return undefined;
+    const rootStat = await lstat(root).catch(() => undefined);
+    if (!rootStat?.isDirectory()) return undefined;
+    const diagnostics: CodexDiagnostic[] = [];
+    if (!(await this.checkPath(candidate, root, hashPath(candidate), diagnostics)))
+      return undefined;
+    return { candidate, root };
   }
 
   private normalizeSession(
@@ -291,6 +430,7 @@ export class CodexRolloutReader {
     session: CodexSessionQualification,
     initialCursor: FileCursor,
     firstInstallBaseline: boolean,
+    frozenCutoff: number | undefined,
     events: CodexRolloutEvent[],
     diagnostics: CodexDiagnostic[],
     budget: ReadBudget,
@@ -300,22 +440,56 @@ export class CodexRolloutReader {
     );
     if (!file) {
       this.addDiagnostic(diagnostics, 'read-failed', pathKey);
-      return { hasMore: false };
+      return { hasMore: false, exhausted: false };
     }
     try {
       const metadata = await file.stat();
       if (!metadata.isFile()) {
         this.addDiagnostic(diagnostics, 'path-not-regular', pathKey);
-        return { hasMore: false };
+        return { hasMore: false, exhausted: false };
       }
       const identity = fileIdentity(metadata);
-      const reset =
-        (initialCursor.identity.length > 0 && initialCursor.identity !== identity) ||
-        initialCursor.offset > metadata.size;
+      // The pathname can be atomically replaced between checkPath() and open().
+      // Refuse a handle whose inode is no longer the path's current inode so
+      // old replacement bytes cannot be projected as live events.
+      const pathMetadata = await lstat(filePath).catch(() => undefined);
+      if (
+        !pathMetadata ||
+        pathMetadata.isSymbolicLink() ||
+        !pathMetadata.isFile() ||
+        fileIdentity(pathMetadata) !== identity
+      ) {
+        this.addDiagnostic(diagnostics, 'file-reset', pathKey);
+        return { hasMore: false, exhausted: false };
+      }
+      const identityChanged =
+        initialCursor.identity.length > 0 && initialCursor.identity !== identity;
+      const cursorTruncated = initialCursor.offset > metadata.size;
+      const reset = identityChanged || cursorTruncated;
       const cursor: FileCursor = reset ? { offset: 0, identity } : { ...initialCursor, identity };
       if (reset) {
         this.addDiagnostic(diagnostics, 'file-reset', pathKey);
       }
+
+      // A cutoff captured from a prior inode/length is not evidence that bytes
+      // in the new file are live. Replay the replacement as historical and
+      // leave a safe cursor; the caller can qualify the replacement on a later
+      // pass. This avoids promoting old replacement contents into unread state.
+      const replacementReplay = reset;
+      const boundaryWasTruncated =
+        frozenCutoff !== undefined && frozenCutoff > metadata.size && !identityChanged;
+      if (boundaryWasTruncated)
+        this.addDiagnostic(diagnostics, 'fixed-boundary-truncated', pathKey);
+      const snapshotEnd = metadata.size;
+      // A replacement inode is never allowed to promote bytes beyond the old
+      // cutoff as live. Replay the complete replacement snapshot historically;
+      // a persisted baselineUntilOffset carries that larger boundary through
+      // event/byte continuations even if the caller still supplies the old
+      // frozen cutoff.
+      const requestedBoundary = identityChanged
+        ? snapshotEnd
+        : Math.max(frozenCutoff ?? snapshotEnd, initialCursor.baselineUntilOffset ?? 0);
+      const boundary = Math.min(requestedBoundary, snapshotEnd);
       const context: FileContext = {
         pathKey,
         nativeSessionId: session.nativeSessionId,
@@ -330,9 +504,13 @@ export class CodexRolloutReader {
 
       const baselineUntilOffset =
         cursor.baselineUntilOffset ??
-        (firstInstallBaseline && initialCursor.offset === 0 && initialCursor.identity === ''
-          ? metadata.size
-          : undefined);
+        (frozenCutoff !== undefined && cursor.offset < boundary
+          ? boundary
+          : firstInstallBaseline && initialCursor.offset === 0 && initialCursor.identity === ''
+            ? boundary
+            : replacementReplay
+              ? boundary
+              : undefined);
       if (baselineUntilOffset !== undefined) cursor.baselineUntilOffset = baselineUntilOffset;
 
       let position = cursor.offset;
@@ -343,13 +521,13 @@ export class CodexRolloutReader {
       let unprocessedCompleteLine = false;
       const fileEvents: CodexRolloutEvent[] = [];
       const eventsBeforeFile = budget.eventsEmitted;
-      while (position < metadata.size && !this.isStopped && !budget.isExhausted) {
+      while (position < boundary && !this.isStopped && !budget.isExhausted) {
         const remainingBudget = MAX_READ_BYTES - budget.bytesRead;
         if (remainingBudget <= 0) {
           budget.isExhausted = true;
           break;
         }
-        const length = Math.min(READ_CHUNK_BYTES, metadata.size - position, remainingBudget);
+        const length = Math.min(READ_CHUNK_BYTES, boundary - position, remainingBudget);
         const buffer = Buffer.allocUnsafe(length);
         const { bytesRead } = await file.read(buffer, 0, length, position);
         if (bytesRead === 0) break;
@@ -403,8 +581,7 @@ export class CodexRolloutReader {
           discarding = false;
           start = newline + 1;
         }
-        if (budget.bytesRead >= MAX_READ_BYTES && position < metadata.size)
-          budget.isExhausted = true;
+        if (budget.bytesRead >= MAX_READ_BYTES && position < boundary) budget.isExhausted = true;
       }
       if (discarding) {
         this.addDiagnostic(diagnostics, 'oversized-line', pathKey, lineStart);
@@ -433,16 +610,18 @@ export class CodexRolloutReader {
             ...(baselineUntilOffset === undefined ? {} : { baselineUntilOffset }),
           },
           hasMore: false,
+          exhausted: false,
         };
       }
       events.push(...fileEvents);
       return {
         cursor,
-        hasMore: !this.isStopped && (unprocessedCompleteLine || position < metadata.size),
+        hasMore: !this.isStopped && (unprocessedCompleteLine || position < boundary),
+        exhausted: !this.isStopped && !unprocessedCompleteLine && position >= boundary,
       };
     } catch {
       this.addDiagnostic(diagnostics, 'read-failed', pathKey);
-      return { hasMore: false };
+      return { hasMore: false, exhausted: false };
     } finally {
       await file.close();
     }
@@ -904,6 +1083,10 @@ function normalizeSourceStart(value: unknown): number {
   return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : 0;
 }
 
+function normalizeCutoff(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
+}
+
 function normalizeTurnKey(value: unknown): TurnKey | undefined {
   const turnKey = asRecord(value);
   const turnId = boundedString(turnKey?.turnId);
@@ -943,6 +1126,13 @@ function canResolveInputOnLine(line: string, context: FileContext): boolean {
   return Boolean(
     pendingOutput && turnId && (!pendingOutput.turnId || pendingOutput.turnId === turnId),
   );
+}
+
+function sessionMetaId(value: unknown): string | undefined {
+  const record = asRecord(value);
+  if (boundedString(record?.type) !== 'session_meta') return undefined;
+  const payload = asRecord(record?.payload);
+  return boundedString(payload?.id);
 }
 
 function normalizeInputRequests(value: unknown): Readonly<Record<string, InputRequest>> {

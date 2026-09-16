@@ -136,6 +136,8 @@ process.stdin.on('data', (chunk) => {
     const page = request.params.cursor === null ? pages[0] : pages[1];
     const outputPage = { ...page, data: page.data.slice(0, request.params.limit) };
     if (mode === 'unsupported-record') outputPage.data[0] = { ...outputPage.data[0], source: 'ambiguous' };
+    if (mode === 'ambiguous-unknown') outputPage.data[0] = { ...outputPage.data[0], source: 'unknown', originator: null, cwd: null };
+    if (mode === 'ambiguous-desktop') outputPage.data[0] = { ...outputPage.data[0], source: 'vscode', id: null };
     if (mode === 'custom-source') {
       outputPage.data[0] = { ...outputPage.data[0], source: { custom: 'custom-connector' } };
     }
@@ -338,7 +340,7 @@ describe('Codex catalog client', () => {
     await serverError.stop();
   });
 
-  it('reports ambiguous source metadata without guessing a surface', async () => {
+  it('skips malformed records with definitive CLI originator evidence', async () => {
     const diagnostics: CodexCatalogDiagnosticCode[] = [];
     const client = createClient(await createFakeBinary('unsupported-record'), diagnostics);
 
@@ -346,7 +348,28 @@ describe('Codex catalog client', () => {
 
     expect(result.records).toHaveLength(1);
     expect(result.records[0]?.sourceEvidence.source).toBe('subAgentReview');
-    expect(diagnostics).toEqual(['unsupported-record']);
+    expect(diagnostics).toEqual([]);
+    await client.stop();
+  });
+
+  it('fails closed on malformed records that could be Desktop', async () => {
+    const diagnostics: CodexCatalogDiagnosticCode[] = [];
+    const client = createClient(await createFakeBinary('ambiguous-desktop'), diagnostics);
+
+    await expect(client.listThreads({ maxPages: 1 })).rejects.toMatchObject({
+      code: 'coverage-ambiguous',
+    });
+    expect(diagnostics).toEqual(['coverage-ambiguous']);
+    await client.stop();
+  });
+
+  it('fails closed on malformed unknown-source records without unrelated evidence', async () => {
+    const diagnostics: CodexCatalogDiagnosticCode[] = [];
+    const client = createClient(await createFakeBinary('ambiguous-unknown'), diagnostics);
+    await expect(client.listThreads({ maxPages: 1 })).rejects.toMatchObject({
+      code: 'coverage-ambiguous',
+    });
+    expect(diagnostics).toEqual(['coverage-ambiguous']);
     await client.stop();
   });
 
@@ -384,7 +407,7 @@ describe('Codex catalog client', () => {
 
     expect(result.records).toHaveLength(1);
     expect(result.records[0]?.sourceEvidence.source).toBe('subAgentReview');
-    expect(diagnostics).toEqual(['unsupported-record']);
+    expect(diagnostics).toEqual([]);
     await client.stop();
   });
 

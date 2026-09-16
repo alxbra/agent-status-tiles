@@ -72,6 +72,8 @@ export interface RuntimeDiscoveryResult {
 export interface RuntimeReadRequest {
   sources: readonly RuntimeMonitorSource[];
   cursors: SurfaceCursorMap;
+  /** Last durable records restore turn context for incremental rollout parsing. */
+  sessions: Readonly<Record<string, SessionRecord>>;
   /** Captured EOFs are immutable for the entire baseline replay. */
   frozenCutoffs: Readonly<Record<string, number>>;
   baseline: boolean;
@@ -1035,6 +1037,21 @@ export function createRuntimeCoordinator(options: RuntimeCoordinatorOptions): Ru
         return;
       const partition = monitoring.partitions[runtime.key];
       const baseline = partition.baseline.status === 'pending';
+      const [provider, surface] = [providerFromKey(runtime.key), surfaceFromKey(runtime.key)];
+      let continuationState = partitionRecordState(partition, runtime.key);
+      for (const source of runtime.sources) {
+        continuationState = reduceSessionState(continuationState, {
+          type: 'upsert',
+          provider,
+          surface,
+          nativeSessionId: source.nativeSessionId,
+          title: source.title,
+          isTopLevel: source.isTopLevel,
+          isArchived: source.isArchived,
+          canOpen: false,
+          updatedAt: source.updatedAt,
+        });
+      }
       let sourceStart = 0;
       const currentSourceIds = new Set(runtime.sources.map((source) => source.id));
       let cursors: SurfaceCursorMap = Object.fromEntries(
@@ -1052,6 +1069,7 @@ export function createRuntimeCoordinator(options: RuntimeCoordinatorOptions): Ru
         const read = await monitor.read({
           sources: runtime.sources,
           cursors,
+          sessions: continuationState.sessions,
           frozenCutoffs: sourceCutoffs(runtime.sources, baseline),
           baseline,
           ...(sourceStart === 0 ? {} : { sourceStart }),
@@ -1088,8 +1106,10 @@ export function createRuntimeCoordinator(options: RuntimeCoordinatorOptions): Ru
         for (const value of read.events) {
           const event = normalizeEnvelope(value, baseline, events.length);
           if (event === undefined) continue;
-          if (safeEventForSurface(event.event, runtime.key))
+          if (safeEventForSurface(event.event, runtime.key)) {
             validateEventSource(event, runtime.sources);
+            continuationState = reduceSessionState(continuationState, event.event);
+          }
         }
         events.push(...read.events);
         if (read.nextSourceIndex === undefined) {

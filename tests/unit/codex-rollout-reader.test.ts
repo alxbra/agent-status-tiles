@@ -110,6 +110,8 @@ describe('CodexRolloutReader', () => {
     await writeFile(file, await readFile(FIXTURE));
 
     const reader = new CodexRolloutReader(root);
+    expect(await reader.inspectSessionMeta(file)).toEqual({ nativeSessionId: SESSION_ID });
+    expect(await reader.captureRolloutEndOffset(file)).toBe((await readFile(file)).byteLength);
     const empty = await reader.read([]);
     expect(empty.events).toEqual([]);
     expect(empty.diagnostics).toEqual([]);
@@ -945,5 +947,122 @@ describe('CodexRolloutReader', () => {
     expect(result.events[0]?.nativeSessionId).toBe(SESSION_ID);
     expect(result.cursors[cursorKeyForPath(root, file)].identity.length).toBeLessThanOrEqual(512);
     expect(result.cursors[path.join(root, 'absolute-key.jsonl')]).toBeUndefined();
+  });
+
+  it('replays multiple files only through externally captured fixed EOFs', async () => {
+    const root = await testRoot();
+    const firstFile = path.join(root, 'rollout-' + SESSION_ID + '.jsonl');
+    const secondId = '019f6b6d-644d-7701-8858-9da6837aaaab';
+    const secondFile = path.join(root, 'rollout-' + secondId + '.jsonl');
+    await writeLines(firstFile, [sessionMeta(), event('task_started', 'turn-first')]);
+    await writeLines(secondFile, [sessionMeta(secondId), event('task_started', 'turn-second')]);
+    const reader = new CodexRolloutReader(root);
+    const firstCutoff = await reader.captureRolloutEndOffset(firstFile);
+    const secondCutoff = await reader.captureRolloutEndOffset(secondFile);
+    expect(firstCutoff).toBeDefined();
+    expect(secondCutoff).toBeDefined();
+    await appendFile(firstFile, event('task_started', 'turn-after-cutoff') + '\n');
+    await appendFile(secondFile, event('task_started', 'turn-after-cutoff-2') + '\n');
+    const sources = [sourceFor(firstFile), sourceFor(secondFile, secondId)];
+    const frozenCutoffs = {
+      [cursorKeyForPath(root, firstFile)]: firstCutoff!,
+      [cursorKeyForPath(root, secondFile)]: secondCutoff!,
+    };
+    const baseline = await reader.read(sources, {}, { frozenCutoffs, firstInstallBaseline: true });
+    expect(eventTypes(baseline.events)).toEqual(['turn-started', 'turn-started']);
+    expect(baseline.events.every(({ baseline: historical }) => historical)).toBe(true);
+    expect(baseline.exhaustedSourceIds).toEqual(Object.keys(frozenCutoffs));
+    expect(baseline.complete).toBe(true);
+    expect(baseline.cursors[cursorKeyForPath(root, firstFile)].offset).toBe(firstCutoff);
+    expect(baseline.cursors[cursorKeyForPath(root, secondFile)].offset).toBe(secondCutoff);
+
+    const live = await reader.read(sources, baseline.cursors);
+    expect(eventTypes(live.events)).toEqual(['turn-started', 'turn-started']);
+    expect(live.events.every(({ baseline: historical }) => !historical)).toBe(true);
+  });
+
+  it('reports fixed-boundary exhaustion for an unterminated line and completes it live later', async () => {
+    const root = await testRoot();
+    const file = path.join(root, 'rollout-' + SESSION_ID + '.jsonl');
+    const prefix = sessionMeta() + '\n';
+    const partial = event('task_started', 'turn-partial-boundary');
+    const split = Math.floor(partial.length / 2);
+    await writeFile(file, prefix + partial.slice(0, split));
+    const reader = new CodexRolloutReader(root);
+    const cutoff = await reader.captureRolloutEndOffset(file);
+    expect(cutoff).toBe(prefix.length + split);
+    const key = cursorKeyForPath(root, file);
+    const first = await reader.read(
+      [sourceFor(file)],
+      {},
+      {
+        frozenCutoffs: { [key]: cutoff! },
+        firstInstallBaseline: true,
+      },
+    );
+    expect(first.events).toEqual([]);
+    expect(first.exhaustedSourceIds).toEqual([key]);
+    expect(first.complete).toBe(true);
+    expect(first.cursors[key].offset).toBe(prefix.length);
+    await appendFile(file, partial.slice(split) + '\n');
+    const second = await reader.read([sourceFor(file)], first.cursors);
+    expect(eventTypes(second.events)).toEqual(['turn-started']);
+    expect(second.events[0]?.baseline).toBe(false);
+  });
+
+  it('continues a fixed cutoff through event budget without consuming appends', async () => {
+    const root = await testRoot();
+    const file = path.join(root, 'rollout-' + SESSION_ID + '.jsonl');
+    await writeLines(file, [
+      sessionMeta(),
+      ...Array.from({ length: MAX_EVENTS_PER_READ + 1 }, (_, index) =>
+        event('agent_message', 'turn-fixed-budget', { sequence: index }),
+      ),
+    ]);
+    const reader = new CodexRolloutReader(root);
+    const cutoff = await reader.captureRolloutEndOffset(file);
+    const key = cursorKeyForPath(root, file);
+    const source = sourceFor(file);
+    const first = await reader.read(
+      [source],
+      {},
+      {
+        frozenCutoffs: { [key]: cutoff! },
+        firstInstallBaseline: true,
+      },
+    );
+    expect(first.events).toHaveLength(MAX_EVENTS_PER_READ);
+    expect(first.nextSourceIndex).toBe(0);
+    expect(first.exhaustedSourceIds).toEqual([]);
+    await appendFile(file, event('agent_message', 'turn-live-after-fixed') + '\n');
+    const second = await reader.read([source], first.cursors, {
+      frozenCutoffs: { [key]: cutoff! },
+    });
+    expect(second.events).toHaveLength(1);
+    expect(second.events[0]?.baseline).toBe(true);
+    expect(second.exhaustedSourceIds).toEqual([key]);
+    expect(second.cursors[key].offset).toBe(cutoff);
+
+    const live = await reader.read([source], second.cursors);
+    expect(live.events).toHaveLength(1);
+    expect(live.events[0]?.baseline).toBe(false);
+    expect(live.events[0]?.event).toMatchObject({ turnId: 'turn-live-after-fixed' });
+  });
+
+  it('marks replacement contents historical after cursor identity changes', async () => {
+    const root = await testRoot();
+    const file = path.join(root, 'rollout-' + SESSION_ID + '.jsonl');
+    await writeLines(file, [sessionMeta(), event('task_started', 'turn-before-replace')]);
+    const reader = new CodexRolloutReader(root);
+    const initial = await reader.read([sourceFor(file)]);
+    const replacement = sessionMeta() + '\n' + event('task_started', 'turn-replacement') + '\n';
+    const replacementFile = file + '.new';
+    await writeFile(replacementFile, replacement);
+    await rename(replacementFile, file);
+    const replaced = await reader.read([sourceFor(file)], initial.cursors);
+    expect(replaced.diagnostics.map(({ code }) => code)).toContain('file-reset');
+    expect(replaced.events).toHaveLength(1);
+    expect(replaced.events[0]?.event).toMatchObject({ turnId: 'turn-replacement' });
+    expect(replaced.events[0]?.baseline).toBe(true);
   });
 });

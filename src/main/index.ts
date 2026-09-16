@@ -20,6 +20,10 @@ import type { SessionSnapshot } from '../shared/session';
 import { PRIMARY_DISPLAY_ID } from '../shared/settings';
 import { createAppLifecycleController } from './app-lifecycle';
 import { createRuntimeCoordinator, type RuntimeCoordinator } from './runtime/coordinator';
+import {
+  CodexDesktopMonitor,
+  type CodexDesktopMonitorOptions,
+} from './providers/codex/desktop-monitor';
 
 const hasSingleInstanceLock = app.requestSingleInstanceLock();
 const TEST_KEYBOARD_ENTRY_HOOK = Symbol.for('agent-status-tiles.test.keyboard-entry');
@@ -36,6 +40,25 @@ let runtimeCoordinator: RuntimeCoordinator | null = null;
 let monitoringCoverageWarning: string | undefined;
 let isQuitting = false;
 let runtimeInitialized = false;
+
+function desktopMonitorOptions(): CodexDesktopMonitorOptions {
+  // Native E2E supplies a controlled app-server and rollout root. This path is
+  // unavailable in packaged builds and is never received over renderer IPC.
+  if (app.isPackaged || process.env.NODE_ENV !== 'test') return {};
+  const binaryPath = process.env.AGENT_STATUS_TILES_TEST_CODEX_BINARY;
+  const sessionsRoot = process.env.AGENT_STATUS_TILES_TEST_CODEX_SESSIONS_ROOT;
+  if (!binaryPath || !sessionsRoot) return {};
+  return {
+    sessionsRoot,
+    resolveBinary: async () => ({
+      ok: true,
+      binaryPath,
+      bundlePath: '',
+      bundleId: 'com.openai.codex',
+      version: 'test',
+    }),
+  };
+}
 
 function isQualifyingSession(session: SessionSnapshot): boolean {
   return session.isTopLevel && !session.isArchived && session.status !== 'idle';
@@ -191,10 +214,7 @@ if (!hasSingleInstanceLock) {
     const preserveFixtureOverlay = !app.isPackaged && overlayState.sessions.length > 0;
     runtimeCoordinator = createRuntimeCoordinator({
       appDataPath: app.getPath('userData'),
-      // Real provider monitors are installed by the subsequent provider slice.
-      // Keeping the list empty here still routes any restored, sanitized state
-      // through the same coordinator/projection boundary.
-      monitors: [],
+      monitors: [new CodexDesktopMonitor(desktopMonitorOptions())],
       onOverlayState: (state) => {
         if (preserveFixtureOverlay && state.sessions.length === 0) return;
         overlayState = { ...state, reducedMotion: desktopPreferences?.get().reduceMotion ?? false };
