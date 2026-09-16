@@ -309,6 +309,96 @@ process.stdin.on('data', chunk => {
   }
 });
 
+test('native overlay fills five recent slots when catalog originator needs rollout proof', async () => {
+  test.skip(process.platform !== 'darwin', 'native overlay targets macOS');
+  const root = await mkdtemp(join(tmpdir(), 'agent-status-tiles-five-threads-e2e-'));
+  const userDataDir = join(root, 'user-data');
+  const sessionsRoot = join(root, 'sessions');
+  const binaryPath = join(root, 'codex');
+  let application: ElectronApplication | undefined;
+  try {
+    await mkdir(userDataDir);
+    await mkdir(sessionsRoot);
+    const records = await Promise.all(
+      Array.from({ length: 6 }, async (_, index) => {
+        const id = `00000000-0000-7000-8000-${String(index + 1).padStart(12, '0')}`;
+        const path = join(sessionsRoot, `rollout-${index + 1}.jsonl`);
+        await writeFile(
+          path,
+          line('2026-09-15T10:00:00.000Z', 'session_meta', {
+            id,
+            source: 'vscode',
+            originator: index === 5 ? 'Other Editor' : 'Codex Desktop',
+          }),
+        );
+        return {
+          id,
+          sessionId: id,
+          createdAt: 1_700_000_000,
+          updatedAt: 1_700_000_100 + index,
+          cwd: '/tmp/example-project',
+          path,
+          cliVersion: 'test',
+          source: 'vscode',
+          originator: index >= 4 ? null : 'Codex Desktop',
+          parentThreadId: null,
+          ephemeral: false,
+        };
+      }),
+    );
+    await writeFile(
+      binaryPath,
+      `#!/usr/bin/env node
+let pending = '';
+process.stdin.setEncoding('utf8');
+process.stdin.on('data', chunk => {
+  pending += chunk;
+  let end;
+  while ((end = pending.indexOf('\\n')) >= 0) {
+    const raw = pending.slice(0, end); pending = pending.slice(end + 1);
+    let request; try { request = JSON.parse(raw); } catch { continue; }
+    if (request.method === 'initialize') {
+      process.stdout.write(JSON.stringify({id:request.id,result:{codexHome:'/tmp/test',platformFamily:'unix',platformOs:'macos',userAgent:'test'}})+'\\n');
+    } else if (request.method === 'thread/list') {
+      const data = request.params.archived ? [] : ${JSON.stringify(records)};
+      process.stdout.write(JSON.stringify({id:request.id,result:{data,nextCursor:null}})+'\\n');
+    }
+  }
+});
+`,
+    );
+    await chmod(binaryPath, 0o700);
+    const monitoring = createInitialMonitoringState();
+    monitoring.partitions['codex:desktop'].enabled = true;
+    await saveSessionState(userDataDir, monitoring);
+    application = await electron.launch({
+      args: [`--user-data-dir=${userDataDir}`, mainEntry],
+      cwd: projectRoot,
+      env: {
+        ...process.env,
+        NODE_ENV: 'test',
+        AGENT_STATUS_TILES_TEST_CODEX_BINARY: binaryPath,
+        AGENT_STATUS_TILES_TEST_CODEX_SESSIONS_ROOT: sessionsRoot,
+      },
+    });
+    const overlay = await overlayWindow(application);
+    await expect
+      .poll(() =>
+        overlay.evaluate(async () => (await window.agentStatusTilesOverlay.getState()).sessions),
+      )
+      .toHaveLength(5);
+    await expect(overlay.locator('.status-tiles__tile')).toHaveCount(5);
+    const visibleIds = await overlay.evaluate(async () =>
+      (await window.agentStatusTilesOverlay.getState()).sessions.map((session) => session.id),
+    );
+    expect(visibleIds).toContain(`codex:${records[4].id}`);
+    expect(visibleIds).not.toContain(`codex:${records[5].id}`);
+  } finally {
+    await application?.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test('enabled Desktop connection remains disconnectable when its reader is lost', async () => {
   test.skip(process.platform !== 'darwin', 'native overlay targets macOS');
   const root = await mkdtemp(join(tmpdir(), 'agent-status-tiles-lost-reader-e2e-'));

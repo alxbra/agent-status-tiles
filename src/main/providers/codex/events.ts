@@ -87,6 +87,8 @@ export interface CodexRolloutReadOptions {
 /** The only rollout metadata exposed to the catalog/qualification boundary. */
 export interface CodexSessionMetaInspection {
   nativeSessionId: string;
+  source?: string;
+  originator?: string;
 }
 
 export interface RolloutReadResult {

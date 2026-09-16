@@ -68,6 +68,151 @@ afterEach(async () => {
 });
 
 describe('Codex Desktop monitor', () => {
+  it('uses validated rollout originator when the catalog omits it', async () => {
+    const { monitor, catalog, record, rolloutPath } = await fixture();
+    catalog.listThreads.mockResolvedValue({
+      records: [{ ...record, sourceEvidence: { ...record.sourceEvidence, originator: undefined } }],
+      nextCursor: null,
+      pagesRead: 1,
+      complete: true,
+    });
+    try {
+      await monitor.start();
+      const confirmed = await monitor.discover();
+      expect(confirmed.sources.map((source) => source.nativeSessionId)).toEqual([catalogId]);
+      expect(confirmed.coverageIncomplete).toBeUndefined();
+
+      for (const [source, originator] of [
+        ['vscode', 'Other Editor'],
+        ['vscode', undefined],
+        ['cli', 'Codex Desktop'],
+      ] as const) {
+        await writeFile(
+          rolloutPath,
+          `${JSON.stringify({ type: 'session_meta', payload: { id: nativeId, source, originator } })}\n`,
+        );
+        const rejected = await monitor.discover();
+        expect(rejected.sources).toEqual([]);
+        expect(rejected.coverageIncomplete).toBe(true);
+      }
+    } finally {
+      await monitor.stop();
+    }
+  });
+
+  it('quarantines an oversized rollout without hiding other confirmed threads', async () => {
+    const { monitor, catalog, record, rolloutPath } = await fixture();
+    const secondId = '55555555-5555-7555-8555-555555555555';
+    const secondPath = join(dirname(rolloutPath), 'large.jsonl');
+    await writeFile(
+      secondPath,
+      `${JSON.stringify({ timestamp: '2026-09-15T10:00:00.000Z', type: 'session_meta', payload: { id: secondId, source: 'vscode', originator: 'Codex Desktop' } })}\n${JSON.stringify({ timestamp: '2026-09-15T10:00:01.000Z', type: 'event_msg', payload: { type: 'agent_message', message: 'x'.repeat(2 * 1024 * 1024) } })}\n`,
+    );
+    catalog.listThreads.mockResolvedValue({
+      records: [
+        record,
+        {
+          ...record,
+          nativeId: secondId,
+          sessionId: secondId,
+          rolloutPath: secondPath,
+          sourceEvidence: { ...record.sourceEvidence, originator: undefined },
+        },
+      ],
+      nextCursor: null,
+      pagesRead: 1,
+      complete: true,
+    });
+    try {
+      await monitor.start();
+      const captured = await monitor.capture((await monitor.discover()).sources);
+      const read = await monitor.read({
+        sources: captured,
+        cursors: {},
+        sessions: {},
+        frozenCutoffs: {},
+        baseline: true,
+      });
+      expect(read.coverageIncomplete).toBe(true);
+      expect(read.unavailableSourceIds).toEqual([captured[1].id]);
+      const recovered = await monitor.discover();
+      expect(recovered.sources.map((source) => source.nativeSessionId)).toEqual([record.nativeId]);
+      expect(recovered.coverageIncomplete).toBe(true);
+    } finally {
+      await monitor.stop();
+    }
+  });
+
+  it('replays only the ten newest active threads while keeping older metadata', async () => {
+    const { monitor, catalog, record, rolloutPath } = await fixture();
+    const records = await Promise.all(
+      Array.from({ length: 11 }, async (_, index) => {
+        const id = `00000000-0000-7000-8000-${String(index + 1).padStart(12, '0')}`;
+        const path = join(dirname(rolloutPath), `thread-${index}.jsonl`);
+        await writeFile(
+          path,
+          `${JSON.stringify({ timestamp: '2026-09-15T10:00:00.000Z', type: 'session_meta', payload: { id, source: 'vscode', originator: 'Codex Desktop' } })}\n`,
+        );
+        return {
+          ...record,
+          nativeId: id,
+          sessionId: id,
+          rolloutPath: path,
+          updatedAt: 1_700_000_001_000 + index,
+          sourceEvidence: {
+            ...record.sourceEvidence,
+            originator: index === 10 ? undefined : 'Codex Desktop',
+          },
+        };
+      }),
+    );
+    catalog.listThreads.mockResolvedValue({
+      records,
+      nextCursor: null,
+      pagesRead: 1,
+      complete: true,
+    });
+    try {
+      await monitor.start();
+      const discovered = await monitor.discover();
+      expect(discovered.sources).toHaveLength(11);
+      expect(discovered.sources[0].nativeSessionId).toBe(records[10].nativeId);
+      const captured = await monitor.capture(discovered.sources);
+      const read = await monitor.read({
+        sources: captured,
+        cursors: {},
+        sessions: {},
+        frozenCutoffs: {},
+        baseline: true,
+      });
+      expect(read.complete).toBe(true);
+      expect(read.exhaustedSourceIds).toContain(captured[10].id);
+      expect(read.unavailableSourceIds).toContain(captured[10].id);
+      expect(read.cursors[captured[10].id]).toBeUndefined();
+      expect(Object.keys(read.cursors)).toHaveLength(10);
+
+      catalog.listThreads.mockResolvedValue({
+        records: [{ ...records[0], updatedAt: 1_700_000_002_000 }, ...records.slice(1)],
+        nextCursor: null,
+        pagesRead: 1,
+        complete: true,
+      });
+      const promoted = await monitor.discover();
+      expect(promoted.sources[0].nativeSessionId).toBe(records[0].nativeId);
+      const promotedSources = await monitor.capture(promoted.sources);
+      const resumed = await monitor.read({
+        sources: promotedSources,
+        cursors: read.cursors,
+        sessions: {},
+        frozenCutoffs: { [promotedSources[0].id]: promotedSources[0].endOffset! },
+        baseline: false,
+      });
+      expect(resumed.cursors[promotedSources[0].id]).toBeDefined();
+    } finally {
+      await monitor.stop();
+    }
+  });
+
   it('keeps distinct thread IDs with one rollout session ID separate and rejects a shared rollout file', async () => {
     const { monitor, catalog, record, rolloutPath } = await fixture();
     const secondId = '44444444-4444-7444-8444-444444444444';
@@ -249,7 +394,7 @@ describe('Codex Desktop monitor', () => {
           ...record,
           nativeId: '33333333-3333-7333-8333-333333333333',
           sessionId: '33333333-3333-7333-8333-333333333333',
-          sourceEvidence: { ...record.sourceEvidence, originator: undefined },
+          sourceEvidence: { ...record.sourceEvidence, source: 'unknown', originator: undefined },
         },
       ],
       nextCursor: null,

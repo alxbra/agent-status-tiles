@@ -165,9 +165,9 @@ export class CodexRolloutReader {
   }
 
   /**
-   * Read only the bounded protocol SessionMeta identity from a validated
-   * rollout. No prompts, transcript, tool arguments, or other payload fields
-   * cross this boundary. An absent or malformed identity returns undefined.
+   * Read only the bounded protocol SessionMeta identity and source evidence
+   * from a validated rollout. No prompts, transcript, tool arguments, or
+   * other payload fields cross this boundary.
    */
   async inspectSessionMeta(rolloutPath: string): Promise<CodexSessionMetaInspection | undefined> {
     const validated = await this.validateFilePath(rolloutPath);
@@ -211,8 +211,8 @@ export class CodexRolloutReader {
         } catch {
           continue;
         }
-        const id = sessionMetaId(record);
-        if (id) return { nativeSessionId: id };
+        const inspection = sessionMetaInspection(record);
+        if (inspection) return inspection;
       }
       return undefined;
     } catch {
@@ -1136,11 +1136,19 @@ function canResolveInputOnLine(line: string, context: FileContext): boolean {
   );
 }
 
-function sessionMetaId(value: unknown): string | undefined {
+function sessionMetaInspection(value: unknown): CodexSessionMetaInspection | undefined {
   const record = asRecord(value);
   if (boundedString(record?.type) !== 'session_meta') return undefined;
   const payload = asRecord(record?.payload);
-  return boundedString(payload?.id);
+  const nativeSessionId = boundedString(payload?.id);
+  if (nativeSessionId === undefined) return undefined;
+  const source = boundedString(payload?.source);
+  const originator = boundedString(payload?.originator);
+  return {
+    nativeSessionId,
+    ...(source === undefined ? {} : { source }),
+    ...(originator === undefined ? {} : { originator }),
+  };
 }
 
 function normalizeInputRequests(value: unknown): Readonly<Record<string, InputRequest>> {
@@ -1199,7 +1207,7 @@ function fileIdentity(metadata: { dev: number; ino: number }): string {
   return `${String(metadata.dev)}:${String(metadata.ino)}`;
 }
 
-function hashPath(filePath: string): string {
+export function hashPath(filePath: string): string {
   return createHash('sha256').update(filePath).digest('hex');
 }
 

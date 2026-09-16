@@ -1,6 +1,7 @@
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { makeSessionId, type SessionRecord, type Surface } from '../../../shared/session';
+import { MAX_RECENT_THREAD_LIMIT } from '../../../shared/settings';
 import type {
   ProviderSurfaceMonitor,
   RuntimeDiscoveryResult,
@@ -11,7 +12,7 @@ import type {
 import { resolveBundledCodexBinary } from './bundled-binary-resolver';
 import { CodexCatalogClient, type CodexCatalogRecord } from './catalog-client';
 import { qualifyCodexDesktopCatalog } from './catalog-qualification';
-import { CodexRolloutReader, cursorKeyForPath } from './rollout-reader';
+import { CodexRolloutReader, cursorKeyForPath, hashPath } from './rollout-reader';
 import type { CodexRolloutSource } from './events';
 
 type Catalog = Pick<CodexCatalogClient, 'start' | 'stop' | 'listThreads'>;
@@ -43,6 +44,7 @@ export interface QualifiedCodexCatalog {
     updatedAt: number;
     isArchived: boolean;
   }[];
+  needsRolloutProof?: QualifiedCodexCatalog['sessions'];
   issues: readonly unknown[];
 }
 
@@ -80,6 +82,9 @@ export class CodexSurfaceMonitor implements ProviderSurfaceMonitor {
   private readonly resolveBinary: () => Promise<BinaryResolution>;
   private catalog: Catalog | undefined;
   private files = new Map<string, DiscoveredFile>();
+  /** Unreadable files are retried after the monitor restarts, not on every poll. */
+  private unreadablePaths = new Set<string>();
+  private unavailableSourceIds = new Set<string>();
   private started = false;
 
   constructor(
@@ -127,6 +132,8 @@ export class CodexSurfaceMonitor implements ProviderSurfaceMonitor {
   async stop(): Promise<void> {
     this.started = false;
     this.files.clear();
+    this.unreadablePaths.clear();
+    this.unavailableSourceIds.clear();
     this.reader.stop();
     this.archivedReader.stop();
     const catalog = this.catalog;
@@ -165,6 +172,7 @@ export class CodexSurfaceMonitor implements ProviderSurfaceMonitor {
       cursor = page.nextCursor;
     }
     if (!complete) throw new Error(`${this.surface}-catalog-incomplete`);
+    this.unavailableSourceIds.clear();
     const qualified = this.qualify(records);
     coverageIncomplete ||= qualified.issues.length > 0;
 
@@ -173,8 +181,14 @@ export class CodexSurfaceMonitor implements ProviderSurfaceMonitor {
     const sources: RuntimeMonitorSource[] = [];
     // Keep active sources before archive-only metadata sources so the reader's
     // continuation index remains stable while archived files are never replayed.
-    const orderedSessions = [...qualified.sessions].sort(
-      (left, right) => Number(left.isArchived) - Number(right.isArchived),
+    // A missing catalog originator can be resolved only by the matching,
+    // validated rollout SessionMeta, never by a filename or project path.
+    const proofCandidates = new Set(qualified.needsRolloutProof ?? []);
+    const orderedSessions = [...qualified.sessions, ...proofCandidates].sort(
+      (left, right) =>
+        Number(left.isArchived) - Number(right.isArchived) ||
+        right.updatedAt - left.updatedAt ||
+        (left.nativeId < right.nativeId ? -1 : left.nativeId > right.nativeId ? 1 : 0),
     );
     const pathCounts = new Map<string, number>();
     for (const session of orderedSessions) {
@@ -183,6 +197,10 @@ export class CodexSurfaceMonitor implements ProviderSurfaceMonitor {
     }
     for (const session of orderedSessions) {
       if (session.rolloutPath === undefined) {
+        coverageIncomplete = true;
+        continue;
+      }
+      if (this.unreadablePaths.has(resolve(session.rolloutPath))) {
         coverageIncomplete = true;
         continue;
       }
@@ -197,6 +215,13 @@ export class CodexSurfaceMonitor implements ProviderSurfaceMonitor {
         continue;
       }
       if (meta.nativeSessionId !== session.sessionId) {
+        coverageIncomplete = true;
+        continue;
+      }
+      if (
+        proofCandidates.has(session) &&
+        (meta.source !== 'vscode' || meta.originator !== 'Codex Desktop')
+      ) {
         coverageIncomplete = true;
         continue;
       }
@@ -262,6 +287,7 @@ export class CodexSurfaceMonitor implements ProviderSurfaceMonitor {
   async read(request: RuntimeReadRequest): Promise<RuntimeReadResult> {
     const activeSources: RuntimeMonitorSource[] = [];
     const archivedSourceIds: string[] = [];
+    const metadataOnlySourceIds: string[] = [];
     for (const source of request.sources) {
       const file = this.files.get(source.id);
       if (
@@ -272,7 +298,8 @@ export class CodexSurfaceMonitor implements ProviderSurfaceMonitor {
         throw new Error(`${this.surface}-source-changed`);
       }
       if (source.isArchived) archivedSourceIds.push(source.id);
-      else activeSources.push(source);
+      else if (activeSources.length < MAX_RECENT_THREAD_LIMIT) activeSources.push(source);
+      else metadataOnlySourceIds.push(source.id);
     }
     const sources: CodexRolloutSource[] = activeSources.map((source) => {
       const file = this.files.get(source.id)!;
@@ -309,13 +336,28 @@ export class CodexSurfaceMonitor implements ProviderSurfaceMonitor {
     // Unknown non-structural records cannot be promoted into status events,
     // but they need not hide confirmed events from other records/sessions.
     // Identity, file, and replay-boundary failures still stop the surface.
-    if (
-      result.diagnostics.some(
-        (diagnostic) =>
-          diagnostic.code !== 'file-reset' && !NONFATAL_COVERAGE_DIAGNOSTICS.has(diagnostic.code),
-      )
-    ) {
-      throw new Error(`${this.surface}-rollout-coverage-issue`);
+    const fatal = result.diagnostics.filter(
+      (diagnostic) =>
+        diagnostic.code !== 'file-reset' && !NONFATAL_COVERAGE_DIAGNOSTICS.has(diagnostic.code),
+    );
+    if (fatal.length > 0) {
+      const sourceByPathKey = new Map(
+        activeSources.flatMap((source) => {
+          const file = this.files.get(source.id);
+          return file === undefined ? [] : [[hashPath(resolve(file.path)), source] as const];
+        }),
+      );
+      for (const diagnostic of fatal) {
+        if (diagnostic.code !== 'oversized-line') continue;
+        const source = sourceByPathKey.get(diagnostic.pathKey);
+        const file = source === undefined ? undefined : this.files.get(source.id);
+        if (source === undefined || file === undefined)
+          throw new Error(`${this.surface}-rollout-coverage-issue`);
+        this.unreadablePaths.add(resolve(file.path));
+        this.unavailableSourceIds.add(source.id);
+      }
+      if (fatal.some((diagnostic) => diagnostic.code !== 'oversized-line'))
+        throw new Error(`${this.surface}-rollout-coverage-issue`);
     }
     return {
       events: result.events.map((entry) => ({
@@ -326,15 +368,22 @@ export class CodexSurfaceMonitor implements ProviderSurfaceMonitor {
         Object.entries(result.cursors).map(([key, cursor]) => [runtimeSourceId(key), cursor]),
       ),
       complete: result.complete,
-      ...(result.diagnostics.some((diagnostic) =>
-        NONFATAL_COVERAGE_DIAGNOSTICS.has(diagnostic.code),
-      )
+      ...(this.unavailableSourceIds.size > 0 ||
+      result.diagnostics.some((diagnostic) => NONFATAL_COVERAGE_DIAGNOSTICS.has(diagnostic.code))
         ? { coverageIncomplete: true }
+        : {}),
+      ...(this.unavailableSourceIds.size > 0 || metadataOnlySourceIds.length > 0
+        ? {
+            unavailableSourceIds: [
+              ...new Set([...this.unavailableSourceIds, ...metadataOnlySourceIds]),
+            ],
+          }
         : {}),
       ...(result.nextSourceIndex === undefined ? {} : { nextSourceIndex: result.nextSourceIndex }),
       exhaustedSourceIds: [
         ...(result.exhaustedSourceIds ?? []).map(runtimeSourceId),
         ...archivedSourceIds,
+        ...metadataOnlySourceIds,
       ],
     };
   }

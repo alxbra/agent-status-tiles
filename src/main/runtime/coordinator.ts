@@ -41,7 +41,9 @@ export const MAX_OVERLAY_RUNTIME_SESSIONS = 256;
 export const MAX_RETAINED_RUNTIME_SESSIONS = 1_024;
 /** Reader output is bounded before it can be retained in a candidate state. */
 export const MAX_RUNTIME_EVENTS_PER_READ = 4_096;
-export const MAX_RUNTIME_EVENTS_PER_REPLAY = 16_384;
+// Ten recent Codex rollouts can produce more than 16k historical events.
+// Keep a fixed aggregate bound while allowing their initial baseline to finish.
+export const MAX_RUNTIME_EVENTS_PER_REPLAY = 65_536;
 
 export type RuntimeHealthStatus = 'starting' | 'available' | 'unavailable' | 'error' | 'stopped';
 
@@ -100,6 +102,8 @@ export interface RuntimeReadResult {
   complete: boolean;
   /** Non-structural records were skipped; confirmed observations remain usable. */
   coverageIncomplete?: boolean;
+  /** Confirmed sources whose status-bearing history could not be read safely. */
+  unavailableSourceIds?: readonly string[];
   /** Explicit exhaustion is allowed for a source with no byte cursor (e.g. a bounded API). */
   exhaustedSourceIds?: readonly string[];
   /** Readers may return a continuation index when their work budget is exhausted. */
@@ -171,6 +175,7 @@ interface SurfaceRuntime {
   readonly monitor?: ProviderSurfaceMonitor;
   sources: readonly RuntimeMonitorSource[];
   coverageIncomplete: boolean;
+  unavailableSourceIds: Set<string>;
   lastCatalogAt: number;
   retryMs: number;
   timer?: ReturnType<typeof setTimeout>;
@@ -623,9 +628,19 @@ function overlaySessions(
     [...surfaces].map(([key, runtime]) => [
       key,
       new Set(
-        runtime.sources.map((source) =>
-          makeSessionId(providerFromKey(key), source.nativeSessionId),
-        ),
+        runtime.sources
+          .filter((source) => !runtime.unavailableSourceIds.has(source.id))
+          .map((source) => makeSessionId(providerFromKey(key), source.nativeSessionId)),
+      ),
+    ]),
+  );
+  const unavailableIds = new Map(
+    [...surfaces].map(([key, runtime]) => [
+      key,
+      new Set(
+        runtime.sources
+          .filter((source) => runtime.unavailableSourceIds.has(source.id))
+          .map((source) => makeSessionId(providerFromKey(key), source.nativeSessionId)),
       ),
     ]),
   );
@@ -654,6 +669,7 @@ function overlaySessions(
     const owner = ownerFor(snapshot.id);
     return owner !== undefined &&
       (health[owner].status !== 'available' ||
+        unavailableIds.get(owner)?.has(snapshot.id) ||
         (health[owner].coverageIncomplete === true && !confirmedIds.get(owner)?.has(snapshot.id)))
       ? { ...snapshot, status: 'unavailable' as const }
       : snapshot;
@@ -711,6 +727,7 @@ export function createRuntimeCoordinator(options: RuntimeCoordinatorOptions): Ru
       monitor: monitorByKey.get(key),
       sources: [],
       coverageIncomplete: false,
+      unavailableSourceIds: new Set(),
       lastCatalogAt: 0,
       retryMs: filePollIntervalMs,
       busy: false,
@@ -1127,6 +1144,7 @@ export function createRuntimeCoordinator(options: RuntimeCoordinatorOptions): Ru
         )
           throw new Error('invalid-catalog-coverage');
         runtime.sources = await captureSources(monitor, discovery);
+        runtime.unavailableSourceIds.clear();
         await migrateCodexThreadIds(runtime, expectedGeneration, expectedSurfaceGeneration);
         runtime.coverageIncomplete ||= discovery.coverageIncomplete === true;
         if (
@@ -1217,6 +1235,11 @@ export function createRuntimeCoordinator(options: RuntimeCoordinatorOptions): Ru
           throw new Error('invalid-read-coverage');
         }
         runtime.coverageIncomplete ||= read.coverageIncomplete === true;
+        for (const sourceId of read.unavailableSourceIds ?? []) {
+          if (!validSourceId(sourceId) || !runtime.sources.some((source) => source.id === sourceId))
+            throw new Error('invalid-unavailable-source');
+          runtime.unavailableSourceIds.add(sourceId);
+        }
         if (read.events.length > MAX_RUNTIME_EVENTS_PER_READ) {
           throw new Error('read-event-overflow');
         }
@@ -1389,6 +1412,7 @@ export function createRuntimeCoordinator(options: RuntimeCoordinatorOptions): Ru
     const stoppingGeneration = runtime.generation;
     clearTimer(runtime);
     runtime.sources = [];
+    runtime.unavailableSourceIds.clear();
     runtime.coverageIncomplete = false;
     runtime.lastCatalogAt = 0;
     runtime.retryMs = filePollIntervalMs;

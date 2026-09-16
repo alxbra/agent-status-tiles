@@ -25,11 +25,13 @@ export interface CodexDesktopQualification {
 
 export type CodexQualificationDecision =
   | { kind: 'qualified'; session: CodexDesktopQualification }
+  | { kind: 'needs-rollout-proof'; session: CodexDesktopQualification }
   | { kind: 'skip' }
   | { kind: 'ambiguous'; issue: CodexQualificationIssue };
 
 export interface CodexDesktopCatalogQualification {
   sessions: readonly CodexDesktopQualification[];
+  needsRolloutProof: readonly CodexDesktopQualification[];
   issues: readonly CodexQualificationIssue[];
 }
 
@@ -52,10 +54,10 @@ function ambiguous(): CodexQualificationDecision {
 /**
  * Qualify one metadata-only catalog record for the Codex Desktop surface.
  *
- * The source/originator pair is exact by design. We do not infer Desktop from
- * a path, project, CLI version, or a missing discriminator. Missing evidence
- * on an otherwise plausible vscode record is surfaced as a fixed coverage
- * issue so callers cannot silently present a guessed session.
+ * The source/originator pair is exact by design. A vscode record without a
+ * catalog originator remains provisional until the monitor verifies the same
+ * pair in the validated rollout SessionMeta. Other missing or contradictory
+ * evidence remains a fixed coverage issue.
  */
 export function qualifyCodexDesktopRecord(record: CodexCatalogRecord): CodexQualificationDecision {
   const source = record.sourceEvidence.source;
@@ -81,23 +83,26 @@ export function qualifyCodexDesktopRecord(record: CodexCatalogRecord): CodexQual
       ? ambiguous()
       : { kind: 'skip' };
   }
-  if (originator === undefined) return ambiguous();
+  if (originator === undefined) {
+    return { kind: 'needs-rollout-proof', session: qualifiedSession(record) };
+  }
   if (originator !== CODEX_DESKTOP_ORIGINATOR) return { kind: 'skip' };
 
+  return { kind: 'qualified', session: qualifiedSession(record) };
+}
+
+function qualifiedSession(record: CodexCatalogRecord): CodexDesktopQualification {
   return {
-    kind: 'qualified',
-    session: {
-      nativeId: record.nativeId,
-      sessionId: record.sessionId,
-      projectBasename: record.projectBasename,
-      ...(record.name === undefined ? {} : { name: record.name }),
-      ...(record.rolloutPath === undefined ? {} : { rolloutPath: record.rolloutPath }),
-      createdAt: record.createdAt,
-      updatedAt: record.updatedAt,
-      surface: 'desktop',
-      isTopLevel: true,
-      isArchived: record.isArchived ?? false,
-    },
+    nativeId: record.nativeId,
+    sessionId: record.sessionId,
+    projectBasename: record.projectBasename,
+    ...(record.name === undefined ? {} : { name: record.name }),
+    ...(record.rolloutPath === undefined ? {} : { rolloutPath: record.rolloutPath }),
+    createdAt: record.createdAt,
+    updatedAt: record.updatedAt,
+    surface: 'desktop',
+    isTopLevel: true,
+    isArchived: record.isArchived ?? false,
   };
 }
 
@@ -107,11 +112,14 @@ export function qualifyCodexDesktopCatalog(
   onIssue?: (issue: CodexQualificationIssue) => void,
 ): CodexDesktopCatalogQualification {
   const sessions: CodexDesktopQualification[] = [];
+  const needsRolloutProof: CodexDesktopQualification[] = [];
   const issues: CodexQualificationIssue[] = [];
   for (const record of records) {
     const decision = qualifyCodexDesktopRecord(record);
     if (decision.kind === 'qualified') {
       sessions.push(decision.session);
+    } else if (decision.kind === 'needs-rollout-proof') {
+      needsRolloutProof.push(decision.session);
     } else if (decision.kind === 'ambiguous') {
       issues.push(decision.issue);
       try {
@@ -121,5 +129,5 @@ export function qualifyCodexDesktopCatalog(
       }
     }
   }
-  return { sessions, issues };
+  return { sessions, needsRolloutProof, issues };
 }

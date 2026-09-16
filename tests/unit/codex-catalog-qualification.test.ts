@@ -48,9 +48,15 @@ describe('Codex Desktop catalog qualification', () => {
     });
   });
 
-  it('reports ambiguous plausible evidence without echoing metadata', () => {
+  it('requires rollout proof when a vscode catalog record lacks an originator', () => {
+    expect(qualifyCodexDesktopRecord(record({ originator: undefined }))).toEqual({
+      kind: 'needs-rollout-proof',
+      session: expect.objectContaining({ nativeId: 'native-1', surface: 'desktop' }),
+    });
+  });
+
+  it('reports other ambiguous evidence without echoing metadata', () => {
     const decisions = [
-      qualifyCodexDesktopRecord(record({ originator: undefined })),
       qualifyCodexDesktopRecord(record({ source: 'unknown', originator: undefined })),
       qualifyCodexDesktopRecord(record({ source: 'custom', originator: 'Codex Desktop' })),
       qualifyCodexDesktopRecord(record({ source: 'cli', originator: 'Codex Desktop' })),
@@ -80,7 +86,8 @@ describe('Codex Desktop catalog qualification', () => {
       (issue) => issues.push(issue.code),
     );
     expect(result.sessions).toHaveLength(1);
-    expect(result.issues).toEqual([{ code: 'coverage-ambiguous' }]);
-    expect(issues).toEqual(['coverage-ambiguous']);
+    expect(result.needsRolloutProof).toHaveLength(1);
+    expect(result.issues).toEqual([]);
+    expect(issues).toEqual([]);
   });
 });
