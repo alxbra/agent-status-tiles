@@ -41,7 +41,9 @@ export const MAX_OVERLAY_RUNTIME_SESSIONS = 256;
 export const MAX_RETAINED_RUNTIME_SESSIONS = 1_024;
 /** Reader output is bounded before it can be retained in a candidate state. */
 export const MAX_RUNTIME_EVENTS_PER_READ = 4_096;
-export const MAX_RUNTIME_EVENTS_PER_REPLAY = 16_384;
+// Ten recent Codex rollouts can produce more than 16k historical events.
+// Keep a fixed aggregate bound while allowing their initial baseline to finish.
+export const MAX_RUNTIME_EVENTS_PER_REPLAY = 65_536;
 
 export type RuntimeHealthStatus = 'starting' | 'available' | 'unavailable' | 'error' | 'stopped';
 

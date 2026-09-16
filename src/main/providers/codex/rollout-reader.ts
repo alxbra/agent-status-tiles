@@ -1207,7 +1207,7 @@ function fileIdentity(metadata: { dev: number; ino: number }): string {
   return `${String(metadata.dev)}:${String(metadata.ino)}`;
 }
 
-function hashPath(filePath: string): string {
+export function hashPath(filePath: string): string {
   return createHash('sha256').update(filePath).digest('hex');
 }
 

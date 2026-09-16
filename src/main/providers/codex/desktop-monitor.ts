@@ -1,6 +1,7 @@
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { makeSessionId, type SessionRecord, type Surface } from '../../../shared/session';
+import { MAX_RECENT_THREAD_LIMIT } from '../../../shared/settings';
 import type {
   ProviderSurfaceMonitor,
   RuntimeDiscoveryResult,
@@ -11,7 +12,7 @@ import type {
 import { resolveBundledCodexBinary } from './bundled-binary-resolver';
 import { CodexCatalogClient, type CodexCatalogRecord } from './catalog-client';
 import { qualifyCodexDesktopCatalog } from './catalog-qualification';
-import { CodexRolloutReader, cursorKeyForPath } from './rollout-reader';
+import { CodexRolloutReader, cursorKeyForPath, hashPath } from './rollout-reader';
 import type { CodexRolloutSource } from './events';
 
 type Catalog = Pick<CodexCatalogClient, 'start' | 'stop' | 'listThreads'>;
@@ -81,6 +82,9 @@ export class CodexSurfaceMonitor implements ProviderSurfaceMonitor {
   private readonly resolveBinary: () => Promise<BinaryResolution>;
   private catalog: Catalog | undefined;
   private files = new Map<string, DiscoveredFile>();
+  /** Unreadable files are retried after the monitor restarts, not on every poll. */
+  private unreadablePaths = new Set<string>();
+  private quarantinePending = false;
   private started = false;
 
   constructor(
@@ -128,6 +132,8 @@ export class CodexSurfaceMonitor implements ProviderSurfaceMonitor {
   async stop(): Promise<void> {
     this.started = false;
     this.files.clear();
+    this.unreadablePaths.clear();
+    this.quarantinePending = false;
     this.reader.stop();
     this.archivedReader.stop();
     const catalog = this.catalog;
@@ -166,6 +172,7 @@ export class CodexSurfaceMonitor implements ProviderSurfaceMonitor {
       cursor = page.nextCursor;
     }
     if (!complete) throw new Error(`${this.surface}-catalog-incomplete`);
+    this.quarantinePending = false;
     const qualified = this.qualify(records);
     coverageIncomplete ||= qualified.issues.length > 0;
 
@@ -178,7 +185,10 @@ export class CodexSurfaceMonitor implements ProviderSurfaceMonitor {
     // validated rollout SessionMeta, never by a filename or project path.
     const proofCandidates = new Set(qualified.needsRolloutProof ?? []);
     const orderedSessions = [...qualified.sessions, ...proofCandidates].sort(
-      (left, right) => Number(left.isArchived) - Number(right.isArchived),
+      (left, right) =>
+        Number(left.isArchived) - Number(right.isArchived) ||
+        right.updatedAt - left.updatedAt ||
+        (left.nativeId < right.nativeId ? -1 : left.nativeId > right.nativeId ? 1 : 0),
     );
     const pathCounts = new Map<string, number>();
     for (const session of orderedSessions) {
@@ -187,6 +197,10 @@ export class CodexSurfaceMonitor implements ProviderSurfaceMonitor {
     }
     for (const session of orderedSessions) {
       if (session.rolloutPath === undefined) {
+        coverageIncomplete = true;
+        continue;
+      }
+      if (this.unreadablePaths.has(resolve(session.rolloutPath))) {
         coverageIncomplete = true;
         continue;
       }
@@ -273,6 +287,7 @@ export class CodexSurfaceMonitor implements ProviderSurfaceMonitor {
   async read(request: RuntimeReadRequest): Promise<RuntimeReadResult> {
     const activeSources: RuntimeMonitorSource[] = [];
     const archivedSourceIds: string[] = [];
+    const metadataOnlySourceIds: string[] = [];
     for (const source of request.sources) {
       const file = this.files.get(source.id);
       if (
@@ -283,7 +298,8 @@ export class CodexSurfaceMonitor implements ProviderSurfaceMonitor {
         throw new Error(`${this.surface}-source-changed`);
       }
       if (source.isArchived) archivedSourceIds.push(source.id);
-      else activeSources.push(source);
+      else if (activeSources.length < MAX_RECENT_THREAD_LIMIT) activeSources.push(source);
+      else metadataOnlySourceIds.push(source.id);
     }
     const sources: CodexRolloutSource[] = activeSources.map((source) => {
       const file = this.files.get(source.id)!;
@@ -320,12 +336,31 @@ export class CodexSurfaceMonitor implements ProviderSurfaceMonitor {
     // Unknown non-structural records cannot be promoted into status events,
     // but they need not hide confirmed events from other records/sessions.
     // Identity, file, and replay-boundary failures still stop the surface.
-    if (
-      result.diagnostics.some(
-        (diagnostic) =>
-          diagnostic.code !== 'file-reset' && !NONFATAL_COVERAGE_DIAGNOSTICS.has(diagnostic.code),
-      )
-    ) {
+    const fatal = result.diagnostics.filter(
+      (diagnostic) =>
+        diagnostic.code !== 'file-reset' && !NONFATAL_COVERAGE_DIAGNOSTICS.has(diagnostic.code),
+    );
+    if (fatal.length > 0) {
+      const pathByKey = new Map(
+        activeSources.flatMap((source) => {
+          const file = this.files.get(source.id);
+          return file === undefined
+            ? []
+            : [[hashPath(resolve(file.path)), resolve(file.path)] as const];
+        }),
+      );
+      for (const diagnostic of fatal) {
+        if (diagnostic.code !== 'oversized-line') continue;
+        const filePath = pathByKey.get(diagnostic.pathKey);
+        if (filePath !== undefined) {
+          this.unreadablePaths.add(filePath);
+          this.quarantinePending = true;
+        }
+      }
+      if (fatal.some((diagnostic) => diagnostic.code !== 'oversized-line'))
+        throw new Error(`${this.surface}-rollout-coverage-issue`);
+    }
+    if (result.complete && this.quarantinePending) {
       throw new Error(`${this.surface}-rollout-coverage-issue`);
     }
     return {
@@ -346,6 +381,7 @@ export class CodexSurfaceMonitor implements ProviderSurfaceMonitor {
       exhaustedSourceIds: [
         ...(result.exhaustedSourceIds ?? []).map(runtimeSourceId),
         ...archivedSourceIds,
+        ...metadataOnlySourceIds,
       ],
     };
   }
