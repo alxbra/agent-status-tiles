@@ -238,8 +238,8 @@ export function StatusTiles({
     [displayedSessions, effectivePointerY, effectiveWidth, measuredHeight, scrollOffset],
   );
   const backdrop = useMemo(
-    () => dockBackdropBounds(layout.tiles, effectiveWidth, measuredHeight),
-    [layout.tiles, effectiveWidth, measuredHeight],
+    () => dockBackdropBounds(layout.hitRegions, effectiveWidth, measuredHeight),
+    [layout.hitRegions, effectiveWidth, measuredHeight],
   );
 
   useEffect(() => {

@@ -24,6 +24,7 @@ type OverlayWindowMock = {
   isFocusable: ReturnType<typeof vi.fn> & (() => boolean);
   loadFile: ReturnType<typeof vi.fn>;
   loadURL: ReturnType<typeof vi.fn>;
+  moveAbove: ReturnType<typeof vi.fn>;
   setAlwaysOnTop: ReturnType<typeof vi.fn>;
   setBounds: ReturnType<typeof vi.fn>;
   setFocusable: ReturnType<typeof vi.fn>;
@@ -47,6 +48,7 @@ type OverlayWindowMock = {
 };
 
 const electronMocks = vi.hoisted(() => ({
+  BaseWindow: vi.fn(),
   BrowserWindow: vi.fn(),
   app: { focus: vi.fn(), hide: vi.fn(), isPackaged: true, show: vi.fn() },
   powerMonitor: { on: vi.fn(), off: vi.fn() },
@@ -58,6 +60,41 @@ const electronMocks = vi.hoisted(() => ({
     off: vi.fn(),
   },
 }));
+
+const dockBackdrops: ReturnType<typeof createDockBackdropMock>[] = [];
+
+function createDockBackdropMock() {
+  let visible = false;
+  let destroyed = false;
+  let bounds: Bounds | undefined;
+  let closedListener: (() => void) | undefined;
+  return {
+    contentView: { setBackgroundColor: vi.fn() },
+    destroy: vi.fn(() => {
+      destroyed = true;
+      closedListener?.();
+    }),
+    getBounds: vi.fn(() => bounds),
+    getMediaSourceId: vi.fn(() => 'window:backdrop:0'),
+    hide: vi.fn(() => {
+      visible = false;
+    }),
+    isDestroyed: vi.fn(() => destroyed),
+    isVisible: vi.fn(() => visible),
+    on: vi.fn((event: string, listener: () => void) => {
+      if (event === 'closed') closedListener = listener;
+    }),
+    setAlwaysOnTop: vi.fn(),
+    setBounds: vi.fn((nextBounds: Bounds) => {
+      bounds = nextBounds;
+    }),
+    setIgnoreMouseEvents: vi.fn(),
+    setVisibleOnAllWorkspaces: vi.fn(),
+    showInactive: vi.fn(() => {
+      visible = true;
+    }),
+  };
+}
 
 vi.mock('electron', () => electronMocks);
 
@@ -83,6 +120,7 @@ function createOverlayWindowMock(
     getBounds: vi.fn(() => bounds),
     loadFile: vi.fn(() => Promise.resolve()),
     loadURL: vi.fn(),
+    moveAbove: vi.fn(),
     setAlwaysOnTop: vi.fn(),
     setBounds: vi.fn((nextBounds: Bounds) => {
       bounds = nextBounds;
@@ -161,6 +199,17 @@ function mockOverlayWindow(window: OverlayWindowMock): void {
 describe('overlay controller', () => {
   beforeEach(() => {
     vi.resetModules();
+    dockBackdrops.length = 0;
+    electronMocks.BaseWindow.mockReset();
+    electronMocks.BaseWindow.mockImplementation(
+      class BaseWindowMock {
+        constructor() {
+          const dock = createDockBackdropMock();
+          dockBackdrops.push(dock);
+          return dock;
+        }
+      } as unknown as typeof electronMocks.BaseWindow,
+    );
     electronMocks.BrowserWindow.mockReset();
     electronMocks.app.focus.mockClear();
     electronMocks.app.hide.mockClear();
@@ -226,6 +275,55 @@ describe('overlay controller', () => {
     expect(overlayWindow.hide).toHaveBeenCalledOnce();
     controller.destroy();
     expect(overlayWindow.destroy).toHaveBeenCalledOnce();
+  });
+
+  it('keeps native dock blur behind the overlay and removes it with the visible cohort', async () => {
+    const overlayWindow = createOverlayWindowMock();
+    mockOverlayWindow(overlayWindow);
+    const { createOverlayController, dockBackdropWindowBounds } =
+      await import('../../src/main/overlay-controller');
+    const controller = createOverlayController();
+    expect(dockBackdropWindowBounds({ x: 1080, y: 222, width: 360, height: 480 }, [])).toBeNull();
+
+    controller.setRendererReady();
+    overlayWindow.readyListener?.();
+    controller.setQualifyingSessionCount(1);
+    expect(electronMocks.BaseWindow).not.toHaveBeenCalled();
+
+    expect(controller.setHitRegions([{ x: 331, y: 228, width: 24, height: 24 }])).toBe(true);
+    expect(electronMocks.BaseWindow).toHaveBeenCalledOnce();
+    expect(electronMocks.BaseWindow.mock.calls[0]?.[0]).toMatchObject({
+      x: 1380,
+      y: 442,
+      width: 56,
+      height: 40,
+      frame: false,
+      transparent: true,
+      roundedCorners: true,
+      focusable: false,
+      vibrancy: 'hud',
+      visualEffectState: 'active',
+    });
+    const dock = dockBackdrops[0]!;
+    expect(dock.contentView.setBackgroundColor).toHaveBeenCalledWith('#00000000');
+    expect(dock.setIgnoreMouseEvents).toHaveBeenCalledWith(true);
+    expect(dock.showInactive).toHaveBeenCalledOnce();
+    expect(overlayWindow.moveAbove).toHaveBeenCalledWith('window:backdrop:0');
+
+    expect(controller.setHitRegions([{ x: 308, y: 220, width: 40, height: 40 }])).toBe(true);
+    expect(dock.setBounds).toHaveBeenLastCalledWith(
+      { x: 1380, y: 434, width: 56, height: 56 },
+      false,
+    );
+    controller.setVisible(false);
+    expect(dock.hide).toHaveBeenCalled();
+    controller.setVisible(true);
+    expect(dock.showInactive).toHaveBeenCalledTimes(2);
+    expect(overlayWindow.moveAbove).toHaveBeenCalledTimes(2);
+    expect(controller.setHitRegions([])).toBe(true);
+    expect(dock.hide).toHaveBeenCalled();
+    controller.destroy();
+    expect(dock.destroy).toHaveBeenCalledOnce();
   });
 
   it('enters keyboard mode only through explicit requests and safely refocuses', async () => {

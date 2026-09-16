@@ -1,19 +1,29 @@
 import type { SessionSnapshot } from '../../shared/session';
+import {
+  DEFAULT_STRIP_HEIGHT,
+  DEFAULT_STRIP_WIDTH,
+  EXPANDED_TILE_SIZE,
+  RIGHT_EDGE_INSET,
+} from '../../shared/dock-backdrop';
+export {
+  DEFAULT_STRIP_HEIGHT,
+  DEFAULT_STRIP_WIDTH,
+  DOCK_BACKDROP_PADDING,
+  EXPANDED_TILE_SIZE,
+  RIGHT_EDGE_INSET,
+  dockBackdropBounds,
+} from '../../shared/dock-backdrop';
+export type { DockBackdropBounds } from '../../shared/dock-backdrop';
 
 export const TILE_SIZE = 10;
 export const TILE_RADIUS = 3;
-export const EXPANDED_TILE_SIZE = 40;
 export const EXPANDED_TILE_RADIUS = 8;
 export const SLOT_SPACING = 24;
-export const RIGHT_EDGE_INSET = 12;
 export const TILE_HIT_SIZE = 24;
 export const MIN_SURFACE_GAP = 6;
 export const MAGNIFICATION_RADIUS_SLOTS = 2;
 export const MAX_VISIBLE_TILES = 12;
-export const DEFAULT_STRIP_WIDTH = 88;
-export const DEFAULT_STRIP_HEIGHT = 480;
 export const TILE_CONTENT_SIZE = 38;
-export const DOCK_BACKDROP_PADDING = 8;
 
 export interface TilePoint {
   x: number;
@@ -58,13 +68,6 @@ export interface TileLayout {
   maxStart: number;
   hasPrevious: boolean;
   hasNext: boolean;
-}
-
-export interface DockBackdropBounds {
-  x: number;
-  y: number;
-  width: number;
-  height: number;
 }
 
 function emptyLayout(): TileLayout {
@@ -292,37 +295,6 @@ export function sessionHitRegions(
   height = DEFAULT_STRIP_HEIGHT,
 ): readonly TileHitRegion[] {
   return layoutTiles(sessions, { height }).hitRegions;
-}
-
-/** A non-interactive frosted panel around the visible tile targets only. */
-export function dockBackdropBounds(
-  tiles: readonly TileGeometry[],
-  stripWidth: number,
-  stripHeight: number,
-): DockBackdropBounds | null {
-  if (tiles.length === 0) return null;
-  const height = Math.max(0, finiteOr(stripHeight, DEFAULT_STRIP_HEIGHT));
-  const y = clamp(
-    Math.min(...tiles.map((tile) => tile.hitRegion.y)) - DOCK_BACKDROP_PADDING,
-    0,
-    height,
-  );
-  const bottom = clamp(
-    Math.max(...tiles.map((tile) => tile.hitRegion.y + tile.hitRegion.height)) +
-      DOCK_BACKDROP_PADDING,
-    y,
-    height,
-  );
-  return {
-    x:
-      normalizeStripWidth(stripWidth) -
-      RIGHT_EDGE_INSET -
-      EXPANDED_TILE_SIZE -
-      DOCK_BACKDROP_PADDING,
-    y,
-    width: EXPANDED_TILE_SIZE + DOCK_BACKDROP_PADDING * 2,
-    height: bottom - y,
-  };
 }
 
 export function surfacesHaveMinimumGap(tiles: readonly TileGeometry[]): boolean {

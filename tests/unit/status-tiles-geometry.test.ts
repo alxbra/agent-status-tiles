@@ -73,11 +73,11 @@ describe('status tile geometry', () => {
 
   it('bounds the decorative dock behind visible targets without changing their hit regions', () => {
     const empty = layoutTiles([], { height: 480 });
-    expect(dockBackdropBounds(empty.tiles, DEFAULT_STRIP_WIDTH, 480)).toBeNull();
+    expect(dockBackdropBounds(empty.hitRegions, DEFAULT_STRIP_WIDTH, 480)).toBeNull();
 
     const collapsed = layoutTiles(sessions(1), { height: 480 });
     const originalHitRegions = collapsed.hitRegions.map((region) => ({ ...region }));
-    const collapsedBackdrop = dockBackdropBounds(collapsed.tiles, DEFAULT_STRIP_WIDTH, 480);
+    const collapsedBackdrop = dockBackdropBounds(collapsed.hitRegions, DEFAULT_STRIP_WIDTH, 480);
     expect(collapsedBackdrop).toEqual({ x: 28, y: 220, width: 56, height: 40 });
     expect(collapsed.hitRegions).toEqual(originalHitRegions);
 
@@ -85,7 +85,7 @@ describe('status tile geometry', () => {
       height: 480,
       pointer: { x: DEFAULT_STRIP_WIDTH - 1, y: 240 },
     });
-    expect(dockBackdropBounds(expanded.tiles, DEFAULT_STRIP_WIDTH, 480)).toEqual({
+    expect(dockBackdropBounds(expanded.hitRegions, DEFAULT_STRIP_WIDTH, 480)).toEqual({
       x: 28,
       y: 212,
       width: 56,
@@ -101,7 +101,7 @@ describe('status tile geometry', () => {
         height,
         pointer: { x: DEFAULT_STRIP_WIDTH - 1, y: pointerY },
       });
-      const backdrop = dockBackdropBounds(layout.tiles, DEFAULT_STRIP_WIDTH, height)!;
+      const backdrop = dockBackdropBounds(layout.hitRegions, DEFAULT_STRIP_WIDTH, height)!;
       expect(backdrop.x).toBeGreaterThanOrEqual(0);
       expect(backdrop.x + backdrop.width).toBeLessThanOrEqual(DEFAULT_STRIP_WIDTH);
       expect(backdrop.y).toBeGreaterThanOrEqual(0);

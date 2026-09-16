@@ -85,7 +85,7 @@ Idle exists in the state model but is not normally displayed. Unavailable status
 - Tile column sits **12 CSS pixels from the display’s usable right edge**.
 - Vertically center the strip within the display work area.
 - Collapsed tiles contain color only: no logos, numbers, text, borders, or status glyphs.
-- A non-interactive, translucent macOS-style blurred backdrop with rounded corners sits behind the visible tile cohort. It must not change tile geometry or expand native hit regions; the user explicitly authorized this after PR #25.
+- A non-interactive, translucent macOS-style blurred backdrop with rounded corners sits behind the visible tile cohort. On macOS, a separate native vibrancy surface supplies desktop blur beneath the transparent tile overlay. It must not change tile geometry or expand native hit regions; the user explicitly authorized this after PR #25.
 - No permanently visible title, toolbar, legend, or settings button.
 - Each tile has a **24 × 24 pixel hit target**.
 - Transparent space outside interactive targets passes mouse events to applications underneath.
