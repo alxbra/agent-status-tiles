@@ -58,6 +58,37 @@ function monitor(
 }
 
 describe('runtime coordinator', () => {
+  it('keeps healthy threads available when another confirmed rollout is unreadable', async () => {
+    const dataPath = await appDataPath();
+    const runtime = createRuntimeCoordinator({
+      appDataPath: dataPath,
+      monitors: [
+        monitor('codex:desktop', [source('good', 2), source('bad', 1)], async (request) => ({
+          events: [],
+          cursors: Object.fromEntries(
+            request.sources.map((item) => [
+              item.id,
+              { identity: 'fixture', offset: item.endOffset ?? 0 },
+            ]),
+          ),
+          complete: true,
+          unavailableSourceIds: ['source-bad'],
+        })),
+      ],
+    });
+    try {
+      await runtime.start();
+      await runtime.connect('codex', 'desktop');
+      expect(runtime.getOverlayState().sessions.map((item) => [item.id, item.status])).toEqual([
+        ['codex:good', 'idle'],
+        ['codex:bad', 'unavailable'],
+      ]);
+      expect(runtime.getHealth()['codex:desktop'].status).toBe('available');
+    } finally {
+      await runtime.stop();
+    }
+  });
+
   it('shows five latest top-level records across connected providers and changes the global limit', async () => {
     const dataPath = await appDataPath();
     const read = async (request: RuntimeReadRequest) => ({

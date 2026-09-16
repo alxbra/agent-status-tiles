@@ -84,7 +84,7 @@ export class CodexSurfaceMonitor implements ProviderSurfaceMonitor {
   private files = new Map<string, DiscoveredFile>();
   /** Unreadable files are retried after the monitor restarts, not on every poll. */
   private unreadablePaths = new Set<string>();
-  private quarantinePending = false;
+  private unavailableSourceIds = new Set<string>();
   private started = false;
 
   constructor(
@@ -133,7 +133,7 @@ export class CodexSurfaceMonitor implements ProviderSurfaceMonitor {
     this.started = false;
     this.files.clear();
     this.unreadablePaths.clear();
-    this.quarantinePending = false;
+    this.unavailableSourceIds.clear();
     this.reader.stop();
     this.archivedReader.stop();
     const catalog = this.catalog;
@@ -172,7 +172,7 @@ export class CodexSurfaceMonitor implements ProviderSurfaceMonitor {
       cursor = page.nextCursor;
     }
     if (!complete) throw new Error(`${this.surface}-catalog-incomplete`);
-    this.quarantinePending = false;
+    this.unavailableSourceIds.clear();
     const qualified = this.qualify(records);
     coverageIncomplete ||= qualified.issues.length > 0;
 
@@ -341,27 +341,23 @@ export class CodexSurfaceMonitor implements ProviderSurfaceMonitor {
         diagnostic.code !== 'file-reset' && !NONFATAL_COVERAGE_DIAGNOSTICS.has(diagnostic.code),
     );
     if (fatal.length > 0) {
-      const pathByKey = new Map(
+      const sourceByPathKey = new Map(
         activeSources.flatMap((source) => {
           const file = this.files.get(source.id);
-          return file === undefined
-            ? []
-            : [[hashPath(resolve(file.path)), resolve(file.path)] as const];
+          return file === undefined ? [] : [[hashPath(resolve(file.path)), source] as const];
         }),
       );
       for (const diagnostic of fatal) {
         if (diagnostic.code !== 'oversized-line') continue;
-        const filePath = pathByKey.get(diagnostic.pathKey);
-        if (filePath !== undefined) {
-          this.unreadablePaths.add(filePath);
-          this.quarantinePending = true;
-        }
+        const source = sourceByPathKey.get(diagnostic.pathKey);
+        const file = source === undefined ? undefined : this.files.get(source.id);
+        if (source === undefined || file === undefined)
+          throw new Error(`${this.surface}-rollout-coverage-issue`);
+        this.unreadablePaths.add(resolve(file.path));
+        this.unavailableSourceIds.add(source.id);
       }
       if (fatal.some((diagnostic) => diagnostic.code !== 'oversized-line'))
         throw new Error(`${this.surface}-rollout-coverage-issue`);
-    }
-    if (result.complete && this.quarantinePending) {
-      throw new Error(`${this.surface}-rollout-coverage-issue`);
     }
     return {
       events: result.events.map((entry) => ({
@@ -372,10 +368,16 @@ export class CodexSurfaceMonitor implements ProviderSurfaceMonitor {
         Object.entries(result.cursors).map(([key, cursor]) => [runtimeSourceId(key), cursor]),
       ),
       complete: result.complete,
-      ...(result.diagnostics.some((diagnostic) =>
-        NONFATAL_COVERAGE_DIAGNOSTICS.has(diagnostic.code),
-      )
+      ...(this.unavailableSourceIds.size > 0 ||
+      result.diagnostics.some((diagnostic) => NONFATAL_COVERAGE_DIAGNOSTICS.has(diagnostic.code))
         ? { coverageIncomplete: true }
+        : {}),
+      ...(this.unavailableSourceIds.size > 0 || metadataOnlySourceIds.length > 0
+        ? {
+            unavailableSourceIds: [
+              ...new Set([...this.unavailableSourceIds, ...metadataOnlySourceIds]),
+            ],
+          }
         : {}),
       ...(result.nextSourceIndex === undefined ? {} : { nextSourceIndex: result.nextSourceIndex }),
       exhaustedSourceIds: [

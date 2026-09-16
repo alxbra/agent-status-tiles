@@ -126,15 +126,15 @@ describe('Codex Desktop monitor', () => {
     try {
       await monitor.start();
       const captured = await monitor.capture((await monitor.discover()).sources);
-      await expect(
-        monitor.read({
-          sources: captured,
-          cursors: {},
-          sessions: {},
-          frozenCutoffs: {},
-          baseline: true,
-        }),
-      ).rejects.toThrow('desktop-rollout-coverage-issue');
+      const read = await monitor.read({
+        sources: captured,
+        cursors: {},
+        sessions: {},
+        frozenCutoffs: {},
+        baseline: true,
+      });
+      expect(read.coverageIncomplete).toBe(true);
+      expect(read.unavailableSourceIds).toEqual([captured[1].id]);
       const recovered = await monitor.discover();
       expect(recovered.sources.map((source) => source.nativeSessionId)).toEqual([record.nativeId]);
       expect(recovered.coverageIncomplete).toBe(true);
@@ -187,6 +187,7 @@ describe('Codex Desktop monitor', () => {
       });
       expect(read.complete).toBe(true);
       expect(read.exhaustedSourceIds).toContain(captured[10].id);
+      expect(read.unavailableSourceIds).toContain(captured[10].id);
       expect(read.cursors[captured[10].id]).toBeUndefined();
       expect(Object.keys(read.cursors)).toHaveLength(10);
 
