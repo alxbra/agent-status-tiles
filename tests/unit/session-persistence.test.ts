@@ -13,8 +13,17 @@ import {
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
-import { loadSessionState, saveSessionState } from '../../src/main/sessions/persistence';
+import {
+  connectSessionSurface,
+  connectMonitoringSurface,
+  createInitialMonitoringState,
+  disconnectSessionSurface,
+  disconnectMonitoringSurface,
+  loadSessionState,
+  saveSessionState,
+} from '../../src/main/sessions/persistence';
 import { makeCursorKey, type FileCursorMap } from '../../src/shared/cursor';
+import type { SurfaceKey } from '../../src/shared/monitoring';
 import {
   createInitialSessionState,
   makeSessionId,
@@ -481,9 +490,9 @@ describe('session persistence', () => {
 
     const statePath = join(appDataPath, 'session-state.json');
     const encoded = JSON.parse(previousPayload) as {
-      sessions: Record<string, Record<string, unknown>>;
+      partitions: Record<SurfaceKey, { sessions: Record<string, Record<string, unknown>> }>;
     };
-    encoded.sessions[sessionId].activeTurnId = 'turn-1';
+    encoded.partitions['codex:cli'].sessions[sessionId].activeTurnId = 'turn-1';
     await writeFile(statePath, JSON.stringify(encoded));
     await expect(loadSessionState(appDataPath)).rejects.toMatchObject({ code: 'corrupt' });
 
@@ -540,5 +549,256 @@ describe('session persistence', () => {
     });
     expect(await readFile(outsidePath, 'utf8')).toBe('keep');
     await expect(loadSessionState(unsafePath)).rejects.toMatchObject({ code: 'unsafe' });
+  });
+
+  it('creates four default off, empty, pending partitions on first install', async () => {
+    const appDataPath = join(await isolatedDirectory(), 'app-data');
+    const result = await loadSessionState(appDataPath);
+
+    expect(Object.keys(result.monitoring.partitions)).toEqual([
+      'codex:desktop',
+      'codex:cli',
+      'claude:desktop',
+      'claude:cli',
+    ]);
+    for (const partition of Object.values(result.monitoring.partitions)) {
+      expect(partition).toMatchObject({
+        enabled: false,
+        baseline: { status: 'pending' },
+        sessions: {},
+        order: [],
+        cursors: {},
+        legacyRetained: false,
+      });
+    }
+    expect(result.monitoring.globalOrder).toEqual([]);
+    expect(result.monitoring.owners).toEqual({});
+  });
+
+  it('migrates an empty v1 checkpoint to default v2 without rewriting the legacy file', async () => {
+    const appDataPath = join(await isolatedDirectory(), 'app-data');
+    const statePath = join(appDataPath, 'session-state.json');
+    const legacy = JSON.stringify({
+      schemaVersion: 1,
+      sessions: {},
+      order: [],
+      cursors: { [makeCursorKey('codex', 'events.jsonl')]: { identity: 'legacy', offset: 4 } },
+    });
+    await mkdir(appDataPath, { recursive: true });
+    await writeFile(statePath, legacy);
+
+    const result = await loadSessionState(appDataPath);
+    expect(result.source).toBe('migrated');
+    expect(result.monitoring).toEqual(createInitialMonitoringState());
+    expect(result.baselineRequired).toBe(true);
+    expect(await readFile(statePath, 'utf8')).toBe(legacy);
+  });
+
+  it('migrates non-empty v1 records into isolated legacy-retained surfaces and rebaselines cursors', async () => {
+    const appDataPath = join(await isolatedDirectory(), 'app-data');
+    const statePath = join(appDataPath, 'session-state.json');
+    const unread = stateWithUnread();
+    const legacySessions = Object.fromEntries(
+      Object.entries(unread.sessions).map(([id, record]) => {
+        const storedRecord = JSON.parse(JSON.stringify(record)) as Record<string, unknown>;
+        delete storedRecord.status;
+        return [id, storedRecord];
+      }),
+    );
+    const legacy = JSON.stringify({
+      schemaVersion: 1,
+      sessions: legacySessions,
+      order: unread.order,
+      cursors: cursorMap,
+    });
+    await mkdir(appDataPath, { recursive: true });
+    await writeFile(statePath, legacy);
+
+    const result = await loadSessionState(appDataPath);
+    const partition = result.monitoring.partitions['codex:cli'];
+    expect(partition).toMatchObject({
+      enabled: false,
+      baseline: { status: 'pending' },
+      order: [sessionId],
+      cursors: {},
+      legacyRetained: true,
+    });
+    expect(partition.sessions[sessionId]).toMatchObject({
+      completionId: 'completion-1',
+      turnKey: { turnId: 'turn-1', timestamp: 100 },
+    });
+    expect(result.monitoring.globalOrder).toEqual([sessionId]);
+    expect(result.state.sessions).toEqual({});
+    expect(result.baselineRequired).toBe(true);
+    expect(await readFile(statePath, 'utf8')).toBe(legacy);
+  });
+
+  it('keeps surface cursors independent and connect changes only the chosen partition', async () => {
+    const appDataPath = join(await isolatedDirectory(), 'app-data');
+    const initial = createInitialMonitoringState();
+    const mutable = initial.partitions as Record<
+      SurfaceKey,
+      (typeof initial.partitions)[SurfaceKey]
+    >;
+    mutable['codex:cli'] = {
+      ...mutable['codex:cli'],
+      enabled: true,
+      baseline: { status: 'ready', cutoff: 10 },
+      cursors: { 'codex-cli.jsonl': { identity: 'cli-file', offset: 3 } },
+    };
+    mutable['claude:desktop'] = {
+      ...mutable['claude:desktop'],
+      enabled: true,
+      baseline: { status: 'ready', cutoff: 11 },
+      cursors: { 'claude-desktop.jsonl': { identity: 'desktop-file', offset: 4 } },
+    };
+    await saveSessionState(appDataPath, initial);
+    const result = await loadSessionState(appDataPath);
+    expect(result.monitoring.partitions['codex:cli'].cursors).toEqual({
+      'codex-cli.jsonl': { identity: 'cli-file', offset: 3 },
+    });
+    expect(result.monitoring.partitions['claude:desktop'].cursors).toEqual({
+      'claude-desktop.jsonl': { identity: 'desktop-file', offset: 4 },
+    });
+    const connected = connectMonitoringSurface(result.monitoring, 'codex', 'desktop');
+    expect(connected.partitions['codex:desktop']).toMatchObject({
+      enabled: true,
+      baseline: { status: 'pending' },
+    });
+    expect(connected.partitions['codex:cli']).toEqual(result.monitoring.partitions['codex:cli']);
+    expect(connected.partitions['claude:desktop']).toEqual(
+      result.monitoring.partitions['claude:desktop'],
+    );
+  });
+
+  it('serializes explicit connect/disconnect as atomic v2 updates', async () => {
+    const appDataPath = join(await isolatedDirectory(), 'app-data');
+    const connected = await connectSessionSurface(appDataPath, 'claude', 'desktop');
+    expect(connected.monitoring.partitions['claude:desktop']).toMatchObject({
+      enabled: true,
+      baseline: { status: 'pending' },
+    });
+    for (const key of ['codex:desktop', 'codex:cli', 'claude:cli'] as const) {
+      expect(connected.monitoring.partitions[key].enabled).toBe(false);
+    }
+
+    const disconnected = await disconnectSessionSurface(appDataPath, 'claude', 'desktop');
+    expect(disconnected.monitoring).toEqual(createInitialMonitoringState());
+    expect(
+      JSON.parse(await readFile(join(appDataPath, 'session-state.json'), 'utf8')).schemaVersion,
+    ).toBe(2);
+  });
+
+  it('retains duplicate ownership until disconnect removes the last surface holder', async () => {
+    const appDataPath = join(await isolatedDirectory(), 'app-data');
+    const record = stateWithSession().sessions[sessionId];
+    if (record === undefined) throw new Error('expected test session');
+    const monitoring = createInitialMonitoringState();
+    const mutable = monitoring.partitions as Record<
+      SurfaceKey,
+      (typeof monitoring.partitions)[SurfaceKey]
+    >;
+    const desktopRecord = { ...record, surface: 'desktop' as const };
+    for (const [key, duplicate] of [
+      ['codex:cli', record],
+      ['codex:desktop', desktopRecord],
+    ] as const) {
+      mutable[key] = {
+        ...mutable[key],
+        enabled: true,
+        baseline: { status: 'ready', cutoff: 1 },
+        sessions: { [sessionId]: duplicate },
+        order: [sessionId],
+      };
+    }
+    monitoring.globalOrder = [sessionId];
+    monitoring.owners = { [sessionId]: 'codex:desktop' };
+    expect(Object.keys(monitoring.partitions['codex:cli'].sessions)).toEqual([sessionId]);
+    expect(Object.keys(monitoring.partitions['codex:desktop'].sessions)).toEqual([sessionId]);
+    await saveSessionState(appDataPath, monitoring);
+    expect((await loadSessionState(appDataPath)).state.sessions[sessionId]?.surface).toBe(
+      'desktop',
+    );
+
+    const disconnected = disconnectMonitoringSurface(monitoring, 'codex', 'desktop');
+    expect(disconnected.globalOrder).toEqual([sessionId]);
+    expect(disconnected.owners[sessionId]).toBe('codex:cli');
+    expect(disconnected.partitions['codex:desktop']).toMatchObject({
+      enabled: false,
+      sessions: {},
+      order: [],
+      cursors: {},
+      legacyRetained: false,
+    });
+    await saveSessionState(appDataPath, disconnected);
+    expect((await loadSessionState(appDataPath)).state.sessions[sessionId]?.surface).toBe('cli');
+  });
+
+  it('rejects malformed v2 roots and provider-prefixed per-surface cursors', async () => {
+    const appDataPath = join(await isolatedDirectory(), 'app-data');
+    await saveSessionState(appDataPath, createInitialMonitoringState());
+    const statePath = join(appDataPath, 'session-state.json');
+    const payload = JSON.parse(await readFile(statePath, 'utf8')) as Record<string, unknown>;
+    payload.schemaVersion = 99;
+    await writeFile(statePath, JSON.stringify(payload));
+    await expect(loadSessionState(appDataPath)).rejects.toMatchObject({
+      code: 'unsupported-version',
+    });
+
+    payload.schemaVersion = 2;
+    const partitions = payload.partitions as Record<string, Record<string, unknown>>;
+    partitions['codex:cli'].cursors = {
+      'codex:events.jsonl': { identity: 'file', offset: 0 },
+    };
+    await writeFile(statePath, JSON.stringify(payload));
+    await expect(loadSessionState(appDataPath)).rejects.toMatchObject({ code: 'unsafe' });
+  });
+
+  it('bounds canonical IDs globally across partitions', async () => {
+    const appDataPath = join(await isolatedDirectory(), 'app-data');
+    const record = stateWithSession().sessions[sessionId];
+    if (record === undefined) throw new Error('expected test session');
+    const monitoring = createInitialMonitoringState();
+    const mutable = monitoring.partitions as Record<
+      SurfaceKey,
+      (typeof monitoring.partitions)[SurfaceKey]
+    >;
+    const makeRecords = (provider: 'codex' | 'claude', surface: 'cli' | 'desktop', count: number) =>
+      Object.fromEntries(
+        Array.from({ length: count }, (_, index) => {
+          const nativeSessionId = `bounded-${provider}-${surface}-${index}`;
+          const id = `${provider}:${nativeSessionId}`;
+          return [
+            id,
+            {
+              ...record,
+              id,
+              provider,
+              surface,
+              nativeSessionId,
+            },
+          ];
+        }),
+      );
+    const cliSessions = makeRecords('codex', 'cli', 513);
+    const desktopSessions = makeRecords('claude', 'desktop', 512);
+    mutable['codex:cli'] = {
+      ...mutable['codex:cli'],
+      enabled: true,
+      baseline: { status: 'ready', cutoff: 1 },
+      sessions: cliSessions,
+      order: Object.keys(cliSessions),
+    };
+    mutable['claude:desktop'] = {
+      ...mutable['claude:desktop'],
+      enabled: true,
+      baseline: { status: 'ready', cutoff: 1 },
+      sessions: desktopSessions,
+      order: Object.keys(desktopSessions),
+    };
+    monitoring.globalOrder = [...Object.keys(cliSessions), ...Object.keys(desktopSessions)];
+    await expect(saveSessionState(appDataPath, monitoring)).rejects.toMatchObject({
+      code: 'oversized',
+    });
   });
 });
