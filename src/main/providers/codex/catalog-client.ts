@@ -134,6 +134,8 @@ export interface CodexListThreadsResult {
   /** False when bounded pagination stopped before exhausting the selected route(s). */
   complete: boolean;
   incompleteReason?: 'page-cap' | 'record-cap';
+  /** At least one plausible target record could not be projected safely. */
+  coverageIncomplete?: true;
 }
 
 interface PendingRequest {
@@ -561,6 +563,7 @@ export class CodexCatalogClient {
     let pagesRead = 0;
     let complete = false;
     let didReadArchivedPage = false;
+    let coverageIncomplete = false;
 
     while (pagesRead < maxPages && records.length < maxRecords) {
       const limit = Math.min(pageSize, maxRecords - records.length);
@@ -588,8 +591,9 @@ export class CodexCatalogClient {
         const record = projectThread(value, archivedRoute);
         if (record === undefined) {
           if (isConfidentlyUnrelatedSource(value, this.targetSurface)) continue;
-          this.report('coverage-ambiguous');
-          throw new CodexCatalogError('coverage-ambiguous');
+          if (!coverageIncomplete) this.report('coverage-ambiguous');
+          coverageIncomplete = true;
+          continue;
         }
         records.push(record);
       }
@@ -627,9 +631,16 @@ export class CodexCatalogClient {
         pagesRead,
         complete: false,
         incompleteReason: records.length >= maxRecords ? 'record-cap' : 'page-cap',
+        ...(coverageIncomplete ? { coverageIncomplete: true } : {}),
       };
     }
-    return { records, nextCursor: null, pagesRead, complete: true };
+    return {
+      records,
+      nextCursor: null,
+      pagesRead,
+      complete: true,
+      ...(coverageIncomplete ? { coverageIncomplete: true } : {}),
+    };
   }
 
   private async startProcess(): Promise<void> {

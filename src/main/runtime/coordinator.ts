@@ -67,6 +67,8 @@ export interface RuntimeDiscoveryResult {
   complete: boolean;
   capturedAt: number;
   sources: readonly RuntimeMonitorSource[];
+  /** Confirmed sources are usable, but plausible records were omitted. */
+  coverageIncomplete?: boolean;
 }
 
 export interface RuntimeReadRequest {
@@ -93,6 +95,8 @@ export interface RuntimeReadResult {
   cursors: SurfaceCursorMap;
   /** True only when every requested frozen source reached its captured boundary. */
   complete: boolean;
+  /** Non-structural records were skipped; confirmed observations remain usable. */
+  coverageIncomplete?: boolean;
   /** Explicit exhaustion is allowed for a source with no byte cursor (e.g. a bounded API). */
   exhaustedSourceIds?: readonly string[];
   /** Readers may return a continuation index when their work budget is exhausted. */
@@ -120,6 +124,7 @@ export interface RuntimeSurfaceHealth {
   status: RuntimeHealthStatus;
   updatedAt: number;
   retryInMs?: number;
+  coverageIncomplete?: true;
 }
 
 export interface RuntimeCoordinatorOptions {
@@ -160,6 +165,7 @@ interface SurfaceRuntime {
   readonly key: SurfaceKey;
   readonly monitor?: ProviderSurfaceMonitor;
   sources: readonly RuntimeMonitorSource[];
+  coverageIncomplete: boolean;
   lastCatalogAt: number;
   retryMs: number;
   timer?: ReturnType<typeof setTimeout>;
@@ -598,10 +604,21 @@ function effectiveSessionState(
 function overlaySessions(
   monitoring: MonitoringState,
   health: Readonly<Record<SurfaceKey, RuntimeSurfaceHealth>>,
+  surfaces: ReadonlyMap<SurfaceKey, SurfaceRuntime>,
 ): { sessions: readonly SessionSnapshot[]; omittedCount: number } {
   const sessionState = effectiveSessionState(monitoring, health);
   const visible = selectVisibleSessionSnapshots(sessionState);
   const orderIndex = new Map(monitoring.globalOrder.map((id, index) => [id, index]));
+  const confirmedIds = new Map(
+    [...surfaces].map(([key, runtime]) => [
+      key,
+      new Set(
+        runtime.sources.map((source) =>
+          makeSessionId(providerFromKey(key), source.nativeSessionId),
+        ),
+      ),
+    ]),
+  );
   const ownerFor = (id: string): SurfaceKey | undefined => {
     const explicit = monitoring.owners[id];
     if (
@@ -630,7 +647,9 @@ function overlaySessions(
   });
   const mapped = ordered.map((snapshot) => {
     const owner = ownerFor(snapshot.id);
-    return owner !== undefined && health[owner].status !== 'available'
+    return owner !== undefined &&
+      (health[owner].status !== 'available' ||
+        (health[owner].coverageIncomplete === true && !confirmedIds.get(owner)?.has(snapshot.id)))
       ? { ...snapshot, status: 'unavailable' as const }
       : snapshot;
   });
@@ -703,6 +722,7 @@ export function createRuntimeCoordinator(options: RuntimeCoordinatorOptions): Ru
       key,
       monitor: monitorByKey.get(key),
       sources: [],
+      coverageIncomplete: false,
       lastCatalogAt: 0,
       retryMs: filePollIntervalMs,
       busy: false,
@@ -737,7 +757,7 @@ export function createRuntimeCoordinator(options: RuntimeCoordinatorOptions): Ru
   }
 
   const publish = (): void => {
-    const projected = overlaySessions(monitoring, health);
+    const projected = overlaySessions(monitoring, health, surfaces);
     overlay = { sessions: projected.sessions, reducedMotion: overlay.reducedMotion };
     coverageWarning =
       projected.omittedCount > 0
@@ -747,10 +767,20 @@ export function createRuntimeCoordinator(options: RuntimeCoordinatorOptions): Ru
     options.onOverlayState?.(overlay);
   };
 
-  const setHealth = (key: SurfaceKey, status: RuntimeHealthStatus, retryInMs?: number): void => {
+  const setHealth = (
+    key: SurfaceKey,
+    status: RuntimeHealthStatus,
+    retryInMs?: number,
+    coverageIncomplete?: boolean,
+  ): void => {
     health = {
       ...health,
-      [key]: { status, updatedAt: now(), ...(retryInMs === undefined ? {} : { retryInMs }) },
+      [key]: {
+        status,
+        updatedAt: now(),
+        ...(retryInMs === undefined ? {} : { retryInMs }),
+        ...(coverageIncomplete ? { coverageIncomplete: true } : {}),
+      },
     };
     options.onHealthChanged?.(key, health[key]);
   };
@@ -1015,7 +1045,13 @@ export function createRuntimeCoordinator(options: RuntimeCoordinatorOptions): Ru
         )
           return;
         if (!discovery.complete) throw new Error('catalog-incomplete');
+        if (
+          discovery.coverageIncomplete !== undefined &&
+          typeof discovery.coverageIncomplete !== 'boolean'
+        )
+          throw new Error('invalid-catalog-coverage');
         runtime.sources = await captureSources(monitor, discovery);
+        runtime.coverageIncomplete ||= discovery.coverageIncomplete === true;
         if (
           monitoring.partitions[runtime.key].baseline.status === 'pending' &&
           runtime.sources.some((source) => source.endOffset === undefined)
@@ -1084,6 +1120,10 @@ export function createRuntimeCoordinator(options: RuntimeCoordinatorOptions): Ru
         if (!isRecord(read) || typeof read.complete !== 'boolean' || !Array.isArray(read.events)) {
           throw new Error('invalid-read-result');
         }
+        if (read.coverageIncomplete !== undefined && typeof read.coverageIncomplete !== 'boolean') {
+          throw new Error('invalid-read-coverage');
+        }
+        runtime.coverageIncomplete ||= read.coverageIncomplete === true;
         if (read.events.length > MAX_RUNTIME_EVENTS_PER_READ) {
           throw new Error('read-event-overflow');
         }
@@ -1150,7 +1190,7 @@ export function createRuntimeCoordinator(options: RuntimeCoordinatorOptions): Ru
       )
         return;
       runtime.retryMs = filePollIntervalMs;
-      setHealth(runtime.key, 'available');
+      setHealth(runtime.key, 'available', undefined, runtime.coverageIncomplete);
       publish();
       scheduleSurface(runtime, filePollIntervalMs, expectedGeneration, expectedSurfaceGeneration);
     } catch {
@@ -1247,6 +1287,7 @@ export function createRuntimeCoordinator(options: RuntimeCoordinatorOptions): Ru
     const stoppingGeneration = runtime.generation;
     clearTimer(runtime);
     runtime.sources = [];
+    runtime.coverageIncomplete = false;
     runtime.lastCatalogAt = 0;
     runtime.retryMs = filePollIntervalMs;
     if (runtime.starting !== undefined) await runtime.starting.catch(() => undefined);

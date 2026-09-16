@@ -275,6 +275,20 @@ describe('CodexRolloutReader', () => {
     expect(JSON.stringify(result)).not.toContain('x'.repeat(128));
   });
 
+  it('reads a current-format status record above one MiB without retaining private padding', async () => {
+    const root = await testRoot();
+    const file = path.join(root, `rollout-${SESSION_ID}.jsonl`);
+    const privatePadding = 'PRIVATE_PADDING_'.repeat(120_000);
+    await writeLines(file, [
+      sessionMeta(),
+      event('task_started', 'large-turn', { private_padding: privatePadding }),
+    ]);
+    const result = await new CodexRolloutReader(root).read([sourceFor(file)]);
+    expect(eventTypes(result.events)).toEqual(['turn-started']);
+    expect(result.diagnostics).toEqual([]);
+    expect(JSON.stringify(result)).not.toContain('PRIVATE_PADDING_');
+  });
+
   it('returns a continuation cursor when a read reaches its event budget', async () => {
     const root = await testRoot();
     const file = path.join(root, `rollout-${SESSION_ID}.jsonl`);

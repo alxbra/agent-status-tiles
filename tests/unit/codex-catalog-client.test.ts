@@ -407,9 +407,9 @@ describe('Codex catalog client', () => {
     const cliDiagnostics: CodexCatalogDiagnosticCode[] = [];
     const cli = createClient(await createFakeBinary('ambiguous-cli'), cliDiagnostics, 2_000, 'cli');
     try {
-      await expect(cli.listThreads({ maxPages: 1 })).rejects.toMatchObject({
-        code: 'coverage-ambiguous',
-      });
+      const result = await cli.listThreads({ maxPages: 1 });
+      expect(result.records).toHaveLength(1);
+      expect(result.coverageIncomplete).toBe(true);
       expect(cliDiagnostics).toEqual(['coverage-ambiguous']);
       expect(JSON.stringify(cliDiagnostics)).not.toContain('PRIVATE_');
     } finally {
@@ -417,15 +417,18 @@ describe('Codex catalog client', () => {
     }
   });
 
-  it('fails closed on malformed records that could be Desktop', async () => {
+  it('retains confirmed records while flagging malformed plausible Desktop coverage', async () => {
     const diagnostics: CodexCatalogDiagnosticCode[] = [];
     const client = createClient(await createFakeBinary('ambiguous-desktop'), diagnostics);
-
-    await expect(client.listThreads({ maxPages: 1 })).rejects.toMatchObject({
-      code: 'coverage-ambiguous',
-    });
-    expect(diagnostics).toEqual(['coverage-ambiguous']);
-    await client.stop();
+    try {
+      const result = await client.listThreads({ maxPages: 2 });
+      expect(result.complete).toBe(true);
+      expect(result.records).toHaveLength(2);
+      expect(result.coverageIncomplete).toBe(true);
+      expect(diagnostics).toEqual(['coverage-ambiguous']);
+    } finally {
+      await client.stop();
+    }
   });
 
   it('skips known Desktop and subagent records for the CLI target while completing pagination', async () => {
@@ -445,14 +448,17 @@ describe('Codex catalog client', () => {
     }
   });
 
-  it('fails closed on malformed unknown-source records without unrelated evidence', async () => {
+  it('reports malformed unknown-source records without retaining their metadata', async () => {
     const diagnostics: CodexCatalogDiagnosticCode[] = [];
     const client = createClient(await createFakeBinary('ambiguous-unknown'), diagnostics);
-    await expect(client.listThreads({ maxPages: 1 })).rejects.toMatchObject({
-      code: 'coverage-ambiguous',
-    });
-    expect(diagnostics).toEqual(['coverage-ambiguous']);
-    await client.stop();
+    try {
+      const result = await client.listThreads({ maxPages: 1 });
+      expect(result.coverageIncomplete).toBe(true);
+      expect(JSON.stringify(result)).not.toContain('PRIVATE_');
+      expect(diagnostics).toEqual(['coverage-ambiguous']);
+    } finally {
+      await client.stop();
+    }
   });
 
   it('retains bounded custom-source evidence and confirmed subagent markers', async () => {
@@ -533,6 +539,7 @@ describe('Codex catalog client', () => {
   it('caps concurrent pending requests with a fixed diagnostic', async () => {
     const diagnostics: CodexCatalogDiagnosticCode[] = [];
     const client = createClient(await createFakeBinary('delay'), diagnostics, 300);
+    await client.start();
     const requests = await Promise.allSettled(
       Array.from({ length: 33 }, () => client.listThreads({ maxPages: 1 })),
     );

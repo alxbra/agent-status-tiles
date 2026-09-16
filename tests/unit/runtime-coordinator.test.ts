@@ -108,6 +108,70 @@ describe('runtime coordinator', () => {
     await runtime.stop();
   });
 
+  it('shows confirmed work during partial coverage and marks lost observations unavailable', async () => {
+    const dataPath = await appDataPath();
+    const item = source('confirmed');
+    let clock = 100;
+    const scheduled: Array<() => void> = [];
+    const testMonitor = monitor('codex:desktop', [item], async (request) => ({
+      events: request.baseline
+        ? [
+            {
+              type: 'turn-started' as const,
+              sessionId: 'codex:confirmed',
+              turnId: 'turn-1',
+              timestamp: 101,
+            },
+          ]
+        : [],
+      cursors: request.sources.length
+        ? { [item.id]: { identity: 'fixture', offset: item.endOffset ?? 0 } }
+        : {},
+      complete: true,
+    }));
+    testMonitor.discover = vi
+      .fn()
+      .mockResolvedValueOnce({
+        complete: true,
+        capturedAt: 100,
+        sources: [item],
+        coverageIncomplete: true,
+      })
+      .mockResolvedValue({
+        complete: true,
+        capturedAt: 102,
+        sources: [],
+        coverageIncomplete: true,
+      });
+    const runtime = createRuntimeCoordinator({
+      appDataPath: dataPath,
+      monitors: [testMonitor],
+      now: () => clock,
+      filePollIntervalMs: 10,
+      catalogPollIntervalMs: 10,
+      setTimeout: (callback) => {
+        scheduled.push(callback);
+        return scheduled.length as unknown as ReturnType<typeof setTimeout>;
+      },
+      clearTimeout: () => undefined,
+    });
+
+    await runtime.start();
+    await runtime.connect('codex', 'desktop');
+    expect(runtime.getHealth()['codex:desktop']).toMatchObject({
+      status: 'available',
+      coverageIncomplete: true,
+    });
+    expect(runtime.getOverlayState().sessions).toMatchObject([{ status: 'working' }]);
+    clock = 111;
+    scheduled.at(-1)?.();
+    await vi.waitFor(() =>
+      expect(runtime.getOverlayState().sessions).toMatchObject([{ status: 'unavailable' }]),
+    );
+    expect(runtime.getMonitoringState().partitions['codex:desktop'].baseline.status).toBe('ready');
+    await runtime.stop();
+  });
+
   it('keeps concurrent surfaces isolated while deduplicating the canonical owner', async () => {
     const dataPath = await appDataPath();
     const sharedDesktop = source('shared', 1);

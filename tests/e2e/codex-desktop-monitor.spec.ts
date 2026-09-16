@@ -79,6 +79,13 @@ test('native Desktop baseline hides historical completion then publishes new wor
       ephemeral: false,
       preview: 'PRIVATE_PROMPT',
     };
+    const ambiguousLegacyRecord = {
+      ...catalogRecord,
+      id: '33333333-3333-7333-8333-333333333333',
+      sessionId: '33333333-3333-7333-8333-333333333333',
+      path: join(sessionsRoot, 'legacy.jsonl'),
+      originator: null,
+    };
     const fakeBinary = `#!/usr/bin/env node
 const fs = require('node:fs');
 fs.writeFileSync(${JSON.stringify(childPidPath)}, String(process.pid));
@@ -93,7 +100,7 @@ process.stdin.on('data', chunk => {
     if (request.method === 'initialize') {
       process.stdout.write(JSON.stringify({id:request.id,result:{codexHome:'/tmp/test',platformFamily:'unix',platformOs:'macos',userAgent:'test'}})+'\\n');
     } else if (request.method === 'thread/list') {
-      const data = request.params.archived ? [] : [${JSON.stringify(catalogRecord)}];
+      const data = request.params.archived ? [] : ${JSON.stringify([catalogRecord, ambiguousLegacyRecord])};
       process.stdout.write(JSON.stringify({id:request.id,result:{data,nextCursor:null}})+'\\n');
     }
   }
@@ -235,6 +242,10 @@ process.stdin.on('data', chunk => {
     if (settings === undefined) throw new Error('Expected native Settings window');
     const desktop = settings.getByRole('group', { name: 'Codex Desktop connection' });
     const cli = settings.getByRole('group', { name: 'Codex CLI connection' });
+    await expect(desktop).toContainText('Connected');
+    await expect(settings.getByRole('alert')).toContainText(
+      'Codex Desktop coverage is limited to confirmed sessions',
+    );
     await expect(desktop.getByRole('button', { name: 'Actions for Codex Desktop' })).toBeVisible();
     await expect(cli.getByRole('button', { name: 'Connect' })).toBeEnabled();
     await desktop.getByRole('button', { name: 'Actions for Codex Desktop' }).click();
