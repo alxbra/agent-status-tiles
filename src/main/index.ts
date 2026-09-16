@@ -1,4 +1,4 @@
-import { app, ipcMain, screen, type IpcMainInvokeEvent } from 'electron';
+import { app, ipcMain, powerMonitor, screen, type IpcMainInvokeEvent } from 'electron';
 
 import { closeSettingsWindow, getSettingsWindow, showSettingsWindow } from './settings-window';
 import { createMenuBar, type MenuBarController } from './menu-bar';
@@ -19,6 +19,7 @@ import type { OverlayState } from '../shared/overlay-ipc';
 import type { SessionSnapshot } from '../shared/session';
 import { PRIMARY_DISPLAY_ID } from '../shared/settings';
 import { createAppLifecycleController } from './app-lifecycle';
+import { createRuntimeCoordinator, type RuntimeCoordinator } from './runtime/coordinator';
 
 const hasSingleInstanceLock = app.requestSingleInstanceLock();
 const TEST_KEYBOARD_ENTRY_HOOK = Symbol.for('agent-status-tiles.test.keyboard-entry');
@@ -31,6 +32,8 @@ let desktopPreferences: DesktopPreferencesStore | null = null;
 let overlayState: OverlayState = createStartupOverlayState(app.isPackaged);
 let requestedLoginItemState: boolean | undefined;
 let removeRuntimeLifecycleListeners: (() => void) | null = null;
+let runtimeCoordinator: RuntimeCoordinator | null = null;
+let monitoringCoverageWarning: string | undefined;
 let isQuitting = false;
 let runtimeInitialized = false;
 
@@ -71,6 +74,7 @@ function getSettingsState(): SettingsState {
       ? { enabled: false }
       : evaluateLoginItemSettings(loginSettings, requestedLoginItemState);
   if (loginItemState.error === undefined) requestedLoginItemState = undefined;
+  const settingsError = loginItemState.error ?? monitoringCoverageWarning;
   return {
     providers: {
       codex: unavailableProviderState(),
@@ -80,7 +84,7 @@ function getSettingsState(): SettingsState {
     selectedDisplayId: preferredDisplayId,
     launchAtLogin: loginItemState.enabled,
     reduceMotion: preferences?.reduceMotion ?? false,
-    ...(loginItemState.error ? { error: loginItemState.error } : {}),
+    ...(settingsError ? { error: settingsError } : {}),
   };
 }
 
@@ -141,6 +145,7 @@ if (!hasSingleInstanceLock) {
     isQuitting = true;
     removeRuntimeLifecycleListeners?.();
     removeRuntimeLifecycleListeners = null;
+    void runtimeCoordinator?.stop();
     overlayController?.destroy();
   });
 
@@ -148,6 +153,7 @@ if (!hasSingleInstanceLock) {
     isQuitting = true;
     removeRuntimeLifecycleListeners?.();
     removeRuntimeLifecycleListeners = null;
+    void runtimeCoordinator?.stop();
     Reflect.deleteProperty(globalThis, TEST_KEYBOARD_ENTRY_HOOK);
     removeSettingsIpcHandlers?.();
     removeSettingsIpcHandlers = null;
@@ -182,6 +188,27 @@ if (!hasSingleInstanceLock) {
       onKeyboardEntry: () => publishOverlayKeyboardEntry(overlayController?.getWindow() ?? null),
     });
     overlayController.setQualifyingSessionCount(qualifyingSessionCount(overlayState.sessions));
+    const preserveFixtureOverlay = !app.isPackaged && overlayState.sessions.length > 0;
+    runtimeCoordinator = createRuntimeCoordinator({
+      appDataPath: app.getPath('userData'),
+      // Real provider monitors are installed by the subsequent provider slice.
+      // Keeping the list empty here still routes any restored, sanitized state
+      // through the same coordinator/projection boundary.
+      monitors: [],
+      onOverlayState: (state) => {
+        if (preserveFixtureOverlay && state.sessions.length === 0) return;
+        overlayState = { ...state, reducedMotion: desktopPreferences?.get().reduceMotion ?? false };
+        overlayController?.setQualifyingSessionCount(qualifyingSessionCount(overlayState.sessions));
+        publishOverlayState(overlayController?.getWindow() ?? null, overlayState);
+      },
+      onCoverageWarning: (omittedCount) => {
+        monitoringCoverageWarning =
+          omittedCount > 0
+            ? `${omittedCount} additional sessions are hidden from the overlay.`
+            : undefined;
+        publishCurrentSettings();
+      },
+    });
     removeOverlayIpcHandlers = registerOverlayIpcHandlers({
       getWindow: () => overlayController?.getWindow() ?? null,
       getState: () => overlayState,
@@ -236,17 +263,28 @@ if (!hasSingleInstanceLock) {
         return state;
       },
     });
+    void runtimeCoordinator.start().catch(() => undefined);
     const onDisplayTopologyChanged = (): void => publishCurrentSettings();
     const onActivate = (): void => lifecycle.handleActivate();
+    const onSystemSuspend = (): void => {
+      void runtimeCoordinator?.suspend();
+    };
+    const onSystemResume = (): void => {
+      void runtimeCoordinator?.resume();
+    };
     screen.on('display-metrics-changed', onDisplayTopologyChanged);
     screen.on('display-added', onDisplayTopologyChanged);
     screen.on('display-removed', onDisplayTopologyChanged);
     app.on('activate', onActivate);
+    powerMonitor.on('suspend', onSystemSuspend);
+    powerMonitor.on('resume', onSystemResume);
     removeRuntimeLifecycleListeners = (): void => {
       app.off('activate', onActivate);
       screen.off('display-metrics-changed', onDisplayTopologyChanged);
       screen.off('display-added', onDisplayTopologyChanged);
       screen.off('display-removed', onDisplayTopologyChanged);
+      powerMonitor.off('suspend', onSystemSuspend);
+      powerMonitor.off('resume', onSystemResume);
       lifecycle.destroy();
     };
     app.once('will-quit', () => {
