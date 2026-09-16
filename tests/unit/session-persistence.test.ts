@@ -620,9 +620,9 @@ describe('session persistence', () => {
       enabled: false,
       baseline: { status: 'pending' },
       order: [sessionId],
-      cursors: {},
       legacyRetained: true,
     });
+    expect(partition.cursors).toEqual({});
     expect(partition.sessions[sessionId]).toMatchObject({
       completionId: 'completion-1',
       turnKey: { turnId: 'turn-1', timestamp: 100 },
@@ -631,6 +631,35 @@ describe('session persistence', () => {
     expect(result.state.sessions).toEqual({});
     expect(result.baselineRequired).toBe(true);
     expect(await readFile(statePath, 'utf8')).toBe(legacy);
+  });
+
+  it('preserves a v1 completion acknowledgement while discarding its ambiguous cursor', async () => {
+    const appDataPath = join(await isolatedDirectory(), 'app-data');
+    const statePath = join(appDataPath, 'session-state.json');
+    const acknowledged = reduceSessionState(stateWithUnread(), {
+      type: 'acknowledged',
+      sessionId,
+      expectedCompletionId: 'completion-1',
+      timestamp: 120,
+    });
+    const sessions = Object.fromEntries(
+      Object.entries(acknowledged.sessions).map(([id, record]) => {
+        const storedRecord = JSON.parse(JSON.stringify(record)) as Record<string, unknown>;
+        delete storedRecord.status;
+        return [id, storedRecord];
+      }),
+    );
+    await mkdir(appDataPath, { recursive: true });
+    await writeFile(
+      statePath,
+      JSON.stringify({ schemaVersion: 1, sessions, order: acknowledged.order, cursors: cursorMap }),
+    );
+
+    const migrated = await loadSessionState(appDataPath);
+    const partition = migrated.monitoring.partitions['codex:cli'];
+    expect(partition.sessions[sessionId]?.acknowledgedCompletionId).toBe('completion-1');
+    expect(partition.cursors).toEqual({});
+    expect(migrated.state.sessions).toEqual({});
   });
 
   it('keeps surface cursors independent and connect changes only the chosen partition', async () => {
@@ -687,6 +716,21 @@ describe('session persistence', () => {
     expect(
       JSON.parse(await readFile(join(appDataPath, 'session-state.json'), 'utf8')).schemaVersion,
     ).toBe(2);
+  });
+
+  it('does not lose a concurrent connection when another surface disconnects', async () => {
+    const appDataPath = join(await isolatedDirectory(), 'app-data');
+    await connectSessionSurface(appDataPath, 'codex', 'desktop');
+
+    await Promise.all([
+      disconnectSessionSurface(appDataPath, 'codex', 'desktop'),
+      connectSessionSurface(appDataPath, 'codex', 'cli'),
+    ]);
+
+    const monitoring = (await loadSessionState(appDataPath)).monitoring;
+    expect(monitoring.partitions['codex:desktop'].enabled).toBe(false);
+    expect(monitoring.partitions['codex:cli'].enabled).toBe(true);
+    expect(monitoring.partitions['codex:cli'].baseline).toEqual({ status: 'pending' });
   });
 
   it('retains duplicate ownership until disconnect removes the last surface holder', async () => {
