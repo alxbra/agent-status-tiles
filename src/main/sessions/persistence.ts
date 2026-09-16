@@ -6,7 +6,6 @@ import { isAbsolute, join, resolve } from 'node:path';
 import { refreshSessionRecord } from './reducer';
 import { type FileCursor, type FileCursorMap } from '../../shared/cursor';
 import {
-  createInitialSessionState,
   isProvider,
   isSurface,
   makeSessionId,
@@ -15,8 +14,18 @@ import {
   type SessionRecord,
   type SessionState,
 } from '../../shared/session';
+import {
+  parseSurfaceKey,
+  SURFACE_KEYS,
+  surfaceKey,
+  type MonitoringPartition,
+  type MonitoringState,
+  type SurfaceBaseline,
+  type SurfaceKey,
+} from '../../shared/monitoring';
 
-const STORE_VERSION = 1;
+const STORE_VERSION = 2;
+const LEGACY_STORE_VERSION = 1;
 const STORE_FILE = 'session-state.json';
 const MAX_STATE_BYTES = 1024 * 1024;
 const MAX_ID_BYTES = 256;
@@ -25,14 +34,20 @@ const MAX_TITLE_BYTES = 256;
 const MAX_SESSIONS = 1024;
 const MAX_INPUT_REQUESTS = 128;
 const MAX_CURSORS = 512;
+// The checkpoint retains at most 1,024 canonical IDs across all four surfaces.
+// Each partition is independently bounded by the same limit for malformed input.
+const MAX_GLOBAL_ORDER = MAX_SESSIONS;
 const NO_FOLLOW = constants.O_NOFOLLOW ?? 0;
 const NONBLOCK = constants.O_NONBLOCK ?? 0;
 
 export interface SessionLoadResult {
   state: SessionState;
   cursors: FileCursorMap;
+  monitoring: MonitoringState;
+  /** Alias retained for callers that prefer the explicit persisted-state name. */
+  monitoringState: MonitoringState;
   baselineRequired: boolean;
-  source: 'first-install' | 'restored';
+  source: 'first-install' | 'restored' | 'migrated';
 }
 
 export type SessionPersistenceErrorCode =
@@ -70,11 +85,27 @@ interface StoredSessionRecord {
   metadataUpdatedAt: number;
 }
 
-interface StoredState {
-  schemaVersion: typeof STORE_VERSION;
+interface StoredV1State {
+  schemaVersion: typeof LEGACY_STORE_VERSION;
   sessions: Readonly<Record<string, StoredSessionRecord>>;
   order: readonly string[];
   cursors: FileCursorMap;
+}
+
+interface StoredV2Partition {
+  enabled: boolean;
+  baseline: SurfaceBaseline;
+  sessions: Readonly<Record<string, StoredSessionRecord>>;
+  order: readonly string[];
+  cursors: FileCursorMap;
+  legacyRetained: boolean;
+}
+
+interface StoredV2State {
+  schemaVersion: typeof STORE_VERSION;
+  partitions: Readonly<Record<SurfaceKey, StoredV2Partition>>;
+  globalOrder: readonly string[];
+  owners: Readonly<Record<string, SurfaceKey>>;
 }
 
 const writeQueues = new Map<string, Promise<void>>();
@@ -174,35 +205,59 @@ function sanitizeCursorMap(value: unknown, label: string): FileCursorMap {
       throw new SessionPersistenceError('unsafe', `${label} contains an invalid provider key.`);
     }
     assertRelativeSourceId(parts.sourceId, `${label}.${key}`);
-    const cursor = own(value, key);
-    if (
-      !isRecord(cursor) ||
-      !hasOnlyKeys(
-        cursor,
-        ['identity', 'offset'],
-        ['baselineUntilOffset', 'isDiscardingOversizedLine'],
-      )
-    ) {
-      throw new SessionPersistenceError('corrupt', `${label}.${key} is malformed.`);
+    put(result, key, sanitizeCursor(own(value, key), `${label}.${key}`));
+  }
+  return result;
+}
+
+function sanitizeCursor(value: unknown, label: string): FileCursor {
+  if (
+    !isRecord(value) ||
+    !hasOnlyKeys(
+      value,
+      ['identity', 'offset'],
+      ['baselineUntilOffset', 'isDiscardingOversizedLine'],
+    )
+  ) {
+    throw new SessionPersistenceError('corrupt', `${label} is malformed.`);
+  }
+  assertBoundedText(value.identity, MAX_ID_BYTES, `${label}.identity`);
+  assertTimestamp(value.offset, `${label}.offset`);
+  if (value.baselineUntilOffset !== undefined) {
+    assertTimestamp(value.baselineUntilOffset, `${label}.baselineUntilOffset`);
+  }
+  if (value.isDiscardingOversizedLine !== undefined) {
+    assertBoolean(value.isDiscardingOversizedLine, `${label}.isDiscardingOversizedLine`);
+  }
+  return {
+    identity: value.identity,
+    offset: value.offset,
+    ...(value.baselineUntilOffset === undefined
+      ? {}
+      : { baselineUntilOffset: value.baselineUntilOffset }),
+    ...(value.isDiscardingOversizedLine === undefined
+      ? {}
+      : { isDiscardingOversizedLine: value.isDiscardingOversizedLine }),
+  };
+}
+
+function sanitizeSurfaceCursorMap(value: unknown, label: string): FileCursorMap {
+  if (!isRecord(value)) {
+    throw new SessionPersistenceError('corrupt', `${label} must be an object.`);
+  }
+  const keys = Object.keys(value);
+  if (keys.length > MAX_CURSORS) {
+    throw new SessionPersistenceError('oversized', `${label} exceeds the cursor count bound.`);
+  }
+  const result: Record<string, FileCursor> = {};
+  for (const key of keys) {
+    assertRelativeSourceId(key, `${label}.${key}`);
+    // A v2 partition is already provider-scoped. Provider-prefixed keys would
+    // reintroduce the v1 ambiguity and are deliberately rejected.
+    if (cursorKeyParts(key) !== undefined) {
+      throw new SessionPersistenceError('unsafe', `${label} contains a provider-prefixed key.`);
     }
-    assertBoundedText(cursor.identity, MAX_ID_BYTES, `${label}.${key}.identity`);
-    assertTimestamp(cursor.offset, `${label}.${key}.offset`);
-    if (cursor.baselineUntilOffset !== undefined) {
-      assertTimestamp(cursor.baselineUntilOffset, `${label}.${key}.baselineUntilOffset`);
-    }
-    if (cursor.isDiscardingOversizedLine !== undefined) {
-      assertBoolean(cursor.isDiscardingOversizedLine, `${label}.${key}.isDiscardingOversizedLine`);
-    }
-    put(result, key, {
-      identity: cursor.identity,
-      offset: cursor.offset,
-      ...(cursor.baselineUntilOffset === undefined
-        ? {}
-        : { baselineUntilOffset: cursor.baselineUntilOffset }),
-      ...(cursor.isDiscardingOversizedLine === undefined
-        ? {}
-        : { isDiscardingOversizedLine: cursor.isDiscardingOversizedLine }),
-    });
+    put(result, key, sanitizeCursor(own(value, key), `${label}.${key}`));
   }
   return result;
 }
@@ -350,7 +405,7 @@ function encodeSession(record: SessionRecord): StoredSessionRecord {
   };
 }
 
-function encodeState(state: SessionState, cursors: FileCursorMap): StoredState {
+function encodeV1State(state: SessionState, cursors: FileCursorMap): StoredV1State {
   if (!isRecord(state.sessions)) {
     throw new SessionPersistenceError('corrupt', 'Session map is malformed.');
   }
@@ -387,7 +442,7 @@ function encodeState(state: SessionState, cursors: FileCursorMap): StoredState {
     }
   }
   return {
-    schemaVersion: STORE_VERSION,
+    schemaVersion: LEGACY_STORE_VERSION,
     sessions,
     order,
     cursors: sanitizeCursorMap(cursors, 'Cursor map'),
@@ -548,11 +603,11 @@ function decodeSession(value: unknown, id: string): SessionRecord {
   });
 }
 
-function decodeState(value: unknown): { state: SessionState; cursors: FileCursorMap } {
+function decodeV1State(value: unknown): { state: SessionState; cursors: FileCursorMap } {
   if (!isRecord(value)) {
     throw new SessionPersistenceError('corrupt', 'Session state root must be an object.');
   }
-  if (value.schemaVersion !== STORE_VERSION) {
+  if (value.schemaVersion !== LEGACY_STORE_VERSION) {
     throw new SessionPersistenceError(
       'unsupported-version',
       `Session state schema version ${String(value.schemaVersion)} is unsupported.`,
@@ -600,19 +655,517 @@ function decodeState(value: unknown): { state: SessionState; cursors: FileCursor
   return { state, cursors };
 }
 
-function firstInstallResult(): SessionLoadResult {
+function emptyBaseline(): SurfaceBaseline {
+  return { status: 'pending' };
+}
+
+function readyBaseline(cutoff: number): SurfaceBaseline {
+  return { status: 'ready', cutoff };
+}
+
+function defaultPartition(): MonitoringPartition {
   return {
-    state: {
-      ...createInitialSessionState(),
-      providerHealth: {
-        codex: { status: 'unavailable', updatedAt: 0 },
-        claude: { status: 'unavailable', updatedAt: 0 },
-      },
-    },
+    enabled: false,
+    baseline: emptyBaseline(),
+    sessions: {},
+    order: [],
     cursors: {},
-    baselineRequired: true,
-    source: 'first-install',
+    legacyRetained: false,
   };
+}
+
+export function createInitialMonitoringState(): MonitoringState {
+  const partitions = {} as Record<SurfaceKey, MonitoringPartition>;
+  for (const key of SURFACE_KEYS) put(partitions, key, defaultPartition());
+  return { partitions, globalOrder: [], owners: {} };
+}
+
+function providerSurfaceFromKey(key: SurfaceKey): {
+  provider: Provider;
+  surface: SessionRecord['surface'];
+} {
+  const [provider, surface] = key.split(':');
+  if (!isProvider(provider) || !isSurface(surface)) {
+    throw new SessionPersistenceError('corrupt', `Unsupported monitoring partition ${key}.`);
+  }
+  return { provider, surface };
+}
+
+function clonePartition(partition: MonitoringPartition): MonitoringPartition {
+  return {
+    enabled: partition.enabled,
+    baseline:
+      partition.baseline.status === 'ready'
+        ? readyBaseline(partition.baseline.cutoff)
+        : emptyBaseline(),
+    sessions: { ...partition.sessions },
+    order: [...partition.order],
+    cursors: { ...partition.cursors },
+    legacyRetained: partition.legacyRetained,
+  };
+}
+
+function cloneMonitoringState(state: MonitoringState): MonitoringState {
+  const partitions = {} as Record<SurfaceKey, MonitoringPartition>;
+  for (const key of SURFACE_KEYS) {
+    const partition = state.partitions[key];
+    if (partition === undefined) {
+      throw new SessionPersistenceError('corrupt', `Missing monitoring partition ${key}.`);
+    }
+    put(partitions, key, clonePartition(partition));
+  }
+  return {
+    partitions,
+    globalOrder: [...state.globalOrder],
+    owners: { ...state.owners },
+  };
+}
+
+function partitionHasSession(partition: MonitoringPartition, id: string): boolean {
+  return own(partition.sessions, id) !== undefined;
+}
+
+function retainedIds(state: MonitoringState): Set<string> {
+  const ids = new Set<string>();
+  for (const key of SURFACE_KEYS) {
+    const partition = state.partitions[key];
+    if (partition === undefined) continue;
+    for (const id of Object.keys(partition.sessions)) ids.add(id);
+  }
+  return ids;
+}
+
+/** Enable one surface and begin a fresh baseline without changing other surfaces. */
+export function connectMonitoringSurface(
+  state: MonitoringState,
+  provider: Provider,
+  surface: SessionRecord['surface'],
+): MonitoringState {
+  const next = cloneMonitoringState(state);
+  const key = surfaceKey(provider, surface);
+  const partition = next.partitions[key];
+  if (partition === undefined)
+    throw new SessionPersistenceError('corrupt', `Missing partition ${key}.`);
+  partition.enabled = true;
+  partition.baseline = emptyBaseline();
+  return next;
+}
+
+/** Complete one surface's baseline after its initial event cutoff is committed. */
+export function markSurfaceBaselineReady(
+  state: MonitoringState,
+  provider: Provider,
+  surface: SessionRecord['surface'],
+  cutoff: number,
+): MonitoringState {
+  assertTimestamp(cutoff, 'baseline cutoff');
+  const next = cloneMonitoringState(state);
+  const key = surfaceKey(provider, surface);
+  const partition = next.partitions[key];
+  if (partition === undefined)
+    throw new SessionPersistenceError('corrupt', `Missing partition ${key}.`);
+  partition.baseline = readyBaseline(cutoff);
+  return next;
+}
+
+/** Disable one surface and remove only its retained records/cursors. */
+export function disconnectMonitoringSurface(
+  state: MonitoringState,
+  provider: Provider,
+  surface: SessionRecord['surface'],
+): MonitoringState {
+  const next = cloneMonitoringState(state);
+  const key = surfaceKey(provider, surface);
+  const partition = next.partitions[key];
+  if (partition === undefined)
+    throw new SessionPersistenceError('corrupt', `Missing partition ${key}.`);
+  partition.enabled = false;
+  partition.baseline = emptyBaseline();
+  partition.sessions = {};
+  partition.order = [];
+  partition.cursors = {};
+  partition.legacyRetained = false;
+
+  const retained = retainedIds(next);
+  next.globalOrder = next.globalOrder.filter((id) => retained.has(id));
+  const owners: Record<string, SurfaceKey> = {};
+  for (const [id, owner] of Object.entries(next.owners)) {
+    if (!retained.has(id)) continue;
+    const ownerPartition = next.partitions[owner];
+    if (ownerPartition !== undefined && partitionHasSession(ownerPartition, id)) {
+      put(owners, id, owner);
+      continue;
+    }
+    const replacement = SURFACE_KEYS.find((candidate) =>
+      partitionHasSession(next.partitions[candidate], id),
+    );
+    if (replacement !== undefined) put(owners, id, replacement);
+  }
+  next.owners = owners;
+  return next;
+}
+
+// Short aliases make the connection boundary easy for provider coordinators to consume.
+export const connectSurface = connectMonitoringSurface;
+export const disconnectSurface = disconnectMonitoringSurface;
+
+function encodePartition(partition: MonitoringPartition, key: SurfaceKey): StoredV2Partition {
+  if (!isRecord(partition.sessions) || !Array.isArray(partition.order)) {
+    throw new SessionPersistenceError('corrupt', `${key} session collection is malformed.`);
+  }
+  assertBoolean(partition.enabled, `${key}.enabled`);
+  if (!isRecord(partition.baseline) || !hasOnlyKeys(partition.baseline, ['status'], ['cutoff'])) {
+    throw new SessionPersistenceError('corrupt', `${key}.baseline is malformed.`);
+  }
+  if (partition.baseline.status === 'pending') {
+    if (partition.baseline.cutoff !== undefined) {
+      throw new SessionPersistenceError('corrupt', `${key}.baseline has an unexpected cutoff.`);
+    }
+  } else if (partition.baseline.status === 'ready') {
+    assertTimestamp(partition.baseline.cutoff, `${key}.baseline.cutoff`);
+  } else {
+    throw new SessionPersistenceError('corrupt', `${key}.baseline has an unsupported status.`);
+  }
+  assertBoolean(partition.legacyRetained, `${key}.legacyRetained`);
+  const sessionIds = Object.keys(partition.sessions);
+  if (!partition.enabled && sessionIds.length > 0 && !partition.legacyRetained) {
+    throw new SessionPersistenceError(
+      'corrupt',
+      `${key} cannot retain records while disabled without legacy retention.`,
+    );
+  }
+  if (sessionIds.length > MAX_SESSIONS) {
+    throw new SessionPersistenceError('oversized', `${key} exceeds the session count bound.`);
+  }
+  const sessions: Record<string, StoredSessionRecord> = {};
+  const { provider, surface } = providerSurfaceFromKey(key);
+  for (const id of sessionIds) {
+    const record = own(partition.sessions, id);
+    if (!isRecord(record))
+      throw new SessionPersistenceError('corrupt', `${key}.${id} is malformed.`);
+    const sessionRecord = record as unknown as SessionRecord;
+    if (sessionRecord.provider !== provider || sessionRecord.surface !== surface) {
+      throw new SessionPersistenceError('unsafe', `${key}.${id} has a mismatched surface.`);
+    }
+    if (sessionRecord.id !== id) {
+      throw new SessionPersistenceError('unsafe', `${key}.${id} has a mismatched identity.`);
+    }
+    put(sessions, id, encodeSession(sessionRecord));
+  }
+  if (
+    partition.order.length !== sessionIds.length ||
+    new Set(partition.order).size !== partition.order.length
+  ) {
+    throw new SessionPersistenceError('corrupt', `${key}.order does not match the session map.`);
+  }
+  const order = [...partition.order];
+  for (const id of order) {
+    assertBoundedText(id, MAX_SESSION_ID_BYTES, `${key}.order ID`);
+    if (own(sessions, id) === undefined)
+      throw new SessionPersistenceError('corrupt', `${key}.order references unknown ID.`);
+  }
+  return {
+    enabled: partition.enabled,
+    baseline: partition.baseline,
+    sessions,
+    order,
+    cursors: sanitizeSurfaceCursorMap(partition.cursors, `${key}.cursors`),
+    legacyRetained: partition.legacyRetained,
+  };
+}
+
+function encodeMonitoringState(state: MonitoringState): StoredV2State {
+  if (!isRecord(state.partitions) || !Array.isArray(state.globalOrder) || !isRecord(state.owners)) {
+    throw new SessionPersistenceError('corrupt', 'Monitoring state root is malformed.');
+  }
+  const partitions = {} as Record<SurfaceKey, StoredV2Partition>;
+  const ids = new Set<string>();
+  for (const key of SURFACE_KEYS) {
+    const partition = own(state.partitions, key);
+    if (!isRecord(partition))
+      throw new SessionPersistenceError('corrupt', `Missing monitoring partition ${key}.`);
+    const encoded = encodePartition(partition as unknown as MonitoringPartition, key);
+    put(partitions, key, encoded);
+    for (const id of Object.keys(encoded.sessions)) ids.add(id);
+  }
+  if (Object.keys(state.partitions).some((key) => parseSurfaceKey(key) === undefined)) {
+    throw new SessionPersistenceError(
+      'corrupt',
+      'Monitoring state contains an unsupported partition.',
+    );
+  }
+  if (state.globalOrder.length > MAX_GLOBAL_ORDER) {
+    throw new SessionPersistenceError(
+      'oversized',
+      'Global session order exceeds the storage bound.',
+    );
+  }
+  if (
+    state.globalOrder.length !== ids.size ||
+    new Set(state.globalOrder).size !== state.globalOrder.length
+  ) {
+    throw new SessionPersistenceError(
+      'corrupt',
+      'Global session order does not match retained sessions.',
+    );
+  }
+  for (const id of state.globalOrder) {
+    assertBoundedText(id, MAX_SESSION_ID_BYTES, 'global session order ID');
+    if (!ids.has(id))
+      throw new SessionPersistenceError('corrupt', 'Global order references unknown ID.');
+  }
+  const owners: Record<string, SurfaceKey> = {};
+  const ownerEntries = Object.entries(state.owners);
+  if (ownerEntries.length > MAX_GLOBAL_ORDER) {
+    throw new SessionPersistenceError(
+      'oversized',
+      'Session owner choices exceed the storage bound.',
+    );
+  }
+  for (const [id, owner] of ownerEntries) {
+    assertBoundedText(id, MAX_SESSION_ID_BYTES, 'session owner ID');
+    if (parseSurfaceKey(owner) === undefined || own(partitions[owner].sessions, id) === undefined) {
+      throw new SessionPersistenceError('unsafe', `Owner choice for ${id} is invalid.`);
+    }
+    put(owners, id, owner);
+  }
+  return { schemaVersion: STORE_VERSION, partitions, globalOrder: [...state.globalOrder], owners };
+}
+
+function decodeBaseline(value: unknown, label: string): SurfaceBaseline {
+  if (!isRecord(value) || !hasOnlyKeys(value, ['status'], ['cutoff'])) {
+    throw new SessionPersistenceError('corrupt', `${label} is malformed.`);
+  }
+  if (value.status === 'pending') {
+    if (value.cutoff !== undefined)
+      throw new SessionPersistenceError('corrupt', `${label} has an unexpected cutoff.`);
+    return emptyBaseline();
+  }
+  if (value.status !== 'ready')
+    throw new SessionPersistenceError('corrupt', `${label} has an unsupported status.`);
+  assertTimestamp(value.cutoff, `${label}.cutoff`);
+  return readyBaseline(value.cutoff);
+}
+
+function decodeV2Partition(value: unknown, key: SurfaceKey): MonitoringPartition {
+  if (
+    !isRecord(value) ||
+    !hasOnlyKeys(value, ['enabled', 'baseline', 'sessions', 'order', 'cursors', 'legacyRetained'])
+  ) {
+    throw new SessionPersistenceError('corrupt', `${key} partition is malformed.`);
+  }
+  assertBoolean(value.enabled, `${key}.enabled`);
+  assertBoolean(value.legacyRetained, `${key}.legacyRetained`);
+  const baseline = decodeBaseline(value.baseline, `${key}.baseline`);
+  if (!isRecord(value.sessions) || !Array.isArray(value.order)) {
+    throw new SessionPersistenceError('corrupt', `${key} collections are malformed.`);
+  }
+  const ids = Object.keys(value.sessions);
+  if (ids.length > MAX_SESSIONS)
+    throw new SessionPersistenceError('oversized', `${key} exceeds the session count bound.`);
+  if (value.order.length !== ids.length || new Set(value.order).size !== value.order.length) {
+    throw new SessionPersistenceError('corrupt', `${key}.order does not match the session map.`);
+  }
+  if (!value.enabled && ids.length > 0 && !value.legacyRetained) {
+    throw new SessionPersistenceError(
+      'corrupt',
+      `${key} cannot retain records while disabled without legacy retention.`,
+    );
+  }
+  const sessions: Record<string, SessionRecord> = {};
+  const { provider, surface } = providerSurfaceFromKey(key);
+  for (const id of ids) {
+    assertBoundedText(id, MAX_SESSION_ID_BYTES, `${key} session map key`);
+    const record = decodeSession(own(value.sessions, id), id);
+    if (record.provider !== provider || record.surface !== surface) {
+      throw new SessionPersistenceError('unsafe', `${key}.${id} has a mismatched surface.`);
+    }
+    put(sessions, id, record);
+  }
+  for (const id of value.order) {
+    if (typeof id !== 'string')
+      throw new SessionPersistenceError('corrupt', `${key}.order contains a non-string.`);
+    assertBoundedText(id, MAX_SESSION_ID_BYTES, `${key}.order ID`);
+    if (own(sessions, id) === undefined)
+      throw new SessionPersistenceError('corrupt', `${key}.order references unknown ID.`);
+  }
+  return {
+    enabled: value.enabled,
+    baseline,
+    sessions,
+    order: [...value.order],
+    cursors: sanitizeSurfaceCursorMap(value.cursors, `${key}.cursors`),
+    legacyRetained: value.legacyRetained,
+  };
+}
+
+function decodeV2State(value: unknown): MonitoringState {
+  if (!isRecord(value))
+    throw new SessionPersistenceError('corrupt', 'Monitoring state root must be an object.');
+  if (value.schemaVersion !== STORE_VERSION) {
+    throw new SessionPersistenceError(
+      'unsupported-version',
+      `Monitoring state schema version ${String(value.schemaVersion)} is unsupported.`,
+    );
+  }
+  if (
+    !hasOnlyKeys(value, ['schemaVersion', 'partitions', 'globalOrder', 'owners']) ||
+    !isRecord(value.partitions) ||
+    !Array.isArray(value.globalOrder) ||
+    !isRecord(value.owners)
+  ) {
+    if (Object.prototype.hasOwnProperty.call(value, 'sessions')) {
+      throw new SessionPersistenceError(
+        'unsupported-version',
+        'Legacy session state shape is not schema v2.',
+      );
+    }
+    throw new SessionPersistenceError('corrupt', 'Monitoring state root is malformed.');
+  }
+  const partitions = {} as Record<SurfaceKey, MonitoringPartition>;
+  for (const key of SURFACE_KEYS) {
+    const valuePartition = own(value.partitions, key);
+    if (valuePartition === undefined)
+      throw new SessionPersistenceError('corrupt', `Missing monitoring partition ${key}.`);
+    put(partitions, key, decodeV2Partition(valuePartition, key));
+  }
+  if (Object.keys(value.partitions).some((key) => parseSurfaceKey(key) === undefined)) {
+    throw new SessionPersistenceError(
+      'corrupt',
+      'Monitoring state contains an unsupported partition.',
+    );
+  }
+  const globalOrder = [...value.globalOrder];
+  if (globalOrder.length > MAX_GLOBAL_ORDER || new Set(globalOrder).size !== globalOrder.length) {
+    throw new SessionPersistenceError(
+      globalOrder.length > MAX_GLOBAL_ORDER ? 'oversized' : 'corrupt',
+      'Global session order is invalid.',
+    );
+  }
+  const ids = retainedIds({ partitions, globalOrder: [], owners: {} });
+  if (globalOrder.length !== ids.size)
+    throw new SessionPersistenceError('corrupt', 'Global order does not match retained sessions.');
+  for (const id of globalOrder) {
+    assertBoundedText(id, MAX_SESSION_ID_BYTES, 'global session order ID');
+    if (!ids.has(id))
+      throw new SessionPersistenceError('corrupt', 'Global order references unknown ID.');
+  }
+  const owners: Record<string, SurfaceKey> = {};
+  const ownerEntries = Object.entries(value.owners);
+  if (ownerEntries.length > MAX_GLOBAL_ORDER)
+    throw new SessionPersistenceError(
+      'oversized',
+      'Session owner choices exceed the storage bound.',
+    );
+  for (const [id, owner] of ownerEntries) {
+    assertBoundedText(id, MAX_SESSION_ID_BYTES, 'session owner ID');
+    const parsedOwner = parseSurfaceKey(owner);
+    if (parsedOwner === undefined || !partitionHasSession(partitions[parsedOwner], id)) {
+      throw new SessionPersistenceError('unsafe', `Owner choice for ${id} is invalid.`);
+    }
+    put(owners, id, parsedOwner);
+  }
+  return { partitions, globalOrder, owners };
+}
+
+function migrateV1State(value: unknown): MonitoringState {
+  const decoded = decodeV1State(value);
+  if (decoded.state.order.length === 0) return createInitialMonitoringState();
+  const next = createInitialMonitoringState();
+  const mutablePartitions = next.partitions as Record<SurfaceKey, MonitoringPartition>;
+  const partitionOrders = {} as Record<SurfaceKey, string[]>;
+  const partitionSessions = {} as Record<SurfaceKey, Record<string, SessionRecord>>;
+  for (const key of SURFACE_KEYS) {
+    put(partitionOrders, key, []);
+    put(partitionSessions, key, {});
+  }
+  for (const id of decoded.state.order) {
+    const record = decoded.state.sessions[id];
+    if (record === undefined)
+      throw new SessionPersistenceError('corrupt', `Missing v1 session ${id}.`);
+    const key = surfaceKey(record.provider, record.surface);
+    put(partitionSessions[key], id, record);
+    partitionOrders[key].push(id);
+  }
+  for (const key of SURFACE_KEYS) {
+    if (partitionOrders[key].length === 0) continue;
+    mutablePartitions[key] = {
+      enabled: false,
+      baseline: emptyBaseline(),
+      sessions: partitionSessions[key],
+      order: partitionOrders[key],
+      // v1 cursor keys contain only provider/source, so they cannot be
+      // attributed safely to one of the two surfaces.
+      cursors: {},
+      legacyRetained: true,
+    };
+  }
+  next.globalOrder = [...decoded.state.order];
+  return next;
+}
+
+function effectiveState(monitoring: MonitoringState): SessionState {
+  const sessions: Record<string, SessionRecord> = {};
+  for (const id of monitoring.globalOrder) {
+    const explicitOwner = monitoring.owners[id];
+    let owner = explicitOwner;
+    if (
+      owner === undefined ||
+      !monitoring.partitions[owner].enabled ||
+      !partitionHasSession(monitoring.partitions[owner], id)
+    ) {
+      const replacement = SURFACE_KEYS.find(
+        (key) =>
+          monitoring.partitions[key].enabled && partitionHasSession(monitoring.partitions[key], id),
+      );
+      if (replacement === undefined) continue;
+      owner = replacement;
+    }
+    const record = monitoring.partitions[owner].sessions[id];
+    if (record === undefined) continue;
+    put(sessions, id, record);
+  }
+  return {
+    sessions,
+    order: monitoring.globalOrder.filter((id) => own(sessions, id) !== undefined),
+    providerHealth: {
+      codex: { status: 'unavailable', updatedAt: 0 },
+      claude: { status: 'unavailable', updatedAt: 0 },
+    },
+  };
+}
+
+function flattenCursors(monitoring: MonitoringState): FileCursorMap {
+  const result: Record<string, FileCursor> = {};
+  for (const key of SURFACE_KEYS) {
+    const provider = key.split(':')[0] as Provider;
+    for (const [sourceId, cursor] of Object.entries(monitoring.partitions[key].cursors)) {
+      put(result, `${provider}:${sourceId}`, cursor);
+    }
+  }
+  return result;
+}
+
+function monitoringResult(
+  monitoring: MonitoringState,
+  source: SessionLoadResult['source'],
+): SessionLoadResult {
+  const state = effectiveState(monitoring);
+  const baselineRequired = SURFACE_KEYS.some(
+    (key) => monitoring.partitions[key].baseline.status === 'pending',
+  );
+  return {
+    state,
+    cursors: flattenCursors(monitoring),
+    monitoring,
+    monitoringState: monitoring,
+    baselineRequired,
+    source,
+  };
+}
+
+function firstInstallResult(): SessionLoadResult {
+  return monitoringResult(createInitialMonitoringState(), 'first-install');
 }
 
 async function ensurePrivateDataDirectory(dataDirectory: string): Promise<void> {
@@ -741,12 +1294,66 @@ async function writeAtomicState(dataDirectory: string, payload: string): Promise
   }
 }
 
+function monitoringFromLegacyApi(state: SessionState, cursors: FileCursorMap): MonitoringState {
+  // Run the existing strict v1 encoder/decoder first. This keeps the
+  // compatibility overload subject to exactly the same validation as a
+  // persisted legacy checkpoint.
+  const decoded = decodeV1State(encodeV1State(state, cursors));
+  const next = createInitialMonitoringState();
+  // This compatibility overload represents an already-running coordinator;
+  // callers that need first-run suppression use MonitoringState directly.
+  for (const key of SURFACE_KEYS) next.partitions[key].baseline = readyBaseline(0);
+  const firstSurfaceByProvider: Partial<Record<Provider, SurfaceKey>> = {};
+  for (const id of decoded.state.order) {
+    const record = decoded.state.sessions[id];
+    if (record === undefined) continue;
+    const key = surfaceKey(record.provider, record.surface);
+    const partition = next.partitions[key];
+    partition.enabled = true;
+    partition.baseline = readyBaseline(0);
+    partition.legacyRetained = false;
+    if (firstSurfaceByProvider[record.provider] === undefined) {
+      firstSurfaceByProvider[record.provider] = key;
+    }
+    const sessions = partition.sessions as Record<string, SessionRecord>;
+    put(sessions, id, record);
+    (partition.order as string[]).push(id);
+  }
+  for (const [key, cursor] of Object.entries(decoded.cursors)) {
+    const prefix = cursorKeyParts(key);
+    if (prefix === undefined) continue;
+    const target =
+      firstSurfaceByProvider[prefix.provider] ?? (`${prefix.provider}:desktop` as SurfaceKey);
+    const partition = next.partitions[target];
+    const partitionCursors = partition.cursors as Record<string, FileCursor>;
+    put(partitionCursors, prefix.sourceId, cursor);
+  }
+  next.globalOrder = [...decoded.state.order];
+  return next;
+}
+
+function isMonitoringState(value: SessionState | MonitoringState): value is MonitoringState {
+  return isRecord(value) && Object.prototype.hasOwnProperty.call(value, 'partitions');
+}
+
 async function saveQueued(
   dataDirectory: string,
-  state: SessionState,
+  state: SessionState | MonitoringState,
   cursors: FileCursorMap,
 ): Promise<void> {
-  const stored = encodeState(state, cursors);
+  let monitoring: MonitoringState;
+  if (isMonitoringState(state)) {
+    if (Object.keys(cursors).length > 0) {
+      throw new SessionPersistenceError(
+        'corrupt',
+        'Per-surface monitoring saves must provide cursors inside each partition.',
+      );
+    }
+    monitoring = state;
+  } else {
+    monitoring = monitoringFromLegacyApi(state, cursors);
+  }
+  const stored = encodeMonitoringState(monitoring);
   const payload = JSON.stringify(stored) + '\n';
   if (Buffer.byteLength(payload, 'utf8') > MAX_STATE_BYTES) {
     throw new SessionPersistenceError('oversized', 'Session state exceeds the write bound.');
@@ -757,7 +1364,7 @@ async function saveQueued(
 
 export function saveSessionState(
   appDataPath: string,
-  state: SessionState,
+  state: SessionState | MonitoringState,
   cursors: FileCursorMap = {},
 ): Promise<void> {
   if (!isAbsolute(appDataPath)) {
@@ -808,6 +1415,55 @@ export async function loadSessionState(appDataPath: string): Promise<SessionLoad
   } catch (error) {
     throw new SessionPersistenceError('corrupt', 'Session state file is not valid JSON.', error);
   }
-  const decoded = decodeState(parsed);
-  return { ...decoded, baselineRequired: false, source: 'restored' };
+  if (isRecord(parsed) && parsed.schemaVersion === LEGACY_STORE_VERSION) {
+    const monitoring = migrateV1State(parsed);
+    return monitoringResult(monitoring, 'migrated');
+  }
+  const monitoring = decodeV2State(parsed);
+  return monitoringResult(monitoring, 'restored');
+}
+
+/** Persist a connection change as one queued, atomic checkpoint. */
+export async function connectSessionSurface(
+  appDataPath: string,
+  provider: Provider,
+  surface: SessionRecord['surface'],
+): Promise<SessionLoadResult> {
+  await updateSessionSurfaceAtomically(appDataPath, (monitoring) =>
+    connectMonitoringSurface(monitoring, provider, surface),
+  );
+  return loadSessionState(appDataPath);
+}
+
+/** Persist a disconnection change as one queued, atomic checkpoint. */
+export async function disconnectSessionSurface(
+  appDataPath: string,
+  provider: Provider,
+  surface: SessionRecord['surface'],
+): Promise<SessionLoadResult> {
+  await updateSessionSurfaceAtomically(appDataPath, (monitoring) =>
+    disconnectMonitoringSurface(monitoring, provider, surface),
+  );
+  return loadSessionState(appDataPath);
+}
+
+async function updateSessionSurfaceAtomically(
+  appDataPath: string,
+  update: (monitoring: MonitoringState) => MonitoringState,
+): Promise<void> {
+  if (!isAbsolute(appDataPath)) {
+    throw new SessionPersistenceError('unsafe', 'App-data path must be absolute.');
+  }
+  const dataDirectory = resolve(appDataPath);
+  const previous = writeQueues.get(dataDirectory) ?? Promise.resolve();
+  const queued = previous
+    .catch(() => undefined)
+    .then(async () => {
+      const current = await loadSessionState(dataDirectory);
+      await saveQueued(dataDirectory, update(current.monitoring), {});
+    });
+  writeQueues.set(dataDirectory, queued);
+  await queued.finally(() => {
+    if (writeQueues.get(dataDirectory) === queued) writeQueues.delete(dataDirectory);
+  });
 }
