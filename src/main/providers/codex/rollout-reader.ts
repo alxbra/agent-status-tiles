@@ -20,7 +20,10 @@ import type {
 } from './events';
 
 export const READ_CHUNK_BYTES = 64 * 1024;
-export const MAX_LINE_BYTES = 1024 * 1024;
+// Current Codex rollouts can include a single response record above 1 MiB.
+// Keep the bound below the per-read budget while preserving status-bearing
+// records that follow or accompany large local tool output.
+export const MAX_LINE_BYTES = 2 * 1024 * 1024;
 /** A caller can invoke read again with the returned cursor to continue. */
 export const MAX_READ_BYTES = 8 * 1024 * 1024;
 export const MAX_EVENTS_PER_READ = 1024;

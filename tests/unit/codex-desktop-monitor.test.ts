@@ -18,7 +18,9 @@ async function fixture() {
   const root = await mkdtemp(join(tmpdir(), 'agent-status-tiles-desktop-monitor-'));
   directories.push(root);
   const sessionsRoot = join(root, 'sessions');
+  const archivedSessionsRoot = join(root, 'archived_sessions');
   await mkdir(sessionsRoot);
+  await mkdir(archivedSessionsRoot);
   const rolloutPath = join(sessionsRoot, 'rollout.jsonl');
   const meta = JSON.stringify({
     timestamp: '2026-09-15T10:00:00.000Z',
@@ -57,8 +59,8 @@ async function fixture() {
       complete: true,
     })),
   };
-  const monitor = new CodexDesktopMonitor({ sessionsRoot, catalog });
-  return { monitor, catalog, record, rolloutPath };
+  const monitor = new CodexDesktopMonitor({ sessionsRoot, archivedSessionsRoot, catalog });
+  return { monitor, catalog, record, rolloutPath, archivedSessionsRoot };
 }
 
 afterEach(async () => {
@@ -127,7 +129,7 @@ describe('Codex Desktop monitor', () => {
     }
   });
 
-  it('fails closed on an incomplete catalog or unmatched rollout identity', async () => {
+  it('fails closed on an incomplete catalog and quarantines unmatched rollout identity', async () => {
     const { monitor, catalog, record } = await fixture();
     try {
       await monitor.start();
@@ -144,7 +146,9 @@ describe('Codex Desktop monitor', () => {
         pagesRead: 1,
         complete: true,
       });
-      await expect(monitor.discover()).rejects.toThrow('desktop-rollout-identity-mismatch');
+      const unmatched = await monitor.discover();
+      expect(unmatched.coverageIncomplete).toBe(true);
+      expect(unmatched.sources).toEqual([]);
     } finally {
       await monitor.stop();
     }
@@ -173,6 +177,107 @@ describe('Codex Desktop monitor', () => {
         2,
         expect.objectContaining({ cursor: 'next-page', includeArchived: true }),
       );
+    } finally {
+      await monitor.stop();
+    }
+  });
+
+  it('keeps confirmed Desktop sources while reporting ambiguous legacy coverage', async () => {
+    const { monitor, catalog, record } = await fixture();
+    catalog.listThreads.mockResolvedValue({
+      records: [
+        record,
+        {
+          ...record,
+          nativeId: '33333333-3333-7333-8333-333333333333',
+          sessionId: '33333333-3333-7333-8333-333333333333',
+          sourceEvidence: { ...record.sourceEvidence, originator: undefined },
+        },
+      ],
+      nextCursor: null,
+      pagesRead: 1,
+      complete: true,
+      coverageIncomplete: true,
+    });
+    try {
+      await monitor.start();
+      const discovered = await monitor.discover();
+      expect(discovered.complete).toBe(true);
+      expect(discovered.coverageIncomplete).toBe(true);
+      expect(discovered.sources).toMatchObject([{ nativeSessionId: nativeId }]);
+    } finally {
+      await monitor.stop();
+    }
+  });
+
+  it('marks archived catalog sessions without replaying files outside the active root', async () => {
+    const { monitor, catalog, record, archivedSessionsRoot } = await fixture();
+    const archivedId = '44444444-4444-7444-8444-444444444444';
+    const archivedPath = join(archivedSessionsRoot, 'archived.jsonl');
+    await writeFile(
+      archivedPath,
+      `${JSON.stringify({ timestamp: '2026-09-15T10:00:00.000Z', type: 'session_meta', payload: { id: archivedId } })}\n`,
+    );
+    catalog.listThreads.mockResolvedValue({
+      records: [
+        record,
+        {
+          ...record,
+          nativeId: archivedId,
+          sessionId: archivedId,
+          rolloutPath: archivedPath,
+          isArchived: true,
+        },
+      ],
+      nextCursor: null,
+      pagesRead: 2,
+      complete: true,
+    });
+    try {
+      await monitor.start();
+      const sources = (await monitor.discover()).sources;
+      expect(sources.map((source) => source.isArchived)).toEqual([false, true]);
+      const captured = await monitor.capture(sources);
+      expect(captured[1].endOffset).toBe(0);
+      const result = await monitor.read({
+        sources: captured,
+        cursors: {},
+        sessions: {},
+        frozenCutoffs: Object.fromEntries(captured.map((source) => [source.id, source.endOffset!])),
+        baseline: true,
+      });
+      expect(result.events).toMatchObject([{ event: { type: 'turn-started' } }]);
+      expect(result.exhaustedSourceIds).toContain(captured[1].id);
+      expect(result.cursors[captured[1].id]).toBeUndefined();
+    } finally {
+      await monitor.stop();
+    }
+  });
+
+  it('keeps confirmed events when an unrelated rollout item cannot be interpreted', async () => {
+    const { monitor, rolloutPath } = await fixture();
+    await appendFile(
+      rolloutPath,
+      `${JSON.stringify({
+        timestamp: '2026-09-15T10:00:02.000Z',
+        type: 'unknown_item',
+        payload: { text: 'PRIVATE' },
+      })}\n`,
+    );
+    try {
+      await monitor.start();
+      const sources = await monitor.capture((await monitor.discover()).sources);
+      const result = await monitor.read({
+        sources,
+        cursors: {},
+        sessions: {},
+        frozenCutoffs: { [sources[0].id]: sources[0].endOffset! },
+        baseline: true,
+      });
+      expect(result.complete).toBe(true);
+      expect(result.coverageIncomplete).toBe(true);
+      expect(result.events).toMatchObject([{ event: { type: 'turn-started' } }]);
+      expect(JSON.stringify(result)).not.toContain('PRIVATE');
     } finally {
       await monitor.stop();
     }

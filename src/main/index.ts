@@ -148,12 +148,12 @@ function getSettingsState(): SettingsState {
     const [provider, surface] = CONNECTION_TARGETS[connection];
     const key = `${provider}:${surface}` as const;
     const health = coordinator.getHealth()[key].status;
-    if (
-      !coordinator.getMonitoringState().partitions[key].enabled ||
-      (health !== 'error' && health !== 'unavailable')
-    )
-      return [];
+    if (!coordinator.getMonitoringState().partitions[key].enabled) return [];
     const label = connection === 'codexDesktop' ? 'Codex Desktop' : 'Codex CLI';
+    if (health === 'available' && coordinator.getHealth()[key].coverageIncomplete) {
+      return [`${label} coverage is limited to confirmed sessions; some sessions may be missing.`];
+    }
+    if (health !== 'error' && health !== 'unavailable') return [];
     return [
       `${label} connection or coverage is incomplete. Check the installation, then disconnect and reconnect.`,
     ];

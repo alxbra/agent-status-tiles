@@ -108,6 +108,150 @@ describe('runtime coordinator', () => {
     await runtime.stop();
   });
 
+  it('shows confirmed work during partial coverage and marks lost observations unavailable', async () => {
+    const dataPath = await appDataPath();
+    const item = source('confirmed');
+    let clock = 100;
+    const scheduled: Array<() => void> = [];
+    const testMonitor = monitor('codex:desktop', [item], async (request) => ({
+      events: request.baseline
+        ? [
+            {
+              type: 'turn-started' as const,
+              sessionId: 'codex:confirmed',
+              turnId: 'turn-1',
+              timestamp: 101,
+            },
+          ]
+        : [],
+      cursors: request.sources.length
+        ? { [item.id]: { identity: 'fixture', offset: item.endOffset ?? 0 } }
+        : {},
+      complete: true,
+    }));
+    testMonitor.discover = vi
+      .fn()
+      .mockResolvedValueOnce({
+        complete: true,
+        capturedAt: 100,
+        sources: [item],
+        coverageIncomplete: true,
+      })
+      .mockResolvedValue({
+        complete: true,
+        capturedAt: 102,
+        sources: [],
+        coverageIncomplete: true,
+      });
+    const runtime = createRuntimeCoordinator({
+      appDataPath: dataPath,
+      monitors: [testMonitor],
+      now: () => clock,
+      filePollIntervalMs: 10,
+      catalogPollIntervalMs: 10,
+      setTimeout: (callback) => {
+        scheduled.push(callback);
+        return scheduled.length as unknown as ReturnType<typeof setTimeout>;
+      },
+      clearTimeout: () => undefined,
+    });
+
+    await runtime.start();
+    await runtime.connect('codex', 'desktop');
+    expect(runtime.getHealth()['codex:desktop']).toMatchObject({
+      status: 'available',
+      coverageIncomplete: true,
+    });
+    expect(runtime.getOverlayState().sessions).toMatchObject([{ status: 'working' }]);
+    clock = 111;
+    scheduled.at(-1)?.();
+    await vi.waitFor(() =>
+      expect(runtime.getOverlayState().sessions).toMatchObject([{ status: 'unavailable' }]),
+    );
+    expect(runtime.getMonitoringState().partitions['codex:desktop'].baseline.status).toBe('ready');
+    await runtime.stop();
+  });
+
+  it('replays a newly confirmed source to a fixed cutoff without historical unread work', async () => {
+    const dataPath = await appDataPath();
+    const existing = source('existing');
+    const newlyConfirmed = source('newly-confirmed', 2);
+    let clock = 100;
+    const scheduled: Array<() => void> = [];
+    const read = vi.fn(async (request: Parameters<ProviderSurfaceMonitor['read']>[0]) => ({
+      events: request.baseline
+        ? [
+            {
+              type: 'turn-started' as const,
+              sessionId: 'codex:existing',
+              turnId: 'first-turn',
+              timestamp: 101,
+            },
+          ]
+        : [
+            {
+              type: 'turn-started' as const,
+              sessionId: 'codex:newly-confirmed',
+              turnId: 'old-turn',
+              timestamp: 102,
+            },
+            {
+              type: 'turn-completed' as const,
+              sessionId: 'codex:newly-confirmed',
+              turnId: 'old-turn',
+              completionId: 'old-completion',
+              timestamp: 103,
+            },
+          ],
+      cursors: Object.fromEntries(
+        request.sources.map((item) => [
+          item.id,
+          { identity: 'fixture', offset: item.endOffset ?? 0 },
+        ]),
+      ),
+      complete: true,
+    }));
+    const testMonitor = monitor('codex:desktop', [existing], read);
+    testMonitor.discover = vi
+      .fn()
+      .mockResolvedValueOnce({
+        complete: true,
+        capturedAt: 100,
+        sources: [existing],
+        coverageIncomplete: true,
+      })
+      .mockResolvedValue({ complete: true, capturedAt: 102, sources: [existing, newlyConfirmed] });
+    const runtime = createRuntimeCoordinator({
+      appDataPath: dataPath,
+      monitors: [testMonitor],
+      now: () => clock,
+      filePollIntervalMs: 10,
+      catalogPollIntervalMs: 10,
+      setTimeout: (callback) => {
+        scheduled.push(callback);
+        return scheduled.length as unknown as ReturnType<typeof setTimeout>;
+      },
+      clearTimeout: () => undefined,
+    });
+
+    await runtime.start();
+    await runtime.connect('codex', 'desktop');
+    clock = 111;
+    scheduled.at(-1)?.();
+    await vi.waitFor(() => expect(read).toHaveBeenCalledTimes(2));
+    expect(read.mock.calls[1][0].frozenCutoffs).toMatchObject({
+      [newlyConfirmed.id]: newlyConfirmed.endOffset,
+    });
+    expect(
+      runtime.getMonitoringState().partitions['codex:desktop'].sessions['codex:newly-confirmed']
+        ?.status,
+    ).toBe('idle');
+    expect(runtime.getOverlayState().sessions).toMatchObject([
+      { id: 'codex:existing', status: 'working' },
+    ]);
+    await runtime.stop();
+  });
+
   it('keeps concurrent surfaces isolated while deduplicating the canonical owner', async () => {
     const dataPath = await appDataPath();
     const sharedDesktop = source('shared', 1);
