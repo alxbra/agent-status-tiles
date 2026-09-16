@@ -289,7 +289,7 @@ export function reduceSessionState(state: SessionState, event: SessionEvent): Se
       }
       return replaceRecord(state, event.sessionId, {
         ...previous,
-        updatedAt: Math.max(previous.updatedAt, event.timestamp),
+        updatedAt: previous.updatedAt,
         acknowledgedCompletionId: event.expectedCompletionId,
       });
     }
@@ -297,7 +297,7 @@ export function reduceSessionState(state: SessionState, event: SessionEvent): Se
       if (!previous.isFailed || previous.isErrorDismissed) return state;
       return replaceRecord(state, event.sessionId, {
         ...previous,
-        updatedAt: Math.max(previous.updatedAt, event.timestamp),
+        updatedAt: previous.updatedAt,
         isErrorDismissed: true,
       });
     }

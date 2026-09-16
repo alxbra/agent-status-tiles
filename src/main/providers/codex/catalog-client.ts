@@ -112,6 +112,7 @@ export interface CodexCatalogRecord {
   /** Which list route produced this record; never inferred from source metadata. */
   isArchived?: boolean;
   projectBasename: string;
+  name?: string;
   rolloutPath?: string;
   sourceEvidence: CodexSourceEvidence;
 }
@@ -319,6 +320,7 @@ function projectThread(value: unknown, isArchived: boolean): CodexCatalogRecord 
 
   const projectBasename = basename(cwd) || cwd;
   if (!safeString(projectBasename, MAX_LABEL_BYTES)) return undefined;
+  const name = safeOptionalString(value.name, MAX_LABEL_BYTES);
 
   return {
     nativeId,
@@ -331,6 +333,7 @@ function projectThread(value: unknown, isArchived: boolean): CodexCatalogRecord 
     isEphemeral: value.ephemeral,
     isArchived,
     projectBasename,
+    ...(name === undefined ? {} : { name }),
     ...(rolloutPath === undefined ? {} : { rolloutPath }),
     sourceEvidence: {
       source: source.source,

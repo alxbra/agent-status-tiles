@@ -62,7 +62,7 @@ describe('status tile interaction invariants', () => {
       session({ id: 'codex:child', isTopLevel: false }),
     ]);
 
-    expect(visible.map(({ id }) => id)).toEqual(['codex:one']);
+    expect(visible.map(({ id }) => id)).toEqual(['codex:one', 'codex:idle']);
   });
 
   it('compares order by identity so pending additions/removals can apply on exit', () => {

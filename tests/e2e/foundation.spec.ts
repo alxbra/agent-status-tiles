@@ -210,10 +210,12 @@ test('wires production settings through preload, overlay state, and restart pers
       'displays',
       'launchAtLogin',
       'providers',
+      'recentThreadLimit',
       'reduceMotion',
       'selectedDisplayId',
     ]);
     expect(settings.selectedDisplayId).toBe('primary');
+    expect(settings.recentThreadLimit).toBe(5);
     expect(JSON.stringify(settings)).not.toMatch(/prompt|transcript|credential|filesystem|path/u);
 
     const physicalDisplay = settings.displays.find((display) => display.id !== 'primary');
@@ -231,6 +233,11 @@ test('wires production settings through preload, overlay state, and restart pers
       .toMatchObject({
         reducedMotion: true,
       });
+    await page.getByRole('combobox', { name: 'Recent threads' }).click();
+    await page.getByRole('option', { name: '3', exact: true }).click();
+    expect(
+      (await page.evaluate(() => window.agentStatusTiles.getSettings())).recentThreadLimit,
+    ).toBe(3);
 
     await closeApplication(application);
     application = await launch(userDataDir, 1);
@@ -240,6 +247,7 @@ test('wires production settings through preload, overlay state, and restart pers
       window.agentStatusTiles.getSettings(),
     );
     expect(restartedState.reduceMotion).toBe(true);
+    expect(restartedState.recentThreadLimit).toBe(3);
     expect(restartedState.selectedDisplayId).toBe(physicalDisplay.id);
     await expect(restartedSettings.getByRole('combobox', { name: 'Display' })).toContainText(
       physicalDisplay.label,

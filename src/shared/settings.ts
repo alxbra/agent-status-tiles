@@ -1,7 +1,9 @@
 /** The synthetic selection that always resolves to the current primary display. */
 export const PRIMARY_DISPLAY_ID = 'primary';
 
-export const DESKTOP_PREFERENCES_SCHEMA_VERSION = 1 as const;
+export const DESKTOP_PREFERENCES_SCHEMA_VERSION = 2 as const;
+export const DEFAULT_RECENT_THREAD_LIMIT = 5;
+export const MAX_RECENT_THREAD_LIMIT = 10;
 export const MAX_SETTINGS_DISPLAYS = 32;
 export const MAX_DISPLAY_LABEL_BYTES = 256;
 
@@ -28,6 +30,7 @@ export interface SettingsState {
   selectedDisplayId: string;
   launchAtLogin: boolean;
   reduceMotion: boolean;
+  recentThreadLimit: number;
   /** Actionable native settings failure, never diagnostic or path data. */
   error?: string;
 }
@@ -42,6 +45,19 @@ export interface ReduceMotionPreferenceChangeRequest {
 
 export interface LaunchAtLoginChangeRequest {
   enabled: boolean;
+}
+
+export interface RecentThreadLimitChangeRequest {
+  limit: number;
+}
+
+export function isRecentThreadLimit(value: unknown): value is number {
+  return (
+    typeof value === 'number' &&
+    Number.isInteger(value) &&
+    value >= 1 &&
+    value <= MAX_RECENT_THREAD_LIMIT
+  );
 }
 
 export interface SettingsConnectionRequest {
@@ -65,6 +81,7 @@ const STATE_KEYS = [
   'selectedDisplayId',
   'launchAtLogin',
   'reduceMotion',
+  'recentThreadLimit',
 ] as const;
 const STATE_KEYS_WITH_ERROR = [...STATE_KEYS, 'error'] as const;
 const PROVIDER_STATE_KEYS = ['status', 'canConnect', 'canDisconnect'] as const;
@@ -176,6 +193,7 @@ export function isSettingsState(value: unknown): value is SettingsState {
     displayIds.has(value.selectedDisplayId) &&
     typeof value.launchAtLogin === 'boolean' &&
     typeof value.reduceMotion === 'boolean' &&
+    isRecentThreadLimit(value.recentThreadLimit) &&
     (value.error === undefined || isBoundedText(value.error, 512))
   );
 }
@@ -206,4 +224,10 @@ export function isLaunchAtLoginChangeRequest(value: unknown): value is LaunchAtL
     hasExactKeys(value, BOOLEAN_REQUEST_KEYS) &&
     typeof value.enabled === 'boolean'
   );
+}
+
+export function isRecentThreadLimitChangeRequest(
+  value: unknown,
+): value is RecentThreadLimitChangeRequest {
+  return isRecord(value) && hasExactKeys(value, ['limit']) && isRecentThreadLimit(value.limit);
 }

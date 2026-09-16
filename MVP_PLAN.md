@@ -15,14 +15,14 @@ The first publishable release targets macOS and supports:
 - Claude Code local sessions in Claude Desktop.
 - Claude Code terminal sessions.
 
-Each top-level task or session gets one tile. Spawned subagents remain represented by their parent session.
+Each eligible top-level thread or task gets one tile. The dock shows the five most recently updated items across connected harnesses by default, configurable from one to ten. Spawned subagents remain represented by their parent.
 
 The main interface is a vertical row of tiny colored rounded-square tiles on the right desktop edge. Hovering produces macOS Dock-style magnification. Expanded tiles display the AI lab icon and a status icon. Clicking foregrounds the owning harness and selects the specific session where supported.
 
 ### Fixed scope
 
-- Show working, waiting, failed, and unread-completed sessions.
-- Hide idle sessions and acknowledged completions.
+- Show the most recently updated eligible items, including idle and acknowledged completions.
+- Keep working, waiting, failed, and unread-completed statuses distinct.
 - Use one selected display, defaulting to the primary display.
 - Appear across macOS Spaces and full-screen applications.
 - Use Electron, React, TypeScript, Tailwind CSS, and stock shadcn/ui.
@@ -75,7 +75,7 @@ Reuse the exact palette and status meanings from [the existing theme module](/Us
 
 Use `#111315` for dark glyphs over filled status backgrounds.
 
-Idle exists in the state model but is not normally displayed. Unavailable status is distinct from idle and is used only when a previously visible session can no longer be observed reliably.
+Idle is visible when its item is within the recent limit. Unavailable status is distinct from idle and is used when a previously observed item can no longer be observed reliably.
 
 ### 2.2 Collapsed strip
 
@@ -113,9 +113,9 @@ An expanded tile shows:
 - One status icon.
 - Nothing else.
 
-Fade icons in only when the tile is large enough to render them clearly. Use a single-line stock tooltip for the session title. If no title is available, use the project folder name; append a short session ID only when necessary to distinguish duplicates.
+Fade icons in only when the tile is large enough to render them clearly. Use a single-line stock tooltip for the task title. For Codex, use a validated catalog `name`, falling back to the project folder name. The user authorized storing this bounded name locally; never derive a title from `preview`, a transcript, or a rollout payload.
 
-Do not derive titles from prompt content.
+Keep titles out of logs and diagnostics.
 
 #### Interaction mockup
 
@@ -136,15 +136,15 @@ The labels above explain the mockup; they must not appear inside actual tiles. S
 
 ### 2.4 Ordering, overflow, and removal
 
-- New turns move their session to the top.
-- Progress, waiting, errors, and completion do not reorder sessions.
+- Sort eligible items by confirmed provider update or task activity, newest first, with a stable ID tie-break. Local acknowledgement and error dismissal do not change recency.
+- Apply the global Recent threads limit (default five, range one to ten) across connected harnesses, including idle items.
 - Freeze ordering and automatic removals while the pointer is inside the strip.
 - Apply pending list changes after pointer exit.
 - Bind clicks to the session ID captured on pointer-down.
 - Show at most 12 collapsed slots, further limited by available display height.
 - Allow scrolling through overflow while hovering.
 - Show a small directional indicator only when additional sessions exist outside the viewport.
-- Do not silently discard active or waiting sessions.
+- Items outside the configured recent limit remain in local state and return when they become recent enough.
 - Successful opening acknowledges the completion that was visible when clicked.
 - A newer completion arriving during navigation must remain unread.
 - Failed navigation must not acknowledge completion.
@@ -247,7 +247,7 @@ type SessionStatus =
   | "unavailable";
 
 interface SessionSnapshot {
-  id: string; // Namespaced by provider and native session ID.
+  id: string; // Namespaced by provider and native thread/task ID.
   provider: Provider;
   surface: Surface;
   title: string;
@@ -273,7 +273,7 @@ interface ProviderAdapter {
 }
 ```
 
-Persist provider-native IDs separately from display titles. Deduplicate a session visible through multiple surfaces using provider plus native session ID, and retain the most recently confirmed owning surface.
+Persist provider-native IDs separately from display titles. Codex uses the catalog thread ID for deduplication and navigation; the rollout session ID is a separate, validated file identity. Retain the most recently confirmed owning surface.
 
 Renderer commands are limited to:
 
@@ -297,7 +297,7 @@ The renderer never receives arbitrary filesystem access, shell execution, hook p
 - Acknowledged completion → idle, then hidden.
 - New turn clears prior completion acknowledgement and prior terminal errors.
 - Archived sessions disappear.
-- Ended idle sessions disappear; ended unread sessions remain until acknowledged.
+- Ended items disappear when their connected adapter no longer reports them; idle and acknowledged items may remain visible while eligible.
 - Ignore stale events from previous turns.
 - Parent completion must not be inferred from a subagent stopping.
 - Silence alone must not be interpreted as success, failure, or a stopped session.
@@ -313,7 +313,7 @@ Adapt the existing project’s catalog client, incremental event reader, reducer
 - Use local app-server queries for task metadata.
 - Use observed local task events for work performed in another Codex process.
 - Use explicitly installed and trusted hooks to improve approval detection.
-- Include Desktop and CLI sessions; exclude archived, ephemeral, and child sessions.
+- Include Desktop and CLI top-level threads, including user-created forks; exclude archived, ephemeral, and spawned child threads. Use the catalog thread `id` as identity and validate rollout events against the separate session ID.
 - Keep private/local file parsing isolated and covered by recorded, sanitized fixtures.
 - Detect unsupported formats and surface an integration issue instead of guessing.
 - Do not start, resume, or modify tasks to observe them.
@@ -493,7 +493,7 @@ interaction and visual-baseline acceptance remain unchecked.
 
 - [x] Implement shared session types and the deterministic status reducer.
 - [x] Namespace identities and deduplicate surfaces.
-- [x] Implement new-turn ordering and active/unread filtering.
+- [x] Implement deterministic session ordering and filtering (the recent-item visibility policy supersedes the initial active-only projection).
 - [x] Persist unread state, acknowledgement IDs, ordering, and cursors atomically (merged PR #5).
 - [ ] Suppress historical unread completions on first installation (persistence and reader emit baseline markers; applying them in live app replay remains pending).
 - [x] Handle late events, duplicate events, overlapping input requests, and archived sessions.
@@ -773,7 +773,7 @@ Record corrections made after review and the commit used for final validation.
 - [ ] Dock magnification is stable and matches the specified geometry.
 - [ ] Expanded tiles contain only lab and status icons.
 - [ ] Settings use stock shadcn without redundant copy.
-- [ ] Idle and acknowledged sessions disappear.
+- [ ] The configured number of recent eligible items appears, including idle and acknowledged items.
 - [ ] Clicks foreground the correct owning app.
 - [ ] Transparent regions do not block underlying applications.
 - [ ] Spaces, full-screen, display changes, and sleep/wake work.

@@ -31,6 +31,7 @@ function settingsState(): SettingsState {
     selectedDisplayId: 'primary',
     launchAtLogin: false,
     reduceMotion: false,
+    recentThreadLimit: 5,
   };
 }
 
@@ -63,6 +64,7 @@ describe('settings IPC', () => {
         return settingsState();
       }),
       setReduceMotion: vi.fn(() => settingsState()),
+      setRecentThreadLimit: vi.fn(() => settingsState()),
       setLaunchAtLogin: vi.fn(() => settingsState()),
       connectSurface: vi.fn(() => settingsState()),
       disconnectSurface: vi.fn(() => settingsState()),
@@ -75,6 +77,7 @@ describe('settings IPC', () => {
       IPC_CHANNELS.settingsGet,
       IPC_CHANNELS.settingsDisplayChange,
       IPC_CHANNELS.settingsReduceMotionChange,
+      IPC_CHANNELS.settingsRecentThreadLimitChange,
       IPC_CHANNELS.settingsLaunchAtLoginChange,
       IPC_CHANNELS.settingsSurfaceConnect,
       IPC_CHANNELS.settingsSurfaceDisconnect,
@@ -120,6 +123,21 @@ describe('settings IPC', () => {
     ).rejects.toThrow('Reduce motion preference request is invalid');
     await expect(
       Promise.resolve().then(() =>
+        electronMocks.handlers.get(IPC_CHANNELS.settingsRecentThreadLimitChange)!(validEvent, {
+          limit: 0,
+        }),
+      ),
+    ).rejects.toThrow('Recent thread limit request is invalid');
+    await expect(
+      Promise.resolve().then(() =>
+        electronMocks.handlers.get(IPC_CHANNELS.settingsRecentThreadLimitChange)!(validEvent, {
+          limit: 10,
+        }),
+      ),
+    ).resolves.toEqual(settingsState());
+    expect(options.setRecentThreadLimit).toHaveBeenCalledWith(10);
+    await expect(
+      Promise.resolve().then(() =>
         electronMocks.handlers.get(IPC_CHANNELS.settingsSurfaceConnect)!(validEvent, {
           connection: 'codexDesktop',
           path: '/private',
@@ -154,7 +172,7 @@ describe('settings IPC', () => {
 
     cleanup();
     cleanup();
-    expect(electronMocks.ipcMain.removeHandler).toHaveBeenCalledTimes(6);
+    expect(electronMocks.ipcMain.removeHandler).toHaveBeenCalledTimes(7);
   });
 
   it('publishes only validated state to the current Settings window', async () => {

@@ -35,7 +35,7 @@ async function overlayWindow(application: ElectronApplication): Promise<Page> {
   return overlay;
 }
 
-test('native Desktop baseline hides historical completion then publishes new work', async () => {
+test('native Desktop baseline shows historical completion as idle then publishes new work', async () => {
   test.skip(process.platform !== 'darwin', 'native overlay targets macOS');
   const root = await mkdtemp(join(tmpdir(), 'agent-status-tiles-desktop-e2e-'));
   const userDataDir = join(root, 'user-data');
@@ -66,6 +66,7 @@ test('native Desktop baseline hides historical completion then publishes new wor
     );
     const catalogRecord = {
       id: '22222222-2222-7222-8222-222222222222',
+      name: 'Codex task title',
       sessionId: nativeId,
       createdAt: 1_700_000_000,
       updatedAt: 1_700_000_100,
@@ -134,9 +135,17 @@ process.stdin.on('data', chunk => {
       .poll(() =>
         overlay.evaluate(async () => (await window.agentStatusTilesOverlay.getState()).sessions),
       )
-      .toEqual([]);
+      .toMatchObject([{ id: 'codex:22222222-2222-7222-8222-222222222222', status: 'idle' }]);
     const stateText = await readFile(join(userDataDir, 'session-state.json'), 'utf8');
+    expect(stateText).toContain('Codex task title');
     expect(stateText).not.toContain('PRIVATE');
+    expect(
+      (
+        await overlay.evaluate(
+          async () => (await window.agentStatusTilesOverlay.getState()).sessions,
+        )
+      )[0]?.title,
+    ).toBe('Codex task title');
     await appendFile(
       rolloutPath,
       line('2026-09-15T10:00:03.000Z', 'event_msg', { type: 'task_started', turn_id: 'live' }),
@@ -293,7 +302,7 @@ process.stdin.on('data', chunk => {
           async () => (await window.agentStatusTilesOverlay.getState()).sessions,
         ),
       )
-      .toEqual([]);
+      .toMatchObject([{ id: 'codex:22222222-2222-7222-8222-222222222222', status: 'idle' }]);
   } finally {
     await application?.close();
     await rm(root, { recursive: true, force: true });

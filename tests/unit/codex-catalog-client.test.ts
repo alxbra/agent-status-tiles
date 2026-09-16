@@ -31,7 +31,7 @@ const topLevelThread = {
   projectId: 'project-1',
   ephemeral: false,
   preview: 'PRIVATE_PROMPT_MUST_NOT_ESCAPE',
-  name: 'PRIVATE_NAME_MUST_NOT_ESCAPE',
+  name: 'Codex task name',
   turns: [{ id: 'private-turn-content' }],
 };
 
@@ -259,7 +259,7 @@ describe('Codex catalog client', () => {
     });
     expect(result.records[3]).toMatchObject({ nativeId: ephemeralThread.id, isEphemeral: true });
     expect(result.records[0]).not.toHaveProperty('preview');
-    expect(result.records[0]).not.toHaveProperty('name');
+    expect(result.records[0]).toHaveProperty('name', 'Codex task name');
     expect(result.records[0]).not.toHaveProperty('turns');
     expect(result.records[0]).not.toHaveProperty('projectId');
     expect(result.records[0]).not.toHaveProperty('isTopLevel');

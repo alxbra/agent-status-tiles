@@ -6,6 +6,7 @@ export const IPC_CHANNELS = {
   settingsChanged: 'settings:changed',
   settingsDisplayChange: 'settings:display-change',
   settingsReduceMotionChange: 'settings:reduce-motion-change',
+  settingsRecentThreadLimitChange: 'settings:recent-thread-limit-change',
   settingsLaunchAtLoginChange: 'settings:launch-at-login-change',
   settingsSurfaceConnect: 'settings:surface-connect',
   settingsSurfaceDisconnect: 'settings:surface-disconnect',
@@ -15,6 +16,7 @@ export {
   isDisplayPreferenceChangeRequest,
   isLaunchAtLoginChangeRequest,
   isReduceMotionPreferenceChangeRequest,
+  isRecentThreadLimitChangeRequest,
   isSerializedDisplayId,
   isSettingsState,
   isSettingsConnectionKey,
@@ -24,6 +26,7 @@ export {
   type DisplayPreferenceChangeRequest,
   type LaunchAtLoginChangeRequest,
   type ReduceMotionPreferenceChangeRequest,
+  type RecentThreadLimitChangeRequest,
   type SettingsDisplayOption,
   type SettingsProviderConnectionStatus,
   type SettingsProviderState,
@@ -41,6 +44,7 @@ export interface AgentStatusTilesApi {
   subscribeSettings(listener: (state: import('./settings').SettingsState) => void): () => void;
   setDisplayPreference(displayId: string): Promise<import('./settings').SettingsState>;
   setReduceMotion(enabled: boolean): Promise<import('./settings').SettingsState>;
+  setRecentThreadLimit(limit: number): Promise<import('./settings').SettingsState>;
   setLaunchAtLogin(enabled: boolean): Promise<import('./settings').SettingsState>;
   connectSurface(
     connection: import('./settings').SettingsConnectionKey,

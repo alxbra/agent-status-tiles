@@ -58,6 +58,95 @@ function monitor(
 }
 
 describe('runtime coordinator', () => {
+  it('shows five latest top-level records across connected providers and changes the global limit', async () => {
+    const dataPath = await appDataPath();
+    const read = async (request: RuntimeReadRequest) => ({
+      events: [],
+      cursors: Object.fromEntries(
+        request.sources.map((item) => [
+          item.id,
+          { identity: 'fixture', offset: item.endOffset ?? 0 },
+        ]),
+      ),
+      complete: true,
+    });
+    const runtime = createRuntimeCoordinator({
+      appDataPath: dataPath,
+      monitors: [
+        monitor('codex:desktop', [source('d1', 1), source('d7', 7), source('d3', 3)], read),
+        monitor('codex:cli', [source('c6', 6), source('c2', 2)], read),
+        monitor('claude:desktop', [source('a5', 5), source('a4', 4)], read),
+      ],
+    });
+    await runtime.start();
+    await runtime.connect('codex', 'desktop');
+    await runtime.connect('codex', 'cli');
+    await runtime.connect('claude', 'desktop');
+    expect(runtime.getOverlayState().sessions.map((item) => item.id)).toEqual([
+      'codex:d7',
+      'codex:c6',
+      'claude:a5',
+      'claude:a4',
+      'codex:d3',
+    ]);
+    runtime.setRecentThreadLimit(2);
+    expect(runtime.getOverlayState().sessions.map((item) => item.id)).toEqual([
+      'codex:d7',
+      'codex:c6',
+    ]);
+    expect(() => runtime.setRecentThreadLimit(11)).toThrow();
+    await runtime.stop();
+  });
+
+  it('migrates an unambiguous saved Codex session record to the catalog thread ID', async () => {
+    const dataPath = await appDataPath();
+    const oldId = 'codex:rollout-id';
+    const nextId = 'codex:thread-id';
+    const oldState = reduceSessionState(createInitialSessionState(), {
+      type: 'upsert',
+      provider: 'codex',
+      surface: 'desktop',
+      nativeSessionId: 'rollout-id',
+      title: 'Old title',
+      isTopLevel: true,
+      isArchived: false,
+      canOpen: false,
+      updatedAt: 1,
+    });
+    const saved = createInitialMonitoringState();
+    const partition = saved.partitions['codex:desktop'];
+    partition.enabled = true;
+    partition.baseline = { status: 'ready', cutoff: 2 };
+    partition.sessions = oldState.sessions;
+    partition.order = [oldId];
+    partition.cursors = { 'source-thread-id': { identity: 'fixture', offset: 10 } };
+    saved.globalOrder = [oldId];
+    saved.owners = { [oldId]: 'codex:desktop' };
+    await saveSessionState(dataPath, saved);
+    const thread = { ...source('thread-id'), legacySessionId: 'rollout-id' };
+    const runtime = createRuntimeCoordinator({
+      appDataPath: dataPath,
+      monitors: [
+        monitor('codex:desktop', [thread], async (request) => ({
+          events: [],
+          cursors: request.cursors,
+          complete: true,
+        })),
+      ],
+    });
+    await runtime.start();
+    await vi.waitFor(() =>
+      expect(
+        runtime.getMonitoringState().partitions['codex:desktop'].sessions[nextId],
+      ).toBeDefined(),
+    );
+    const migrated = (await loadSessionState(dataPath)).monitoring;
+    expect(migrated.partitions['codex:desktop'].sessions[nextId]?.title).toBe('Fixture 1');
+    expect(migrated.partitions['codex:desktop'].sessions[oldId]).toBeUndefined();
+    expect(migrated.globalOrder).toEqual([nextId]);
+    await runtime.stop();
+  });
+
   it('replays a first-run surface privately and suppresses historical terminal states', async () => {
     const dataPath = await appDataPath();
     const historicalSource = source('thread-1');
@@ -102,8 +191,9 @@ describe('runtime coordinator', () => {
       acknowledgedCompletionId: 'completion-1',
       canOpen: false,
     });
-    expect(runtime.getOverlayState().sessions).toEqual([]);
-    expect(published.at(-1)).toBe('');
+    expect(runtime.getOverlayState().sessions).toMatchObject([
+      { id: 'codex:thread-1', status: 'idle' },
+    ]);
 
     await runtime.stop();
   });
@@ -247,6 +337,7 @@ describe('runtime coordinator', () => {
         ?.status,
     ).toBe('idle');
     expect(runtime.getOverlayState().sessions).toMatchObject([
+      { id: 'codex:newly-confirmed', status: 'idle' },
       { id: 'codex:existing', status: 'working' },
     ]);
     await runtime.stop();
@@ -442,7 +533,7 @@ describe('runtime coordinator', () => {
     await runtime.start();
     await runtime.connect('codex', 'desktop');
 
-    expect(runtime.getOverlayState().sessions).toHaveLength(256);
+    expect(runtime.getOverlayState().sessions).toHaveLength(5);
     expect(omitted).toBe(44);
     expect(
       Object.keys(runtime.getMonitoringState().partitions['codex:desktop'].sessions),

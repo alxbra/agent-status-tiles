@@ -82,7 +82,7 @@ function cliMonitorOptions(): CodexCliMonitorOptions {
 }
 
 function isQualifyingSession(session: SessionSnapshot): boolean {
-  return session.isTopLevel && !session.isArchived && session.status !== 'idle';
+  return session.isTopLevel && !session.isArchived;
 }
 
 function qualifyingSessionCount(sessions: readonly SessionSnapshot[]): number {
@@ -170,6 +170,7 @@ function getSettingsState(): SettingsState {
     selectedDisplayId: preferredDisplayId,
     launchAtLogin: loginItemState.enabled,
     reduceMotion: preferences?.reduceMotion ?? false,
+    recentThreadLimit: preferences?.recentThreadLimit ?? 5,
     ...(settingsError ? { error: settingsError } : {}),
   };
 }
@@ -277,6 +278,7 @@ if (!hasSingleInstanceLock) {
     const preserveFixtureOverlay = !app.isPackaged && overlayState.sessions.length > 0;
     runtimeCoordinator = createRuntimeCoordinator({
       appDataPath: app.getPath('userData'),
+      recentThreadLimit: preferences.recentThreadLimit,
       monitors: [
         new CodexDesktopMonitor(desktopMonitorOptions()),
         new CodexCliMonitor(cliMonitorOptions()),
@@ -339,6 +341,15 @@ if (!hasSingleInstanceLock) {
         desktopPreferences.setReduceMotion(enabled);
         overlayState = { ...overlayState, reducedMotion: enabled };
         publishOverlayState(overlayController?.getWindow() ?? null, overlayState);
+        const state = getSettingsState();
+        publishSettingsState(getSettingsWindow(), state);
+        return state;
+      },
+      setRecentThreadLimit: (limit) => {
+        if (desktopPreferences === null || runtimeCoordinator === null)
+          throw new Error('Recent threads are unavailable');
+        desktopPreferences.setRecentThreadLimit(limit);
+        runtimeCoordinator.setRecentThreadLimit(limit);
         const state = getSettingsState();
         publishSettingsState(getSettingsWindow(), state);
         return state;

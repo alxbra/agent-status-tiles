@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { appendFile, mkdir, mkdtemp, rename, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { CodexDesktopMonitor } from '../../src/main/providers/codex/desktop-monitor';
 import type {
   CodexCatalogRecord,
@@ -68,6 +68,59 @@ afterEach(async () => {
 });
 
 describe('Codex Desktop monitor', () => {
+  it('keeps distinct thread IDs with one rollout session ID separate and rejects a shared rollout file', async () => {
+    const { monitor, catalog, record, rolloutPath } = await fixture();
+    const secondId = '44444444-4444-7444-8444-444444444444';
+    const secondPath = join(dirname(rolloutPath), 'second.jsonl');
+    await writeFile(
+      secondPath,
+      `${JSON.stringify({ timestamp: '2026-09-15T10:00:00.000Z', type: 'session_meta', payload: { id: nativeId } })}\n${JSON.stringify({ timestamp: '2026-09-15T10:00:02.000Z', type: 'event_msg', payload: { type: 'task_started', turn_id: 'turn-2' } })}\n`,
+    );
+    catalog.listThreads.mockResolvedValue({
+      records: [
+        record,
+        { ...record, nativeId: secondId, rolloutPath: secondPath, name: 'Second task' },
+      ],
+      nextCursor: null,
+      pagesRead: 1,
+      complete: true,
+    });
+    try {
+      await monitor.start();
+      const discovery = await monitor.discover();
+      expect(discovery.sources.map((source) => source.nativeSessionId)).toEqual([
+        catalogId,
+        secondId,
+      ]);
+      expect(discovery.sources[1].title).toBe('Second task');
+      const captured = await monitor.capture(discovery.sources);
+      const read = await monitor.read({
+        sources: captured,
+        cursors: {},
+        sessions: {},
+        frozenCutoffs: {},
+        baseline: false,
+      });
+      expect(
+        read.events.map((entry) => {
+          const event = 'event' in entry ? entry.event : entry;
+          return 'sessionId' in event ? event.sessionId : undefined;
+        }),
+      ).toEqual([`codex:${catalogId}`, `codex:${secondId}`]);
+      catalog.listThreads.mockResolvedValue({
+        records: [record, { ...record, nativeId: secondId }],
+        nextCursor: null,
+        pagesRead: 1,
+        complete: true,
+      });
+      const ambiguous = await monitor.discover();
+      expect(ambiguous.sources).toEqual([]);
+      expect(ambiguous.coverageIncomplete).toBe(true);
+    } finally {
+      await monitor.stop();
+    }
+  });
+
   it('resolves a catalog ID difference from rollout metadata and replays only the fixed baseline', async () => {
     const { monitor, catalog, rolloutPath } = await fixture();
     try {
@@ -77,7 +130,12 @@ describe('Codex Desktop monitor', () => {
         expect.objectContaining({ includeArchived: true }),
       );
       expect(discovered.sources).toMatchObject([
-        { nativeSessionId: nativeId, title: 'example-project', canOpen: false },
+        {
+          nativeSessionId: catalogId,
+          legacySessionId: nativeId,
+          title: 'example-project',
+          canOpen: false,
+        },
       ]);
       const sources = await monitor.capture(discovered.sources);
       const source = sources[0];
@@ -106,7 +164,7 @@ describe('Codex Desktop monitor', () => {
         type: 'upsert',
         provider: 'codex',
         surface: 'desktop',
-        nativeSessionId: nativeId,
+        nativeSessionId: source.nativeSessionId,
         title: 'example-project',
         isTopLevel: true,
         isArchived: false,
@@ -204,7 +262,7 @@ describe('Codex Desktop monitor', () => {
       const discovered = await monitor.discover();
       expect(discovered.complete).toBe(true);
       expect(discovered.coverageIncomplete).toBe(true);
-      expect(discovered.sources).toMatchObject([{ nativeSessionId: nativeId }]);
+      expect(discovered.sources).toMatchObject([{ nativeSessionId: record.nativeId }]);
     } finally {
       await monitor.stop();
     }

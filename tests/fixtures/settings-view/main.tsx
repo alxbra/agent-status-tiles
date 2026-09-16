@@ -19,6 +19,7 @@ type FixtureState = {
   selectedDisplayId: string;
   launchAtLogin: boolean;
   reduceMotion: boolean;
+  recentThreadLimit: number;
   error?: string;
 };
 
@@ -31,6 +32,7 @@ const initialState: FixtureState = {
   selectedDisplayId: 'primary',
   launchAtLogin: false,
   reduceMotion: false,
+  recentThreadLimit: 5,
 };
 
 type FixtureWindow = Window & {
@@ -116,6 +118,10 @@ function SettingsFixture(): ReactElement {
         displays={displays}
         error={state.error}
         launchAtLogin={state.launchAtLogin}
+        recentThreadLimit={state.recentThreadLimit}
+        onRecentThreadLimitChange={(limit) =>
+          update((current) => ({ ...current, recentThreadLimit: limit }))
+        }
         onConnect={(provider) => {
           providerActionCalls.current[provider] += 1;
           return update((current) => ({

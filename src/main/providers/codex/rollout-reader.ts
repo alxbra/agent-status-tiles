@@ -51,6 +51,7 @@ interface PendingOutput {
 interface FileContext {
   pathKey: string;
   nativeSessionId: string;
+  threadId: string;
   isTopLevel: boolean;
   surface: CodexSessionQualification['surface'];
   activeTurnId?: string;
@@ -399,7 +400,9 @@ export class CodexRolloutReader {
   ): CodexSessionQualification | undefined {
     const session = asRecord(value);
     const nativeSessionId = boundedString(session?.nativeSessionId);
-    if (!nativeSessionId) {
+    const threadId =
+      session?.threadId === undefined ? nativeSessionId : boundedString(session.threadId);
+    if (!nativeSessionId || !threadId) {
       this.addDiagnostic(diagnostics, 'missing-session-id', pathKey);
       return undefined;
     }
@@ -419,6 +422,7 @@ export class CodexRolloutReader {
     const turnKey = normalizeTurnKey(session.turnKey);
     return {
       nativeSessionId,
+      threadId,
       surface: session.surface,
       isTopLevel: session.isTopLevel,
       ...(activeTurnId ? { activeTurnId } : {}),
@@ -496,6 +500,7 @@ export class CodexRolloutReader {
       const context: FileContext = {
         pathKey,
         nativeSessionId: session.nativeSessionId,
+        threadId: session.threadId ?? session.nativeSessionId,
         isTopLevel: session.isTopLevel,
         surface: session.surface,
         ...(session.activeTurnId ? { activeTurnId: session.activeTurnId } : {}),
@@ -759,7 +764,7 @@ export class CodexRolloutReader {
             type: 'turn-completed',
             sessionId: this.sessionId(context),
             turnId,
-            completionId: completionId(context.nativeSessionId, turnId, record.id),
+            completionId: completionId(context.threadId, turnId, record.id),
             timestamp,
           },
           context,
@@ -968,14 +973,14 @@ export class CodexRolloutReader {
     events.push({
       event,
       baseline,
-      nativeSessionId: context.nativeSessionId,
+      nativeSessionId: context.threadId,
       isTopLevel: context.isTopLevel,
       surface: context.surface,
     });
   }
 
   private sessionId(context: FileContext): string {
-    return `codex:${context.nativeSessionId}`;
+    return `codex:${context.threadId}`;
   }
 
   private missingTurn(context: FileContext, diagnostics: CodexDiagnostic[], offset: number): void {

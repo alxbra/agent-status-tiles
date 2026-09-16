@@ -5,6 +5,7 @@ import {
   isDisplayPreferenceChangeRequest,
   isLaunchAtLoginChangeRequest,
   isReduceMotionPreferenceChangeRequest,
+  isRecentThreadLimitChangeRequest,
   isSettingsState,
   isSettingsConnectionRequest,
   isSettingsDisconnectRequest,
@@ -17,6 +18,7 @@ export interface SettingsIpcOptions {
   getState: () => SettingsState;
   setDisplayPreference: (displayId: string) => SettingsState | Promise<SettingsState>;
   setReduceMotion: (enabled: boolean) => SettingsState | Promise<SettingsState>;
+  setRecentThreadLimit: (limit: number) => SettingsState | Promise<SettingsState>;
   setLaunchAtLogin: (enabled: boolean) => SettingsState | Promise<SettingsState>;
   connectSurface: (connection: SettingsConnectionKey) => SettingsState | Promise<SettingsState>;
   disconnectSurface: (connection: SettingsConnectionKey) => SettingsState | Promise<SettingsState>;
@@ -73,6 +75,13 @@ export function registerSettingsIpcHandlers(options: SettingsIpcOptions): () => 
     return assertState(await options.setReduceMotion(payload.enabled));
   });
 
+  ipcMain.handle(IPC_CHANNELS.settingsRecentThreadLimitChange, async (event, payload: unknown) => {
+    assertSender(event);
+    if (!isRecentThreadLimitChangeRequest(payload))
+      throw new Error('Recent thread limit request is invalid');
+    return assertState(await options.setRecentThreadLimit(payload.limit));
+  });
+
   ipcMain.handle(IPC_CHANNELS.settingsLaunchAtLoginChange, async (event, payload: unknown) => {
     assertSender(event);
     if (!isLaunchAtLoginChangeRequest(payload)) {
@@ -105,6 +114,7 @@ export function registerSettingsIpcHandlers(options: SettingsIpcOptions): () => 
       IPC_CHANNELS.settingsGet,
       IPC_CHANNELS.settingsDisplayChange,
       IPC_CHANNELS.settingsReduceMotionChange,
+      IPC_CHANNELS.settingsRecentThreadLimitChange,
       IPC_CHANNELS.settingsLaunchAtLoginChange,
       IPC_CHANNELS.settingsSurfaceConnect,
       IPC_CHANNELS.settingsSurfaceDisconnect,
