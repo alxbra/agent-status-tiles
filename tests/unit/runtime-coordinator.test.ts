@@ -147,6 +147,58 @@ describe('runtime coordinator', () => {
     await runtime.stop();
   });
 
+  it('migrates shared legacy IDs independently across Desktop and CLI', async () => {
+    const dataPath = await appDataPath();
+    const oldId = 'codex:rollout-id';
+    const record = reduceSessionState(createInitialSessionState(), {
+      type: 'upsert',
+      provider: 'codex',
+      surface: 'desktop',
+      nativeSessionId: 'rollout-id',
+      title: 'Old title',
+      isTopLevel: true,
+      isArchived: false,
+      canOpen: false,
+      updatedAt: 1,
+    }).sessions[oldId];
+    const saved = createInitialMonitoringState();
+    for (const surface of ['desktop', 'cli'] as const) {
+      const partition = saved.partitions[`codex:${surface}`];
+      partition.enabled = true;
+      partition.baseline = { status: 'ready', cutoff: 2 };
+      partition.sessions = { [oldId]: { ...record, surface } };
+      partition.order = [oldId];
+      partition.cursors = { [`source-${surface}`]: { identity: 'fixture', offset: 10 } };
+    }
+    saved.globalOrder = [oldId];
+    saved.owners = { [oldId]: 'codex:cli' };
+    await saveSessionState(dataPath, saved);
+    const desktop = { ...source('desktop'), legacySessionId: 'rollout-id' };
+    const cli = { ...source('cli'), legacySessionId: 'rollout-id' };
+    const read = async (request: RuntimeReadRequest) => ({
+      events: [],
+      cursors: request.cursors,
+      complete: true,
+    });
+    const runtime = createRuntimeCoordinator({
+      appDataPath: dataPath,
+      monitors: [monitor('codex:desktop', [desktop], read), monitor('codex:cli', [cli], read)],
+    });
+    await runtime.start();
+    await vi.waitFor(() =>
+      expect(
+        runtime.getMonitoringState().partitions['codex:cli'].sessions['codex:cli'],
+      ).toBeDefined(),
+    );
+    const migrated = (await loadSessionState(dataPath)).monitoring;
+    expect(migrated.partitions['codex:desktop'].sessions['codex:desktop']).toBeDefined();
+    expect(migrated.partitions['codex:cli'].sessions['codex:cli']).toBeDefined();
+    expect(migrated.globalOrder).toEqual(expect.arrayContaining(['codex:desktop', 'codex:cli']));
+    expect(migrated.owners['codex:desktop']).toBe('codex:desktop');
+    expect(migrated.owners['codex:cli']).toBe('codex:cli');
+    await runtime.stop();
+  });
+
   it('replays a first-run surface privately and suppresses historical terminal states', async () => {
     const dataPath = await appDataPath();
     const historicalSource = source('thread-1');
@@ -171,12 +223,9 @@ describe('runtime coordinator', () => {
       },
       complete: true,
     }));
-    const published: string[] = [];
     const runtime = createRuntimeCoordinator({
       appDataPath: dataPath,
       monitors: [monitor('codex:desktop', [historicalSource], read)],
-      onOverlayState: (state) =>
-        published.push(state.sessions.map((session) => session.id).join(',')),
     });
 
     await runtime.start();

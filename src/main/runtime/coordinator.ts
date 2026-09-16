@@ -647,7 +647,8 @@ function overlaySessions(
     );
   };
   const ordered = [...visible].sort(
-    (left, right) => right.updatedAt - left.updatedAt || left.id.localeCompare(right.id),
+    (left, right) =>
+      right.updatedAt - left.updatedAt || (left.id < right.id ? -1 : left.id > right.id ? 1 : 0),
   );
   const mapped = ordered.map((snapshot) => {
     const owner = ownerFor(snapshot.id);

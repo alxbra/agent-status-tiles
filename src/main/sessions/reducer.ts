@@ -316,26 +316,6 @@ export function selectSessionSnapshots(state: SessionState): readonly SessionSna
   });
 }
 
-export function selectVisibleSessionSnapshots(state: SessionState): readonly SessionSnapshot[] {
-  return state.order.flatMap((id) => {
-    const record = ownSession(state.sessions, id);
-    if (
-      record === undefined ||
-      !record.isTopLevel ||
-      record.isArchived ||
-      record.status === 'idle'
-    ) {
-      return [];
-    }
-
-    const snapshot = snapshotOf(record);
-    const health = state.providerHealth[record.provider].status;
-    return health === 'unavailable' || health === 'error'
-      ? [{ ...snapshot, status: 'unavailable' }]
-      : [snapshot];
-  });
-}
-
 export function selectSession(state: SessionState, sessionId: string): SessionSnapshot | undefined {
   const record = ownSession(state.sessions, sessionId);
   return record === undefined ? undefined : snapshotOf(record);

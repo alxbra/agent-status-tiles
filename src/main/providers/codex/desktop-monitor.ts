@@ -170,7 +170,6 @@ export class CodexSurfaceMonitor implements ProviderSurfaceMonitor {
 
     const files = new Map<string, DiscoveredFile>();
     const seenThreads = new Set<string>();
-    const seenRolloutPaths = new Set<string>();
     const sources: RuntimeMonitorSource[] = [];
     // Keep active sources before archive-only metadata sources so the reader's
     // continuation index remains stable while archived files are never replayed.
@@ -202,12 +201,11 @@ export class CodexSurfaceMonitor implements ProviderSurfaceMonitor {
         continue;
       }
       const nativeSessionId = session.nativeId;
-      if (seenThreads.has(nativeSessionId) || seenRolloutPaths.has(session.rolloutPath)) {
+      if (seenThreads.has(nativeSessionId)) {
         coverageIncomplete = true;
         continue;
       }
       seenThreads.add(nativeSessionId);
-      seenRolloutPaths.add(session.rolloutPath);
       const root = session.isArchived ? this.archivedSessionsRoot : this.sessionsRoot;
       const cursorId = runtimeSourceId(cursorKeyForPath(root, session.rolloutPath));
       const id = session.isArchived ? `archived:${cursorId}` : cursorId;

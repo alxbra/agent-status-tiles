@@ -174,6 +174,7 @@ process.stdin.on('data', (chunk) => {
         projectId: 'PRIVATE_CHANGED_PROJECT',
       };
     }
+    if (mode === 'empty-name') outputPage.data[0] = { ...outputPage.data[0], name: '   ' };
     if (mode === 'repeated-cursor') outputPage.nextCursor = 'page-2';
     process.stdout.write(JSON.stringify({ id: request.id, result: outputPage }) + '\\n');
   }
@@ -512,6 +513,15 @@ describe('Codex catalog client', () => {
       expect(diagnostics).toEqual([]);
       await client.stop();
     }
+  });
+
+  it('drops an invalid optional task name without falling back to prompt preview', async () => {
+    const client = createClient(await createFakeBinary('empty-name'), []);
+    const result = await client.listThreads({ maxPages: 1 });
+    expect(result.records[0]?.projectBasename).toBe('demo-app');
+    expect(result.records[0]).not.toHaveProperty('name');
+    expect(result.records[0]).not.toHaveProperty('preview');
+    await client.stop();
   });
 
   it('times out bounded requests without hanging', async () => {
