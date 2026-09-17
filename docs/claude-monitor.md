@@ -23,7 +23,7 @@ archive) the previous summary is kept for at most two passes, so a rotation
 never looks like an ended session while a deleted journal with a stale archive
 is forgotten. A directory holding more journals than can be stat'ed reports
 incomplete coverage; the collection below keeps a long-lived install under
-that bound as long as its sessions end with `SessionEnd`.
+that bound.
 
 Each inspected journal yields display-safe facts only: the session ID, the
 project folder name from the newest record, the surface, the recognised
@@ -63,9 +63,15 @@ journal is reached), and considers only regular files whose modification time
 is more than seven days (`JOURNAL_RETENTION_MS`) old, oldest first. Whether
 such a journal ended is decided the way discovery decides it: the file is
 verified (first record hashes to the name, last record belongs to the same
-session) and its newest record must be `SessionEnd`. A journal that was
-killed without `SessionEnd`, that is empty beside an archive (a rotation that
-never completed), or that cannot be verified as this app's is never removed.
+session) and its newest record must be `SessionEnd`. A verified journal
+whose newest record is not `SessionEnd` (a closed terminal, a killed process,
+a crash) is removed only once it has not changed at all for thirty days
+(`JOURNAL_ABANDONED_RETENTION_MS`): every hook appends a record, so a session
+that is alive for a month leaves a trace, and a session that merely sat at a
+prompt that long is still kept while any cohort, cursor, or session refers
+to it. A journal that is empty beside an archive (a rotation that never
+completed) or that cannot be verified as this app's is never removed at any
+age.
 At most 64 journals are read per sweep (`MAX_SWEEP_PROBES`); the verdict for
 an unchanged file is remembered, so a backlog of live-looking old journals is
 read once and then skipped, while a file that could not be read at all (an
@@ -111,11 +117,6 @@ a symlink or non-file, or the whole sweep when the directory is not a real
 directory), and failed (I/O errors, or a retained set that could not be
 computed; retried on a later sweep, which is the next interval); no name,
 path, or error text leaves the module.
-
-Sessions that end without `SessionEnd` (a closed terminal, a killed process,
-a crash) are never collected by this contract and accumulate until the stat
-bound reports incomplete coverage; a second, longer retention for journals
-that have not changed at all is a follow-up, not part of this slice.
 
 ## Replay
 

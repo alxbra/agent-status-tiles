@@ -19,6 +19,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import {
   ClaudeJournalCollector,
+  JOURNAL_ABANDONED_RETENTION_MS,
   JOURNAL_RETENTION_MS,
   JOURNAL_SWEEP_INTERVAL_MS,
   MAX_SWEEP_PROBES,
@@ -137,6 +138,40 @@ describe('claude journal collector', () => {
       true,
     );
     expect(await exists(join(root, 'journals', 'claude', 'notes.txt'))).toBe(true);
+  });
+
+  it('removes a verified journal that never ended once it has been silent past the longer window', async () => {
+    const root = await appData();
+    const ABANDONED = JOURNAL_ABANDONED_RETENTION_MS;
+    await seed(root, 'abandoned', { ended: false, ageMs: ABANDONED + 1_000, archives: 2 });
+    await seed(root, 'at-boundary', { ended: false, ageMs: ABANDONED });
+    await seed(root, 'still-waiting', { ended: false, ageMs: ABANDONED - 1_000 });
+    await seed(root, 'in-cohort', { ended: false, ageMs: ABANDONED + 1_000 });
+    // Silent for a month but not this app's journal: the name does not hash its session.
+    const forged = join(root, 'journals', 'claude', `${'f'.repeat(64)}.jsonl`);
+    await writeFile(forged, record('forged', 'SessionStart'));
+    await utimes(forged, new Date(NOW - ABANDONED - 1_000), new Date(NOW - ABANDONED - 1_000));
+    // An empty active file beside an archive cannot be verified either.
+    await seed(root, 'rotating', {
+      ended: false,
+      ageMs: ABANDONED + 1_000,
+      archives: 1,
+      content: '',
+    });
+
+    const sweep = await collector(root, {
+      retained: () => new Set([baseName('in-cohort')]),
+    }).sweep();
+    expect(sweep).toEqual({ probed: 5, removed: 1, refused: 0, failed: 0 });
+    for (const suffix of ['', '.1', '.2']) {
+      expect(await exists(journalPath(root, 'abandoned', suffix))).toBe(false);
+    }
+    expect(await exists(journalPath(root, 'at-boundary'))).toBe(true);
+    expect(await exists(journalPath(root, 'still-waiting'))).toBe(true);
+    expect(await exists(journalPath(root, 'in-cohort'))).toBe(true);
+    expect(await exists(forged)).toBe(true);
+    expect(await exists(journalPath(root, 'rotating'))).toBe(true);
+    expect(await exists(journalPath(root, 'rotating', '.1'))).toBe(true);
   });
 
   it('treats the retention window as a strict age boundary', async () => {

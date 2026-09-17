@@ -15,6 +15,13 @@ import {
 
 /** An ended journal untouched for longer than this is removed with its archives. */
 export const JOURNAL_RETENTION_MS = 7 * 24 * 60 * 60 * 1_000;
+/**
+ * A verified journal that never received `SessionEnd` (a closed terminal, a
+ * killed process, a crash) and has not changed at all for this long is
+ * removed too; every hook appends, so a session alive for a month leaves a
+ * trace, and the cohort, cursor, and session guards still apply.
+ */
+export const JOURNAL_ABANDONED_RETENTION_MS = 30 * 24 * 60 * 60 * 1_000;
 /** Every discovery pass requests a sweep; one runs at most this often. */
 export const JOURNAL_SWEEP_INTERVAL_MS = 5 * 60 * 1_000;
 /** Journals whose head and tail are read per sweep to learn whether they ended. */
@@ -61,6 +68,7 @@ export interface ClaudeJournalCollectorOptions {
   retained: () => ReadonlySet<string>;
   now?: () => number;
   retentionMs?: number;
+  abandonedRetentionMs?: number;
   sweepIntervalMs?: number;
   /** Per-sweep bounds; tests lower them. */
   maxProbes?: number;
@@ -72,6 +80,8 @@ export interface ClaudeJournalCollectorOptions {
 interface Verdict {
   mtimeMs: number;
   size: number;
+  /** The file is one of this app's journals; nothing unverified is ever removed. */
+  verified: boolean;
   ended: boolean;
   /** Its set held a symlink or non-file; not tried again until the file changes. */
   refused?: boolean;
@@ -141,6 +151,7 @@ export class ClaudeJournalCollector {
   private readonly retained: () => ReadonlySet<string>;
   private readonly now: () => number;
   private readonly retentionMs: number;
+  private readonly abandonedRetentionMs: number;
   private readonly sweepIntervalMs: number;
   private readonly maxProbes: number;
   private readonly maxRemovals: number;
@@ -157,6 +168,7 @@ export class ClaudeJournalCollector {
     this.retained = options.retained;
     this.now = options.now ?? Date.now;
     this.retentionMs = options.retentionMs ?? JOURNAL_RETENTION_MS;
+    this.abandonedRetentionMs = options.abandonedRetentionMs ?? JOURNAL_ABANDONED_RETENTION_MS;
     this.sweepIntervalMs = options.sweepIntervalMs ?? JOURNAL_SWEEP_INTERVAL_MS;
     this.maxProbes = options.maxProbes ?? MAX_SWEEP_PROBES;
     this.maxRemovals = options.maxRemovals ?? MAX_SWEEP_REMOVALS;
@@ -176,7 +188,7 @@ export class ClaudeJournalCollector {
     }
     // A failed sweep waits for the next interval like a successful one.
     this.lastSweepAt = now;
-    this.inFlight = this.sweepOnce(now - this.retentionMs)
+    this.inFlight = this.sweepOnce(now)
       .catch((): ClaudeJournalSweep => ({ probed: 0, removed: 0, refused: 0, failed: 1 }))
       .finally(() => {
         this.inFlight = undefined;
@@ -184,8 +196,10 @@ export class ClaudeJournalCollector {
     return this.inFlight;
   }
 
-  private async sweepOnce(cutoffMs: number): Promise<ClaudeJournalSweep> {
+  private async sweepOnce(now: number): Promise<ClaudeJournalSweep> {
     const sweep: ClaudeJournalSweep = { probed: 0, removed: 0, refused: 0, failed: 0 };
+    const cutoffMs = now - this.retentionMs;
+    const abandonedCutoffMs = now - this.abandonedRetentionMs;
     let retained: ReadonlySet<string>;
     try {
       retained = this.retained();
@@ -235,6 +249,7 @@ export class ClaudeJournalCollector {
           verdict = {
             mtimeMs: candidate.mtimeMs,
             size: candidate.size,
+            verified: summary !== undefined,
             ended: summary?.ended === true,
           };
         } catch {
@@ -244,7 +259,11 @@ export class ClaudeJournalCollector {
         }
         this.verdicts.set(candidate.name, verdict);
       }
-      if (!verdict.ended || verdict.refused === true) continue;
+      // Ended and past retention, or verified, silent, and past the longer
+      // abandoned retention; a wake-up is caught by the checks at removal.
+      const collectable =
+        verdict.verified && (verdict.ended || candidate.mtimeMs < abandonedCutoffMs);
+      if (!collectable || verdict.refused === true) continue;
       if (attempts >= this.maxRemovals) break;
       attempts += 1;
       const outcome = await this.removeSet(candidate);
