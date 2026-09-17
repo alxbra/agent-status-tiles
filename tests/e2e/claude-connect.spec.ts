@@ -161,3 +161,57 @@ test('a connected Claude row reports missing hooks with one sentence and Repair 
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test('a managed settings file that blocks user hooks shows one sentence and the row resumes once it is lifted', async () => {
+  test.skip(process.platform !== 'darwin', 'native overlay targets macOS');
+  // The coordinator backs off to 15 s between readiness retries.
+  test.setTimeout(90_000);
+  const root = await mkdtemp(join(tmpdir(), 'agent-status-tiles-claude-managed-e2e-'));
+  const userDataDir = join(root, 'user-data');
+  const configDirectory = join(root, 'claude-config');
+  const helperPath = join(root, 'hook-helper');
+  let application: ElectronApplication | undefined;
+  try {
+    await mkdir(userDataDir);
+    await mkdir(configDirectory, { mode: 0o700 });
+    await writeFile(helperPath, '#!/bin/sh\nexit 0\n');
+    await chmod(helperPath, 0o755);
+    // The test runtime reads managed settings from this folder, never from
+    // the system directory, so a developer's own policy cannot affect the run.
+    const managedPath = join(configDirectory, 'managed', 'managed-settings.json');
+    await mkdir(join(configDirectory, 'managed'));
+    await writeFile(managedPath, '{ "allowManagedHooksOnly": true }\n');
+
+    application = await electron.launch({
+      args: [`--user-data-dir=${userDataDir}`, mainEntry],
+      cwd: projectRoot,
+      env: {
+        ...process.env,
+        NODE_ENV: 'test',
+        AGENT_STATUS_TILES_TEST_HOOK_HELPER: helperPath,
+        AGENT_STATUS_TILES_TEST_CLAUDE_CONFIG_DIR: configDirectory,
+      },
+    });
+    const settings = await settingsWindow(application);
+    const claude = settings.getByRole('group', { name: 'Claude Code connection' });
+    await claude.getByRole('button', { name: 'Connect' }).click();
+    await settings.getByRole('alertdialog').getByRole('button', { name: 'Connect' }).click();
+    await expect(claude).toContainText('Unavailable');
+    await expect(settings.getByRole('alert')).toHaveText(
+      "Your organization's managed Claude Code settings block this app's hooks. Ask an administrator to allow user hooks; the connection resumes on its own.",
+    );
+    // The hooks were installed; only the policy keeps Claude Code from running them.
+    const installed = JSON.parse(
+      await readFile(join(configDirectory, 'settings.json'), 'utf8'),
+    ) as { hooks: object };
+    expect(Object.keys(installed.hooks)).toHaveLength(12);
+
+    // Lifting the policy needs no action in Settings: the next retry passes.
+    await rm(managedPath);
+    await expect(claude).toContainText('Connected', { timeout: 30_000 });
+    await expect(settings.getByRole('alert')).toHaveCount(0);
+  } finally {
+    await application?.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});

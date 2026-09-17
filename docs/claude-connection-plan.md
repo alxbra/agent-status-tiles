@@ -15,10 +15,15 @@
 Still open after these merges: the live verification matrix in section 5
 (real Claude Desktop and terminal sessions, hook coexistence, restart, uninstall,
 no Node/Python dependence), journal garbage collection for ended sessions
-(`docs/claude-monitor.md`), `disableAllHooks` detection beyond the user-level
-settings file (section 3.4), navigation (section 3.7), and the deferred
-override. Development runs need `build/hook-helper/<arch>/hook-helper`, which
-requires a Rust toolchain; packaged builds carry it.
+(`docs/claude-monitor.md`), navigation (section 3.7), and the deferred
+override. The managed-settings follow-up from section 3.4 is implemented: the
+readiness check now reads the file-based managed source and reports
+`hooks-blocked` (a seventh `ClaudeIssue`) when `disableAllHooks`,
+`allowManagedHooksOnly`, or `strictPluginOnlyCustomization` keeps user hooks
+from running; project-level `disableAllHooks` stays undetectable by design
+(see "Hooks silenced by policy" in `docs/claude-monitor.md`). Development
+runs need `build/hook-helper/<arch>/hook-helper`, which requires a Rust
+toolchain; packaged builds carry it.
 
 Sections 1 to 5 below are the plan as approved on 2026-09-17, kept as approved
 apart from the inline notes that point back to this status; the status table
@@ -28,10 +33,10 @@ Two details changed in implementation: turns are keyed by the receipt time of
 the `UserPromptSubmit` record rather than by `prompt_id` (`prompt_id` is
 journaled but unused as the key, so every later record of a session attaches
 to its newest turn), with the completion ID derived from that turn key and the
-`Stop` receipt time, and the readiness issues are the six `ClaudeIssue` codes
-in `readiness.ts`
-(`helper-missing`, `helper-translocated`, `helper-unusable`, `hooks-missing`,
-`hooks-disabled`, `settings-unreadable`).
+`Stop` receipt time, and the readiness issues are the `ClaudeIssue` codes in
+`readiness.ts` (`helper-missing`, `helper-translocated`, `helper-unusable`,
+`hooks-missing`, `hooks-disabled`, `settings-unreadable`, and, since the
+managed-settings follow-up, `hooks-blocked`).
 
 Draft for review. Scope: finish MVP Epic 5 (Claude Code Desktop and CLI),
 return Settings to one row per provider that bundles its Desktop and CLI
@@ -224,6 +229,20 @@ reducer's current-turn rule. `Notification{idle_prompt}` is ignored for state.
   check does not read; a project-level switch therefore silences the hooks
   while the row reports healthy. Detecting it (or the hooks' silence) is a
   follow-up.
+
+  Status note: the managed part of that follow-up shipped after PR #40. The
+  three options weighed were (a) reading the managed settings location,
+  (b) a one-time note keyed on a `SessionStart` journal record from a project
+  whose hooks are disabled, and (c) a limitation note in Settings copy.
+  Option (a) is implemented for the file-based managed source, with an
+  existing MDM profile treated as unknown so the sentence is never a false
+  alarm under Claude Code's first-wins rule. Option (b) was rejected because
+  it cannot work: a project whose hooks are disabled fires no hook at all, so
+  no `SessionStart` record exists to attach a note to, and the app has no
+  project path to read the project file with. Option (c) was rejected
+  because Settings copy is limited to one actionable sentence per row and the
+  limitation is documented in `docs/claude-monitor.md` instead. Prolonged
+  silence stays uninterpreted, as section 3.3 requires.
 
 ### 3.5 One row per provider, both surfaces behind it
 
