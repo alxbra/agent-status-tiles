@@ -20,6 +20,7 @@ import {
   DOCK_HOVER_WIDTH,
   layoutTabs,
   MAX_VISIBLE_TABS,
+  DOCK_PADDING,
   normalizeStripWidth,
   reachWidthFor,
   resolveHover,
@@ -275,6 +276,7 @@ export function StatusTiles({
   /** Mirrors the hovered tab synchronously for pointer handlers that fire back to back. */
   const hoveredSessionIdRef = useRef<string | null>(null);
   const reachWidthRef = useRef(DOCK_HOVER_WIDTH);
+  const [reachWidth, setReachWidth] = useState(DOCK_HOVER_WIDTH);
   const [scrollOffset, setScrollOffset] = useState(0);
   const [focusedIndex, setFocusedIndex] = useState<number | null>(null);
   const handledKeyboardEntryRevisionRef = useRef(0);
@@ -352,7 +354,10 @@ export function StatusTiles({
         [...root.querySelectorAll<HTMLElement>(TAB_SELECTOR)].map((tab) => tab.offsetWidth),
         effectiveWidth,
       );
-      reachWidthRef.current = reachWidth;
+      if (reachWidthRef.current !== reachWidth) {
+        reachWidthRef.current = reachWidth;
+        setReachWidth(reachWidth);
+      }
       root.dataset.reachWidth = String(reachWidth);
       const regions =
         renderedRegions.length === layout.hitRegions.length ? renderedRegions : layout.hitRegions;
@@ -609,6 +614,19 @@ export function StatusTiles({
       onBlurCapture={handleBlur}
       onWheel={handleWheel}
     >
+      {/* DEBUG: visualizes the reach zone while a tab is extended; remove before merge. */}
+      {hoveredSessionId !== null ? (
+        <div
+          className="status-tiles__reach-zone"
+          style={{
+            left: `${Math.max(0, effectiveWidth - reachWidth)}px`,
+            top: `${Math.max(0, layout.top - DOCK_PADDING)}px`,
+            width: `${Math.min(effectiveWidth, reachWidth)}px`,
+            height: `${layout.bottom + DOCK_PADDING - Math.max(0, layout.top - DOCK_PADDING)}px`,
+          }}
+          aria-hidden="true"
+        />
+      ) : null}
       {layout.hasPrevious ? (
         <span
           className="status-tiles__indicator status-tiles__indicator--previous"

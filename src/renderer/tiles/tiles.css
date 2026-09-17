@@ -120,6 +120,16 @@
   opacity: 0;
 }
 
+/* DEBUG: reach-zone visualization; remove before merge. */
+.status-tiles__reach-zone {
+  position: absolute;
+  z-index: 0;
+  box-sizing: border-box;
+  border: 1px solid rgb(255 0 0 / 70%);
+  background: rgb(255 0 0 / 18%);
+  pointer-events: none;
+}
+
 .status-tiles__indicator {
   position: absolute;
   z-index: 2;
