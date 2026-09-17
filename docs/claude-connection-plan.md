@@ -20,13 +20,16 @@ settings file (section 3.4), navigation (section 3.7), and the deferred
 override. Development runs need `build/hook-helper/<arch>/hook-helper`, which
 requires a Rust toolchain; packaged builds carry it.
 
-Sections 1 to 5 below are the plan as approved on 2026-09-17, kept as written
-except where a later note says otherwise; the status table above,
-`docs/claude-monitor.md`, and `docs/hook-helper.md` are authoritative for what
-shipped. Two details changed in implementation: turns are keyed by the receipt
-time of the `UserPromptSubmit` record rather than by `prompt_id`, with the
-completion ID derived from that turn key and the `Stop` receipt time, and the
-readiness issues are the six `ClaudeIssue` codes in `readiness.ts`
+Sections 1 to 5 below are the plan as approved on 2026-09-17, kept as approved
+apart from the inline notes that point back to this status; the status table
+above, `docs/claude-monitor.md`, and `docs/hook-helper.md` are authoritative
+for what shipped, and the file names in the section 4 table are the plan's.
+Two details changed in implementation: turns are keyed by the receipt time of
+the `UserPromptSubmit` record rather than by `prompt_id` (`prompt_id` is
+journaled but unused as the key, so every later record of a session attaches
+to its newest turn), with the completion ID derived from that turn key and the
+`Stop` receipt time, and the readiness issues are the six `ClaudeIssue` codes
+in `readiness.ts`
 (`helper-missing`, `helper-translocated`, `helper-unusable`, `hooks-missing`,
 `hooks-disabled`, `settings-unreadable`).
 
