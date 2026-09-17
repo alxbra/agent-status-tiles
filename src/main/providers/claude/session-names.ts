@@ -2,7 +2,7 @@ import { open, readdir } from 'node:fs/promises';
 import { constants } from 'node:fs';
 import { join } from 'node:path';
 
-import { MAX_TITLE_BYTES } from '../../../shared/session';
+import { MAX_ID_BYTES, MAX_TITLE_BYTES } from '../../../shared/session';
 import { isSafeString } from '../hooks/hook-journal-reader';
 import { defaultClaudeConfigDirectory } from './hook-installer';
 
@@ -60,6 +60,7 @@ export class ClaudeSessionNames {
     const entries: CacheEntry[] = [];
     for (const name of names
       .filter((entry) => REGISTRY_FILE.test(entry))
+      .sort()
       .slice(0, MAX_REGISTRY_FILES)) {
       live.add(name);
       const entry = await this.read(name);
@@ -118,10 +119,11 @@ export class ClaudeSessionNames {
       const entry: CacheEntry = {
         mtimeMs: metadata.mtimeMs,
         size: metadata.size,
-        sessionId: isSafeString(record.sessionId, 256) ? record.sessionId : undefined,
+        sessionId: isSafeString(record.sessionId, MAX_ID_BYTES) ? record.sessionId : undefined,
         // Claude marks a placeholder it generated from the folder name as
-        // `derived`; only a name that came from the conversation or the user
-        // is a title worth showing over the project folder name.
+        // `nameSource: 'derived'`; a name it took from the conversation carries
+        // no `nameSource` at all, and a user-set one carries another value.
+        // Only those are titles worth showing over the project folder name.
         name:
           record.nameSource !== 'derived' && isSafeString(record.name, MAX_TITLE_BYTES)
             ? record.name

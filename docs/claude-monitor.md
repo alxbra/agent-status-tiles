@@ -1,10 +1,10 @@
 # Claude monitor contract
 
 `src/main/providers/claude/` turns the helper's private journals into the
-shared session model. It reads nothing under `~/.claude` except the
-per-process session registry described under Discovery (two fields, read
-only), never transcripts or the settings file, and no path leaves the
-module. One `ClaudeSurfaceMonitor` runs per surface (`claude:desktop`,
+shared session model. Discovery and replay read nothing under `~/.claude`
+except the per-process session registry described under Discovery (two
+fields, read only) and never transcripts; the readiness check described under
+Connecting reads the settings file separately. No path leaves the module. One `ClaudeSurfaceMonitor` runs per surface (`claude:desktop`,
 `claude:cli`) behind the shared `Claude Code` Settings row.
 
 ## Discovery
@@ -100,11 +100,12 @@ that started it and every later record of the session attaches to the newest
 turn; the persisted record's active turn and open requests seed the state at
 the start of each read. A session first seen mid-turn (hooks installed while
 it was already working, or a journal that begins after the prompt) has no
-start record, so any work, wait, or stop record with no open turn opens one
-at that moment; only records that prove work count (tool, permission,
-question, elicitation, stop, and prompt notifications), never idle or sign-in
-notifications, so a session that is idle when the hooks arrive shows nothing
-new until its next prompt.
+start record, so for a session with no turn seen at all, persisted or in this
+read, its first record that proves work opens a turn at that moment; only
+tool, permission, question, elicitation, stop, and prompt-notification records
+count, never idle or sign-in notifications, so a session that is idle when the
+hooks arrive shows nothing new until its next prompt. Once any turn has been
+seen, a stray record after a completion or failure is plain activity.
 
 | Journal record | Lifecycle event |
 | --- | --- |
@@ -115,6 +116,7 @@ new until its next prompt.
 | other `PreToolUse`, `PostToolUseFailure` | resolves everything open, then `activity` |
 | `Stop` with neither `stop_hook_active` nor `is_subagent` | `turn-completed` with a deterministic completion ID |
 | `Stop` from a subagent or while another stop hook continues the turn | `activity` |
+| `Stop` or `StopFailure` with no open turn after a completed or failed turn | `activity` / nothing |
 | `StopFailure` | `turn-failed` |
 | `SessionStart`, `SessionEnd`, other notifications | nothing (`SessionEnd` acts through discovery) |
 

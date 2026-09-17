@@ -101,6 +101,13 @@ export function normalizeClaudeEvents(
     }
     const current = state;
     const timestamp = event.timestamp;
+    const startTurn = (): void => {
+      current.turnId = `turn:${timestamp}`;
+      current.openRequests.clear();
+      current.issued = 0;
+      current.sawTurn = true;
+      output.push({ type: 'turn-started', sessionId, turnId: current.turnId, timestamp });
+    };
     const resolveAll = (): void => {
       if (current.turnId === undefined) return;
       for (const callId of current.openRequests) {
@@ -173,20 +180,12 @@ export function normalizeClaudeEvents(
     // a completion or failure is plain activity again. Idle and sign-in
     // notifications prove nothing and never open a turn.
     if (current.turnId === undefined && !current.sawTurn && provesTurnInProgress(event)) {
-      current.turnId = `turn:${timestamp}`;
-      current.openRequests.clear();
-      current.issued = 0;
-      current.sawTurn = true;
-      output.push({ type: 'turn-started', sessionId, turnId: current.turnId, timestamp });
+      startTurn();
     }
 
     switch (event.eventName) {
       case 'UserPromptSubmit': {
-        current.turnId = `turn:${timestamp}`;
-        current.openRequests.clear();
-        current.issued = 0;
-        current.sawTurn = true;
-        output.push({ type: 'turn-started', sessionId, turnId: current.turnId, timestamp });
+        startTurn();
         break;
       }
       case 'PreToolUse': {

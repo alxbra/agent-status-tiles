@@ -106,4 +106,53 @@ describe('claude session names', () => {
     const [first, second] = await Promise.all([names.lookup(), names.lookup()]);
     expect(first).toBe(second);
   });
+
+  it('keeps names Claude took from the conversation or the user and drops its folder placeholders', async () => {
+    const directory = await configDirectory();
+    const sessions = join(directory, 'sessions');
+    await writeFile(
+      join(sessions, '400.json'),
+      JSON.stringify({ sessionId: 'plain', name: 'From the conversation' }),
+    );
+    await writeFile(
+      join(sessions, '401.json'),
+      JSON.stringify({ sessionId: 'placeholder', name: 'repo-slug-ab', nameSource: 'derived' }),
+    );
+    await writeFile(
+      join(sessions, '402.json'),
+      JSON.stringify({ sessionId: 'renamed', name: 'Renamed by hand', nameSource: 'user' }),
+    );
+    await writeFile(
+      join(sessions, '403.json'),
+      JSON.stringify({ sessionId: 'odd', name: 'Odd source', nameSource: 7 }),
+    );
+    // A newer placeholder never hides an older conversation name for the same session.
+    await writeFile(
+      join(sessions, '404.json'),
+      JSON.stringify({ sessionId: 'resumed', name: 'Real title' }),
+    );
+    await utimes(
+      join(sessions, '404.json'),
+      new Date(1_700_000_000_000),
+      new Date(1_700_000_000_000),
+    );
+    await writeFile(
+      join(sessions, '405.json'),
+      JSON.stringify({ sessionId: 'resumed', name: 'repo-slug-cd', nameSource: 'derived' }),
+    );
+    await utimes(
+      join(sessions, '405.json'),
+      new Date(1_700_000_001_000),
+      new Date(1_700_000_001_000),
+    );
+
+    const names = await new ClaudeSessionNames({ configDirectory: directory }).lookup();
+    expect([...names.entries()].sort()).toEqual([
+      ['odd', 'Odd source'],
+      ['plain', 'From the conversation'],
+      ['renamed', 'Renamed by hand'],
+      ['resumed', 'Real title'],
+    ]);
+    expect(names.has('placeholder')).toBe(false);
+  });
 });

@@ -13,7 +13,7 @@ import './styles.css';
 import './overlay.css';
 
 const overlayApi = window.agentStatusTilesOverlay;
-const PORTAL_SELECTOR = '[data-slot="tooltip-content"], [data-slot="context-menu-content"]';
+const PORTAL_SELECTOR = '[data-slot="context-menu-content"]';
 
 function portalElements(): readonly HTMLElement[] {
   return [...document.querySelectorAll<HTMLElement>(PORTAL_SELECTOR)];
