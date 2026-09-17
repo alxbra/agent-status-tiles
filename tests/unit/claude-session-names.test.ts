@@ -1,4 +1,4 @@
-import { chmod, mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, rm, symlink, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -74,5 +74,36 @@ describe('claude session names', () => {
     } finally {
       await chmod(file, 0o600);
     }
+  });
+
+  it('skips oversized files and directories, prefers the newest file for a session, and keeps a name through a torn write', async () => {
+    const directory = await configDirectory();
+    const sessions = join(directory, 'sessions');
+    await writeFile(
+      join(sessions, '300.json'),
+      JSON.stringify({ sessionId: 'big', name: 'x'.repeat(70 * 1024) }),
+    );
+    await mkdir(join(sessions, '301.json'));
+    await writeFile(join(sessions, '302.json'), JSON.stringify({ sessionId: 'dup', name: 'old' }));
+    await utimes(
+      join(sessions, '302.json'),
+      new Date(1_700_000_000_000),
+      new Date(1_700_000_000_000),
+    );
+    await writeFile(join(sessions, '303.json'), JSON.stringify({ sessionId: 'dup', name: 'new' }));
+    await utimes(
+      join(sessions, '303.json'),
+      new Date(1_700_000_001_000),
+      new Date(1_700_000_001_000),
+    );
+    const names = new ClaudeSessionNames({ configDirectory: directory });
+    expect([...(await names.lookup()).entries()]).toEqual([['dup', 'new']]);
+
+    await writeFile(join(sessions, '303.json'), '{"sessionId":"dup","na');
+    expect((await names.lookup()).get('dup')).toBe('new');
+
+    // Overlapping lookups share one pass.
+    const [first, second] = await Promise.all([names.lookup(), names.lookup()]);
+    expect(first).toBe(second);
   });
 });

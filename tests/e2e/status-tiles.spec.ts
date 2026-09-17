@@ -521,7 +521,7 @@ test('waits for stock context-menu dismissal instead of dismissing on right-clic
     .toBe('codex:fixture-0');
 });
 
-test('shows a bounded tooltip only when the tab label had to truncate the title', async ({
+test('never shows a tooltip, even when the tab label had to truncate the title', async ({
   page,
 }) => {
   await openFixture(page, 1);
@@ -553,14 +553,10 @@ test('shows a bounded tooltip only when the tab label had to truncate the title'
   const longTab = page.getByRole('option', { name: `${maximumTitle}, OpenAI, working` });
   await expect(longTab.locator('.status-tiles__label')).toHaveCSS('max-width', '220px');
   await hoverTab(page, longTab);
-  const tooltip = page.locator('[data-slot="tooltip-content"]');
-  await expect(tooltip).toBeVisible();
-  const bounds = await tooltip.boundingBox();
-  if (bounds === null) throw new Error('Tooltip has no bounds');
-  expect(bounds.x).toBeGreaterThanOrEqual(0);
-  expect(bounds.x + bounds.width).toBeLessThanOrEqual(VIEWPORT.width);
-  expect(bounds.y).toBeGreaterThanOrEqual(0);
-  expect(bounds.y + bounds.height).toBeLessThanOrEqual(VIEWPORT.height);
+  await expect(longTab).toHaveAttribute('data-extended', 'true');
+  await page.waitForTimeout(600);
+  // The full title lives in the accessible name only; the label just truncates.
+  await expect(page.locator('[data-slot="tooltip-content"]')).toHaveCount(0);
   await expect(longTab).toHaveAccessibleName(`${maximumTitle}, OpenAI, working`);
 });
 

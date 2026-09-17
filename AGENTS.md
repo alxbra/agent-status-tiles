@@ -32,8 +32,8 @@ approved mockup lives in `docs/mockups/tab-dock.html`. In particular:
   reach zone is never a native hit region.
 - A tab contains, in order, one lab icon (OpenAI or Anthropic), the session
   title, and one lucide status icon. Nothing else: no legends, badges, or
-  decorative copy. Titles truncate at 220 px, and the stock tooltip appears
-  only for truncated titles.
+  decorative copy. Titles truncate at 220 px with an ellipsis and no tooltip;
+  the full title stays in the accessible name.
 - No frosted backdrop or native vibrancy window sits behind the tabs.
 - Settings use stock shadcn/ui components and standard styling. Keep one
   concise label per setting and omit redundant descriptions, cards, badges,

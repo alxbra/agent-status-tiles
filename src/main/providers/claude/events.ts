@@ -43,6 +43,37 @@ function seedState(record: SessionRecord | undefined): TurnState {
   };
 }
 
+const TURN_PROVING_NOTIFICATIONS = new Set([
+  'permission_prompt',
+  'elicitation_dialog',
+  'elicitation_complete',
+  'elicitation_response',
+]);
+
+/** Records that can only occur while a turn is in progress. */
+function provesTurnInProgress(event: HookJournalEvent): boolean {
+  switch (event.eventName) {
+    case 'PreToolUse':
+    case 'PostToolUse':
+    case 'PostToolUseFailure':
+    case 'PermissionRequest':
+    case 'Elicitation':
+    case 'ElicitationResult':
+    case 'Stop':
+    case 'StopFailure':
+      return true;
+    case 'Notification':
+      return (
+        event.notificationType !== undefined &&
+        TURN_PROVING_NOTIFICATIONS.has(event.notificationType)
+      );
+    case 'SessionStart':
+    case 'SessionEnd':
+    case 'UserPromptSubmit':
+      return false;
+  }
+}
+
 /**
  * Map hook journal records onto the shared lifecycle events.
  *
@@ -137,16 +168,11 @@ export function normalizeClaudeEvents(
 
     // A session observed mid-turn (hooks installed while it was already
     // working, or a journal that begins after the prompt) has no start
-    // record. Its first work, wait, or stop proves a turn is in progress, so
-    // one is opened at that moment. Once any turn has been seen, a stray
-    // record after a completion or failure is plain activity again.
-    if (
-      current.turnId === undefined &&
-      !current.sawTurn &&
-      event.eventName !== 'UserPromptSubmit' &&
-      event.eventName !== 'SessionStart' &&
-      event.eventName !== 'SessionEnd'
-    ) {
+    // record. Its first record that proves work, a wait, or a stop opens a
+    // turn at that moment. Once any turn has been seen, a stray record after
+    // a completion or failure is plain activity again. Idle and sign-in
+    // notifications prove nothing and never open a turn.
+    if (current.turnId === undefined && !current.sawTurn && provesTurnInProgress(event)) {
       current.turnId = `turn:${timestamp}`;
       current.openRequests.clear();
       current.issued = 0;

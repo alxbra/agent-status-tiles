@@ -1,8 +1,9 @@
 # Claude monitor contract
 
 `src/main/providers/claude/` turns the helper's private journals into the
-shared session model. It has no knowledge of Claude's own files: it never
-reads `~/.claude`, transcripts, or the settings file, and no path leaves the
+shared session model. It reads nothing under `~/.claude` except the
+per-process session registry described under Discovery (two fields, read
+only), never transcripts or the settings file, and no path leaves the
 module. One `ClaudeSurfaceMonitor` runs per surface (`claude:desktop`,
 `claude:cli`) behind the shared `Claude Code` Settings row.
 
@@ -49,14 +50,17 @@ state until it ages out of the window, because silence is never interpreted.
 Sources use the journal hash as their ID and cursor key, the journal's
 modification time as `updatedAt`, and the active file size as the baseline
 cutoff. The title is Claude's own session name when one is known, else the
-project folder name, else a short session ID. Claude Code keeps one small
-JSON file per running process under its configuration directory's `sessions`
-folder with the session ID and the name its Desktop sidebar shows;
-`ClaudeSessionNames` reads only those two fields, bounded and validated, as
-best-effort display enrichment. This registry is observed rather than
-documented behaviour, so a missing or unreadable file simply means the folder
-name is used. The companion never derives a title from content itself; the
-name shown is the one the harness chose, as with Codex thread names.
+project folder name (the repository name for a Claude worktree), else a short
+session ID. Claude Code keeps one small JSON file per running process under
+its configuration directory's `sessions` folder with the session ID and the
+name its Desktop sidebar shows, which Claude derives from the conversation or
+the user sets; a placeholder Claude generates from the folder name is marked
+`derived` and ignored. `ClaudeSessionNames` reads only those fields, bounded
+and validated, as best-effort display enrichment. This registry is observed
+rather than documented behaviour, so a missing or unreadable file simply
+means the folder name is used. The companion never derives a title from
+content itself; the conversation-derived name shown is the one the harness
+chose, as with Codex thread names, and the plan records that authorization.
 
 ## Replay
 
@@ -97,8 +101,10 @@ turn; the persisted record's active turn and open requests seed the state at
 the start of each read. A session first seen mid-turn (hooks installed while
 it was already working, or a journal that begins after the prompt) has no
 start record, so any work, wait, or stop record with no open turn opens one
-at that moment; a session that is idle when the hooks arrive stays hidden
-until its next prompt.
+at that moment; only records that prove work count (tool, permission,
+question, elicitation, stop, and prompt notifications), never idle or sign-in
+notifications, so a session that is idle when the hooks arrive shows nothing
+new until its next prompt.
 
 | Journal record | Lifecycle event |
 | --- | --- |
@@ -155,8 +161,8 @@ The helper is resolved on every check and install, so a helper built or moved
 after launch is noticed without a restart, and one settings-file read serves
 both surfaces when they start together. A test
 run supplies the helper path and configuration directory explicitly; without
-them the monitors run seeded journals with no readiness check and never touch
-a settings file. In development the helper must exist under
+them the monitors run seeded journals with no readiness check, no session
+name registry, and never touch a settings file. In development the helper must exist under
 `build/hook-helper/<arch>/`, which requires a Rust toolchain.
 
 ## Not in this slice

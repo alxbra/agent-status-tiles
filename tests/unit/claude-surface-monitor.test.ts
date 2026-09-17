@@ -2,7 +2,7 @@ import { appendFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
   ClaudeCliMonitor,
@@ -460,5 +460,18 @@ describe('claude surface monitor', () => {
       'Add journal garbage collection',
       'project',
     ]);
+  });
+
+  it('does not consult the session registry when the cohort is empty', async () => {
+    const lookup = vi.fn(async () => new Map<string, string>());
+    const monitor = new ClaudeCliMonitor({
+      appDataPath: '/unused',
+      discovery: { list: async () => [], truncated: false },
+      reader: { read: async () => ({ events: [], cursors: {}, diagnostics: [] }) },
+      sessionNames: { lookup },
+    });
+    monitor.start();
+    expect((await monitor.discover()).sources).toEqual([]);
+    expect(lookup).not.toHaveBeenCalled();
   });
 });

@@ -254,18 +254,30 @@ fn project_metadata(object: &serde_json::Map<String, Value>) -> (Option<String>,
         .filter(|path| Path::new(path).is_absolute())
         .map(|path| {
             let normalized = normalize_absolute_path(Path::new(&path));
-            let name = Path::new(&normalized)
-                .components()
-                .filter_map(|component| match component {
-                    Component::Normal(value) => value.to_str(),
-                    _ => None,
-                })
-                .next_back()
-                .and_then(|name| bounded_text(name, MAX_PROJECT_BYTES));
+            let name =
+                project_name(&normalized).and_then(|name| bounded_text(name, MAX_PROJECT_BYTES));
             (name, Some(sha256_id(&normalized)))
         })
         .unwrap_or((None, None));
     (cwd_name, project_id)
+}
+
+/// The display name for a working directory: its last component, except that
+/// a Claude worktree (`<repo>/.claude/worktrees/<slug>`) is named after the
+/// repository rather than the generated slug.
+fn project_name(normalized: &str) -> Option<&str> {
+    let components: Vec<&str> = Path::new(normalized)
+        .components()
+        .filter_map(|component| match component {
+            Component::Normal(value) => value.to_str(),
+            _ => None,
+        })
+        .collect();
+    match components.as_slice() {
+        [.., repo, ".claude", "worktrees", _slug] => Some(repo),
+        [.., last] => Some(last),
+        [] => None,
+    }
 }
 
 fn normalize_absolute_path(path: &Path) -> String {

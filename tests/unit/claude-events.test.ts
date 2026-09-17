@@ -354,4 +354,22 @@ describe('claude event normalization', () => {
       normalizeClaudeEvents([journal('PostToolUse')], settled.sessions).map((event) => event.type),
     ).toEqual(['activity']);
   });
+
+  it('never infers a turn from idle, sign-in, or untyped notifications', () => {
+    expect(
+      normalizeClaudeEvents(
+        [
+          journal('SessionStart'),
+          journal('Notification', { notificationType: 'idle_prompt' }),
+          journal('Notification', { notificationType: 'auth_success' }),
+          journal('Notification'),
+        ],
+        {},
+      ),
+    ).toEqual([]);
+    // A prompt notification does prove a turn: the session is waiting.
+    expect(
+      statusAfter([journal('Notification', { notificationType: 'permission_prompt' })]),
+    ).toEqual(['turn-started:working', 'input-requested:needs-input']);
+  });
 });

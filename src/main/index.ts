@@ -335,9 +335,9 @@ if (!hasSingleInstanceLock) {
     // Test runs point at an explicit configuration directory; a seeded-journal
     // test has none, so titles fall back to project names there.
     const claudeSessionNames =
-      claude === undefined && isTestRuntime()
+      claude === undefined
         ? undefined
-        : new ClaudeSessionNames({ configDirectory: claude?.configDirectory });
+        : new ClaudeSessionNames({ configDirectory: claude.configDirectory });
     const claudeDesktopMonitor = new ClaudeDesktopMonitor({
       appDataPath: app.getPath('userData'),
       discovery: claudeJournals,

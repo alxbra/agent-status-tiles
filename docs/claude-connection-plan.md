@@ -118,8 +118,12 @@ against the current hooks documentation:
   live verification proves a pre-install session stays silent.
 - `disableAllHooks: true` at any settings level silently disables our hooks.
 - The undocumented registry `~/.claude/sessions/<pid>.json` (pid, entrypoint,
-  cwd, status, name) exists but is not used: it is undocumented, only covers
-  live processes, and its `name` may be prompt-derived. Recorded as rejected.
+  cwd, status, name) was rejected in this draft. The first live Connect
+  showed folder names are not distinguishing for worktree sessions, so PR #43
+  reversed that: the registry's `name` (conversation-derived or user-set;
+  Claude's folder-based placeholders are ignored) is read as bounded display
+  enrichment, authorized by the product owner on 2026-09-17 and recorded in
+  `MVP_PLAN.md` §2.3.
 
 ## 3. Design decisions
 

@@ -21,21 +21,35 @@ interface CacheEntry {
 /**
  * Claude Code keeps one small JSON file per running process under its
  * configuration directory's `sessions` folder, carrying the session ID and
- * the name the Desktop sidebar shows. This is observed rather than documented
- * behaviour, so it is read as best-effort display enrichment only: bounded,
- * validated, and never required. Only the session ID and name are retained;
- * every other field, including the working directory, is ignored.
+ * the name the Desktop sidebar shows (a name Claude takes from the
+ * conversation or the user; a `derived` placeholder built from the folder
+ * name is ignored). This is observed rather than documented behaviour, so it
+ * is read as best-effort display enrichment only: bounded, validated, and
+ * never required. Only the session ID and name are retained; every other
+ * field, including the working directory, is ignored. The same folder also
+ * holds per-process key material under other names; the `<pid>.json` filter
+ * is what keeps those files from ever being opened.
  */
 export class ClaudeSessionNames {
   private readonly directory: string;
   private readonly cache = new Map<string, CacheEntry>();
+  private inFlight: Promise<ReadonlyMap<string, string>> | undefined;
 
   constructor(options: { configDirectory?: string } = {}) {
     this.directory = join(options.configDirectory ?? defaultClaudeConfigDirectory(), 'sessions');
   }
 
-  /** Session ID to Claude's own session name, for every readable registry file. */
-  async lookup(): Promise<ReadonlyMap<string, string>> {
+  /** Session ID to Claude's own session name; overlapping calls share one pass. */
+  lookup(): Promise<ReadonlyMap<string, string>> {
+    if (this.inFlight === undefined) {
+      this.inFlight = this.lookupOnce().finally(() => {
+        this.inFlight = undefined;
+      });
+    }
+    return this.inFlight;
+  }
+
+  private async lookupOnce(): Promise<ReadonlyMap<string, string>> {
     let names: string[];
     try {
       names = await readdir(this.directory);
@@ -43,17 +57,23 @@ export class ClaudeSessionNames {
       return new Map();
     }
     const live = new Set<string>();
-    const result = new Map<string, string>();
+    const entries: CacheEntry[] = [];
     for (const name of names
       .filter((entry) => REGISTRY_FILE.test(entry))
       .slice(0, MAX_REGISTRY_FILES)) {
       live.add(name);
       const entry = await this.read(name);
-      if (entry?.sessionId !== undefined && entry.name !== undefined) {
+      if (entry !== undefined) entries.push(entry);
+    }
+    for (const name of this.cache.keys()) if (!live.has(name)) this.cache.delete(name);
+    // A resumed session can leave a stale file for its old process beside the
+    // live one; the most recently written file wins.
+    const result = new Map<string, string>();
+    for (const entry of entries.sort((left, right) => left.mtimeMs - right.mtimeMs)) {
+      if (entry.sessionId !== undefined && entry.name !== undefined) {
         result.set(entry.sessionId, entry.name);
       }
     }
-    for (const name of this.cache.keys()) if (!live.has(name)) this.cache.delete(name);
     return result;
   }
 
@@ -84,6 +104,11 @@ export class ClaudeSessionNames {
       try {
         parsed = JSON.parse(buffer.toString('utf8', 0, bytesRead));
       } catch {
+        // Claude rewrites the file on status changes; a torn read keeps the
+        // last good name rather than flipping the title for one pass.
+        if (cached !== undefined) {
+          return { ...cached, mtimeMs: metadata.mtimeMs, size: metadata.size };
+        }
         parsed = undefined;
       }
       const record =
@@ -94,7 +119,13 @@ export class ClaudeSessionNames {
         mtimeMs: metadata.mtimeMs,
         size: metadata.size,
         sessionId: isSafeString(record.sessionId, 256) ? record.sessionId : undefined,
-        name: isSafeString(record.name, MAX_TITLE_BYTES) ? record.name : undefined,
+        // Claude marks a placeholder it generated from the folder name as
+        // `derived`; only a name that came from the conversation or the user
+        // is a title worth showing over the project folder name.
+        name:
+          record.nameSource !== 'derived' && isSafeString(record.name, MAX_TITLE_BYTES)
+            ? record.name
+            : undefined,
       };
       this.cache.set(name, entry);
       return entry;

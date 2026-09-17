@@ -134,14 +134,6 @@
   color: #f1f1ed;
 }
 
-.status-tiles__tooltip {
-  box-sizing: border-box;
-  max-width: calc(100vw - 1rem);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .status-tiles--reduced-motion .status-tiles__tile {
   transition: none;
 }
