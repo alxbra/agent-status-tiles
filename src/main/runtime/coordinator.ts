@@ -111,14 +111,23 @@ export interface RuntimeReadResult {
 }
 
 /**
- * Injection-friendly provider-neutral monitor boundary. A real Codex/Claude
- * adapter is deliberately outside PR2; tests and later adapters implement this
- * interface with sanitized observations.
+ * Injection-friendly provider-neutral monitor boundary. Adapters implement this
+ * interface with sanitized observations; tests inject fakes.
  */
 export interface ProviderSurfaceMonitor {
   readonly key: SurfaceKey;
   start(): void | Promise<void>;
   stop(): void | Promise<void>;
+  /**
+   * Report the newest eligible sessions for this surface, at most
+   * `RECENT_THREAD_DISCOVERY_WINDOW` of them, ordered by recency where the
+   * provider offers it. The result is the complete cohort: on a completed
+   * discovery the coordinator drops every persisted session the surface no
+   * longer reports, whatever its status, and a session reappears when the
+   * provider reports it again. Adapters must not enumerate beyond the window
+   * (for example archived or historical records) to explain an absence; they
+   * report what the dock can show and leave removal to the coordinator.
+   */
   discover(): Promise<RuntimeDiscoveryResult>;
   /** Optional fixed-EOF capture hook. If absent, discovery's sources are used. */
   capture?(

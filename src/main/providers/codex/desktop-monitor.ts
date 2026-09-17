@@ -1,7 +1,7 @@
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { makeSessionId, type SessionRecord, type Surface } from '../../../shared/session';
-import { MAX_RECENT_THREAD_LIMIT } from '../../../shared/settings';
+import { MAX_RECENT_THREAD_LIMIT, RECENT_THREAD_DISCOVERY_WINDOW } from '../../../shared/settings';
 import type {
   ProviderSurfaceMonitor,
   RuntimeDiscoveryResult,
@@ -55,13 +55,12 @@ interface DiscoveredFile {
   isArchived: boolean;
 }
 
-// Discovery reads one live `thread/list` page of the newest threads. The dock
-// can show at most MAX_RECENT_THREAD_LIMIT of them; the margin lets replaced
-// or newly archived threads be noticed and covers records that fail
-// qualification. The app-server rescans its session store on every call, so
-// one wider page is far cheaper than several narrow ones.
-const DISCOVERY_PAGE_MARGIN = 15;
-export const DISCOVERY_PAGE_SIZE = MAX_RECENT_THREAD_LIMIT + DISCOVERY_PAGE_MARGIN;
+// Discovery reads one live `thread/list` page of the shared discovery window.
+// The app-server rescans its session store on every call and its cost is per
+// call, not per record, so one page is far cheaper than several narrow ones; a
+// narrower server-side sourceKinds filter measured ~3x the per-call cost and is
+// deliberately not used. The page is dominated by discarded preview text, so
+// the catalog client's protocol-line bound sizes it, not the record count.
 const NONFATAL_COVERAGE_DIAGNOSTICS = new Set([
   'missing-call-id',
   'unsupported-item',
@@ -151,7 +150,10 @@ export class CodexSurfaceMonitor implements ProviderSurfaceMonitor {
     // A single live page, newest first, is the whole product surface. Threads
     // beyond it are older than anything the dock can show, so the page is
     // complete even when the app-server reports a continuation cursor.
-    const page = await this.catalog.listThreads({ pageSize: DISCOVERY_PAGE_SIZE, maxPages: 1 });
+    const page = await this.catalog.listThreads({
+      pageSize: RECENT_THREAD_DISCOVERY_WINDOW,
+      maxPages: 1,
+    });
     const records: readonly CodexCatalogRecord[] = page.records;
     let coverageIncomplete = page.coverageIncomplete === true;
     this.unavailableSourceIds.clear();

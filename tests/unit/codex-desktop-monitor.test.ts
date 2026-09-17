@@ -2,10 +2,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { appendFile, mkdir, mkdtemp, rename, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import {
-  CodexDesktopMonitor,
-  DISCOVERY_PAGE_SIZE,
-} from '../../src/main/providers/codex/desktop-monitor';
+import { CodexDesktopMonitor } from '../../src/main/providers/codex/desktop-monitor';
+import { RECENT_THREAD_DISCOVERY_WINDOW } from '../../src/shared/settings';
 import type {
   CodexCatalogRecord,
   CodexListThreadsResult,
@@ -369,7 +367,7 @@ describe('Codex Desktop monitor', () => {
       expect(discovery.complete).toBe(true);
       expect(discovery.coverageIncomplete).toBeUndefined();
       expect(discovery.sources).toMatchObject([{ nativeSessionId: record.nativeId }]);
-      expect(DISCOVERY_PAGE_SIZE).toBe(25);
+      expect(RECENT_THREAD_DISCOVERY_WINDOW).toBe(25);
       expect(catalog.listThreads).toHaveBeenCalledTimes(1);
       expect(catalog.listThreads).toHaveBeenCalledWith({ pageSize: 25, maxPages: 1 });
       const request = (catalog.listThreads.mock.calls[0] as unknown[])[0] as Record<

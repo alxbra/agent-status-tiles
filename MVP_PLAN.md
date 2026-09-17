@@ -295,7 +295,7 @@ A monitoring failure belongs to integration health. Do not mark every session as
 
 Adapt the existing project’s catalog client, incremental event reader, reducer, and navigation approach rather than introducing a second independent implementation.
 
-- Use local app-server queries for task metadata. Discovery reads one live `thread/list` page of the newest threads (`MAX_RECENT_THREAD_LIMIT` plus a margin, 25 records, sorted by `updated_at` descending) and treats that page as the complete cohort; it never lists archived threads and does not follow continuation cursors. The catalog is re-read every 2 s while the 250 ms file poll carries live status between listings.
+- Use local app-server queries for task metadata. Discovery reads one live `thread/list` page of the newest threads (`RECENT_THREAD_DISCOVERY_WINDOW`, the shared 25-record window every provider monitor reports, sorted by `updated_at` descending) and treats that page as the complete cohort; it never lists archived threads and does not follow continuation cursors. The catalog is re-read every 2 s while the 250 ms file poll carries live status between listings.
 - Use observed local task events for work performed in another Codex process.
 - Use explicitly installed and trusted hooks to improve approval detection.
 - Include Desktop and CLI top-level threads, including user-created forks; exclude archived, ephemeral, and spawned child threads. Archived threads are never requested, so a thread archived while visible leaves the live page and is dropped on the next discovery like any other unreported session. Use the catalog thread `id` as identity and validate rollout events against the separate session ID.
