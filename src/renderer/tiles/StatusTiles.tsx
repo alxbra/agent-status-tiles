@@ -285,6 +285,7 @@ export function StatusTiles({
   const reachWidthRef = useRef(DOCK_HOVER_WIDTH);
   /** Once the pointer has extended a tab, the reach zone stays engaged until the pointer leaves it. */
   const reachEngagedRef = useRef(false);
+  const [reachEngaged, setReachEngagedState] = useState(false);
   const pendingExitRef = useRef<number | null>(null);
   const [reachWidth, setReachWidth] = useState(DOCK_HOVER_WIDTH);
   const [scrollOffset, setScrollOffset] = useState(0);
@@ -412,7 +413,7 @@ export function StatusTiles({
           pointerInsideRef.current = true;
           beginInteractionFromRef();
         }
-        if (hovered !== null) reachEngagedRef.current = true;
+        if (hovered !== null) setReachEngaged(true);
         setDockActive(true);
         setHoveredSessionId(hovered);
       } else if (pointerInsideRef.current) {
@@ -500,6 +501,11 @@ export function StatusTiles({
     }, EXIT_GRACE_MS);
   }
 
+  function setReachEngaged(engaged: boolean): void {
+    reachEngagedRef.current = engaged;
+    setReachEngagedState(engaged);
+  }
+
   function setHoveredSessionId(sessionId: string | null): void {
     hoveredSessionIdRef.current = sessionId;
     setHoveredSessionIdState(sessionId);
@@ -513,7 +519,7 @@ export function StatusTiles({
   }
 
   function leavePointerFromRef(): void {
-    reachEngagedRef.current = false;
+    setReachEngaged(false);
     setDockActive(false);
     setHoveredSessionId(null);
     if (focusWithinRef.current) return;
@@ -537,7 +543,7 @@ export function StatusTiles({
    * overlay appears under a resting cursor, so enter/leave also drive hover. */
   function handleTabPointerEnter(session: SessionSnapshot): void {
     pointerInsideRef.current = true;
-    reachEngagedRef.current = true;
+    setReachEngaged(true);
     beginInteractionFromRef();
     setDockActive(true);
     setHoveredSessionId(session.id);
@@ -652,8 +658,8 @@ export function StatusTiles({
       onBlurCapture={handleBlur}
       onWheel={handleWheel}
     >
-      {/* DEBUG: visualizes the reach zone while a tab is extended; remove before merge. */}
-      {hoveredSessionId !== null ? (
+      {/* DEBUG: visualizes the reach zone while it is engaged; remove before merge. */}
+      {reachEngaged ? (
         <div
           className="status-tiles__reach-zone"
           style={{

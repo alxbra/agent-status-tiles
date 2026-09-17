@@ -257,13 +257,13 @@ test('keeps the dock open while moving between rows inside the reach zone', asyn
   await page.waitForTimeout(100);
   await expect(tabs.nth(1)).toHaveAttribute('data-extended', 'true');
 
-  // The padding rows above and below the stack keep the dock open with no
-  // tab extended, and coming back onto a row extends it again.
-  await page.mouse.move(VIEWPORT.width - 150, boxes[0]!.y - 40);
-  await expect(page.locator('.status-tiles__tile[data-extended="true"]')).toHaveCount(0);
+  // The margins above and below the stack belong to the edge tabs, so the
+  // stack never retracts while the pointer stays inside the zone.
+  await page.mouse.move(VIEWPORT.width - 150, boxes[0]!.y - 20);
+  await expect(tabs.nth(0)).toHaveAttribute('data-extended', 'true');
   await expect(page.locator('.status-tiles')).toHaveClass(/status-tiles--active/);
-  await page.mouse.move(VIEWPORT.width - 150, boxes[2]!.y + boxes[2]!.height + 40);
-  await expect(page.locator('.status-tiles__tile[data-extended="true"]')).toHaveCount(0);
+  await page.mouse.move(VIEWPORT.width - 150, boxes[2]!.y + boxes[2]!.height + 20);
+  await expect(tabs.nth(2)).toHaveAttribute('data-extended', 'true');
   await expect(page.locator('.status-tiles')).toHaveClass(/status-tiles--active/);
   await page.mouse.move(VIEWPORT.width - 150, rows[1]!);
   await expect(tabs.nth(1)).toHaveAttribute('data-extended', 'true');

@@ -25,9 +25,10 @@ approved mockup lives in `docs/mockups/tab-dock.html`. In particular:
   out. The slide is one transform transition of **140 ms** with an ease-out
   curve and an 8 ms per-tab stagger; the hovered tab never waits.
 - While a tab is extended, a reach zone as deep as the widest tab and
-  reaching 48 px above and below the stack keeps the dock open, and the
-  pointer's row selects the extended tab, so the pointer can travel up and
-  down between tabs. Clicks land on tab surfaces only; the
+  reaching 24 px above and below the stack keeps the dock open. The
+  pointer's row selects the extended tab, and the margins belong to the
+  edge tabs, so the pointer can travel up and down between tabs and one
+  tab is always extended until the zone is left. Clicks land on tab surfaces only; the
   reach zone is never a native hit region.
 - A tab contains, in order, one lab icon (OpenAI or Anthropic), the session
   title, and one lucide status icon. Nothing else: no legends, badges, or

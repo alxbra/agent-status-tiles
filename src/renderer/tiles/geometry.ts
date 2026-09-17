@@ -20,7 +20,7 @@ export const DOCK_HOVER_WIDTH = 48;
 /** Vertical breathing room around the stack; also hosts the overflow indicators. */
 export const DOCK_PADDING = 14;
 /** Vertical margin of the reach zone above and below the stack once a tab is extended. */
-export const REACH_PADDING = 48;
+export const REACH_PADDING = 24;
 export const MAX_VISIBLE_TABS = 12;
 export const TAB_MOTION_MS = 140;
 export const TAB_STAGGER_MS = 8;
@@ -216,9 +216,10 @@ export interface HoverResolution {
   /** The pointer is somewhere that keeps the dock revealed. */
   inside: boolean;
   /**
-   * Local slot index the pointer's row selects while a tab is extended; null
-   * in the padding rows. Always null before a tab is extended, when the caller
-   * decides by the tab element under the pointer instead.
+   * Local slot index the pointer's row selects while the reach zone is
+   * engaged; the margins above and below the stack belong to the edge tabs.
+   * Always null before a tab is extended, when the caller decides by the tab
+   * element under the pointer instead.
    */
   hoveredIndex: number | null;
 }
@@ -270,5 +271,9 @@ export function resolveHover(
     point.y >= layout.top - padding &&
     point.y <= layout.bottom + padding;
   if (!inside) return { inside: false, hoveredIndex: null };
-  return { inside: true, hoveredIndex: options.extended ? slotIndexAtY(layout, point.y) : null };
+  if (!options.extended) return { inside: true, hoveredIndex: null };
+  const rowIndex = slotIndexAtY(layout, point.y);
+  if (rowIndex !== null) return { inside: true, hoveredIndex: rowIndex };
+  // Inside the zone but off the rows: the nearest edge tab keeps the pointer.
+  return { inside: true, hoveredIndex: point.y < layout.top ? 0 : layout.slots.length - 1 };
 }

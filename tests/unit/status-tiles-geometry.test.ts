@@ -216,16 +216,17 @@ describe('tab dock geometry', () => {
     });
     expect(resolveHover(layout, { x: width - 290, y: rowY }, extended).inside).toBe(true);
     expect(resolveHover(layout, { x: width - 291, y: rowY }, extended).inside).toBe(false);
+    // The margins above and below the stack keep the edge tabs extended.
     expect(resolveHover(layout, { x: width - 150, y: layout.top - 8 }, extended)).toEqual({
       inside: true,
-      hoveredIndex: null,
+      hoveredIndex: 0,
     });
     expect(
       resolveHover(layout, { x: width - 150, y: layout.top - REACH_PADDING }, extended),
-    ).toEqual({ inside: true, hoveredIndex: null });
+    ).toEqual({ inside: true, hoveredIndex: 0 });
     expect(
       resolveHover(layout, { x: width - 150, y: layout.bottom + REACH_PADDING }, extended),
-    ).toEqual({ inside: true, hoveredIndex: null });
+    ).toEqual({ inside: true, hoveredIndex: 2 });
     expect(
       resolveHover(layout, { x: width - 150, y: layout.top - REACH_PADDING - 1 }, extended).inside,
     ).toBe(false);
