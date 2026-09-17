@@ -1,17 +1,39 @@
 import {
   chmod,
+  lstat,
   mkdir,
   mkdtemp,
+  readdir,
   readFile,
   realpath,
   rm,
+  stat,
   symlink,
   writeFile,
 } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+
+const openHook = vi.hoisted(() => ({
+  current: undefined as ((path: string) => Promise<void>) | undefined,
+}));
+
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs/promises')>();
+  return {
+    ...actual,
+    open: async (
+      path: Parameters<typeof actual.open>[0],
+      flags?: Parameters<typeof actual.open>[1],
+      mode?: Parameters<typeof actual.open>[2],
+    ) => {
+      if (openHook.current !== undefined) await openHook.current(String(path));
+      return actual.open(path, flags, mode);
+    },
+  };
+});
 
 import {
   CLAUDE_HOOK_EVENTS,
@@ -28,6 +50,7 @@ import {
 const roots: string[] = [];
 
 afterEach(async () => {
+  openHook.current = undefined;
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
 
@@ -182,6 +205,47 @@ describe('claude hook installer', () => {
     expect(await removeClaudeHooks({ configDirectory: directory })).toEqual({ changed: false });
   });
 
+  it('leaves a user-only file untouched even when hooks is not the last key', async () => {
+    const directory = await configDirectory();
+    const content = `{\n  "hooks": {\n    "Stop": [{ "hooks": [{ "type": "command", "command": "echo mine" }] }]\n  },\n  "theme": "light"\n}\n`;
+    await writeFile(claudeSettingsPath(directory), content);
+    expect(await removeClaudeHooks({ configDirectory: directory })).toEqual({ changed: false });
+    expect(await readFile(claudeSettingsPath(directory), 'utf8')).toBe(content);
+
+    // Install keeps `hooks` in its original position too.
+    await installClaudeHooks({ configDirectory: directory, ...command });
+    expect(Object.keys(await readSettings(directory))).toEqual(['hooks', 'theme']);
+  });
+
+  it('passes through groups it does not understand and consolidates duplicate owned entries', async () => {
+    const directory = await configDirectory();
+    const ownedEntry = {
+      type: 'command',
+      command: formatOwnedHookCommand(command),
+      timeout: 5,
+      async: true,
+    };
+    const odd = [
+      { hooks: 'not-an-array' },
+      'not-a-group',
+      { matcher: 'x', hooks: [ownedEntry, ownedEntry] },
+    ];
+    await writeFile(
+      claudeSettingsPath(directory),
+      JSON.stringify({ hooks: { Stop: odd, PreToolUse: [{ hooks: [ownedEntry, ownedEntry] }] } }),
+    );
+    expect(await inspectClaudeHooks({ configDirectory: directory, ...command })).toEqual({
+      status: 'stale',
+    });
+    await installClaudeHooks({ configDirectory: directory, ...command });
+    const hooks = (await readSettings(directory)).hooks as Record<string, unknown[]>;
+    expect(hooks.Stop).toEqual([{ hooks: 'not-an-array' }, 'not-a-group', { hooks: [ownedEntry] }]);
+    expect(hooks.PreToolUse).toEqual([{ hooks: [ownedEntry] }]);
+    expect(await inspectClaudeHooks({ configDirectory: directory, ...command })).toEqual({
+      status: 'installed',
+    });
+  });
+
   it('drops the hooks object entirely when nothing else remains', () => {
     const settings = {
       hooks: { Stop: [{ hooks: [{ type: 'command', command: formatOwnedHookCommand(command) }] }] },
@@ -192,13 +256,30 @@ describe('claude hook installer', () => {
   });
 
   it('reports disabled hooks and stale partial installs', () => {
-    const owned = { hooks: [{ type: 'command', command: formatOwnedHookCommand(command) }] };
+    const owned = {
+      hooks: [
+        { type: 'command', command: formatOwnedHookCommand(command), timeout: 5, async: true },
+      ],
+    };
     const complete = Object.fromEntries(CLAUDE_HOOK_EVENTS.map((event) => [event, [owned]]));
     expect(verifyClaudeHooks({ hooks: complete }, command)).toEqual({ status: 'installed' });
     expect(verifyClaudeHooks({ hooks: complete, disableAllHooks: true }, command)).toEqual({
       status: 'disabled',
     });
     expect(verifyClaudeHooks({ hooks: { Stop: [owned] } }, command)).toEqual({ status: 'stale' });
+    // A matcher would filter callbacks and a changed field changes behaviour.
+    const scoped = { matcher: 'Bash', hooks: owned.hooks };
+    expect(verifyClaudeHooks({ hooks: { ...complete, Stop: [scoped] } }, command)).toEqual({
+      status: 'stale',
+    });
+    const sync = { hooks: [{ ...owned.hooks[0], async: false }] };
+    expect(verifyClaudeHooks({ hooks: { ...complete, Stop: [sync] } }, command)).toEqual({
+      status: 'stale',
+    });
+    const extra = { hooks: [{ ...owned.hooks[0], statusMessage: 'x' }] };
+    expect(verifyClaudeHooks({ hooks: { ...complete, Stop: [extra] } }, command)).toEqual({
+      status: 'stale',
+    });
     expect(verifyClaudeHooks({ hooks: { ...complete, Stop: [owned, owned] } }, command)).toEqual({
       status: 'stale',
     });
@@ -207,6 +288,42 @@ describe('claude hook installer', () => {
       status: 'unreadable',
       code: 'hooks-unsupported',
     });
+  });
+
+  it('leaves a complete but disabled install untouched', async () => {
+    const directory = await configDirectory();
+    await installClaudeHooks({ configDirectory: directory, ...command });
+    const settings = await readSettings(directory);
+    await writeFile(
+      claudeSettingsPath(directory),
+      JSON.stringify({ ...settings, disableAllHooks: true }, null, 2),
+    );
+    const before = await readFile(claudeSettingsPath(directory), 'utf8');
+    expect(await inspectClaudeHooks({ configDirectory: directory, ...command })).toEqual({
+      status: 'disabled',
+    });
+    expect(await installClaudeHooks({ configDirectory: directory, ...command })).toEqual({
+      changed: false,
+    });
+    expect(await readFile(claudeSettingsPath(directory), 'utf8')).toBe(before);
+  });
+
+  it('never replaces a dangling settings symlink', async () => {
+    const directory = await configDirectory();
+    const missingTarget = join(directory, '..', 'dotfiles', 'gone.json');
+    await symlink(missingTarget, claudeSettingsPath(directory));
+    await expect(
+      installClaudeHooks({ configDirectory: directory, ...command }),
+    ).rejects.toMatchObject({ code: 'settings-unreadable' });
+    expect(await inspectClaudeHooks({ configDirectory: directory, ...command })).toEqual({
+      status: 'unreadable',
+      code: 'settings-unreadable',
+    });
+    await expect(removeClaudeHooks({ configDirectory: directory })).rejects.toMatchObject({
+      code: 'settings-unreadable',
+    });
+    expect((await lstat(claudeSettingsPath(directory))).isSymbolicLink()).toBe(true);
+    await expect(readFile(claudeSettingsPath(directory))).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
   it('writes through a symlinked settings file and keeps its mode', async () => {
@@ -224,8 +341,56 @@ describe('claude hook installer', () => {
     const written = JSON.parse(await readFile(target, 'utf8')) as Record<string, unknown>;
     expect(written.theme).toBe('dark');
     expect(Object.keys(written.hooks as object)).toHaveLength(CLAUDE_HOOK_EVENTS.length);
-    const { stat } = await import('node:fs/promises');
     expect((await stat(target)).mode & 0o777).toBe(0o640);
+    expect(await readdir(dotfiles)).toEqual(['claude-settings.json']);
+  });
+
+  it('keeps a permissive mode regardless of the umask and leaves no temp file behind', async () => {
+    const directory = await configDirectory();
+    await writeFile(claudeSettingsPath(directory), '{}\n');
+    await chmod(claudeSettingsPath(directory), 0o666);
+    await installClaudeHooks({ configDirectory: directory, ...command });
+    expect((await stat(claudeSettingsPath(directory))).mode & 0o777).toBe(0o666);
+    expect(await readdir(directory)).toEqual(['settings.json']);
+
+    // A write failure (read-only directory) must not leave a temporary file either.
+    await chmod(directory, 0o500);
+    try {
+      await expect(removeClaudeHooks({ configDirectory: directory })).rejects.toMatchObject({
+        code: 'settings-unwritable',
+      });
+    } finally {
+      await chmod(directory, 0o700);
+    }
+    expect(await readdir(directory)).toEqual(['settings.json']);
+  });
+
+  it('aborts without writing when the file changes between the read and the write', async () => {
+    const directory = await configDirectory();
+    const path = claudeSettingsPath(directory);
+    await writeFile(path, '{"theme":"dark"}\n');
+    // Claude Code writes the file while the plan is being computed: the
+    // temporary file is opened after the read, so change the target then.
+    openHook.current = async (opened) => {
+      if (opened.includes('.tmp')) {
+        openHook.current = undefined;
+        await writeFile(path, '{"theme":"light","permissions":{"allow":["Bash(ls)"]}}\n');
+      }
+    };
+    await expect(
+      installClaudeHooks({ configDirectory: directory, ...command }),
+    ).rejects.toMatchObject({ code: 'settings-changed' });
+    expect(JSON.parse(await readFile(path, 'utf8'))).toEqual({
+      theme: 'light',
+      permissions: { allow: ['Bash(ls)'] },
+    });
+    expect(await readdir(directory)).toEqual(['settings.json']);
+
+    // The next attempt sees the new content and installs on top of it.
+    await installClaudeHooks({ configDirectory: directory, ...command });
+    const settings = await readSettings(directory);
+    expect(settings.theme).toBe('light');
+    expect(settings.permissions).toEqual({ allow: ['Bash(ls)'] });
   });
 
   it('never rewrites a file it cannot parse or that is not a JSON object', async () => {

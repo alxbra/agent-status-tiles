@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { lstat, mkdir, open, readFile, realpath, rename, stat, unlink } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { dirname, isAbsolute, join } from 'node:path';
+import { basename, dirname, isAbsolute, join } from 'node:path';
 
 /** Every lifecycle event the helper accepts; see `docs/hook-helper.md`. */
 export const CLAUDE_HOOK_EVENTS = [
@@ -27,13 +27,13 @@ const MAX_SETTINGS_BYTES = 1024 * 1024;
 const HELPER_BASENAME = 'hook-helper';
 
 export type ClaudeHookVerification =
-  /** Every event carries exactly one owned hook pointing at the current helper. */
+  /** Every event carries exactly one owned hook with the exact current shape. */
   | { status: 'installed' }
   /** No owned hooks at all, including a missing settings file. */
   | { status: 'missing' }
-  /** Owned hooks exist but some are absent or point at another helper or data directory. */
+  /** Owned hooks exist but some are absent, duplicated, matcher-scoped, or differ from the current shape. */
   | { status: 'stale' }
-  /** Owned hooks exist but `disableAllHooks` silences them. */
+  /** Owned hooks are complete but `disableAllHooks` silences them. */
   | { status: 'disabled' }
   | { status: 'unreadable'; code: ClaudeHookSettingsCode };
 
@@ -42,7 +42,10 @@ export type ClaudeHookSettingsCode =
   | 'settings-not-json'
   | 'settings-not-object'
   | 'settings-oversized'
-  | 'hooks-unsupported';
+  | 'hooks-unsupported'
+  /** The file changed between the read and the write; nothing was written. */
+  | 'settings-changed'
+  | 'settings-unwritable';
 
 export class ClaudeHookSettingsError extends Error {
   readonly code: ClaudeHookSettingsCode;
@@ -64,7 +67,7 @@ export interface ClaudeHookInstallerOptions {
 }
 
 export interface ClaudeHookChange {
-  /** False when the file already held exactly the intended entries. */
+  /** False when the file already held exactly the intended content. */
   changed: boolean;
 }
 
@@ -74,6 +77,21 @@ interface OwnedHookCommand {
 }
 
 type JsonObject = Record<string, unknown>;
+
+/** Identity of the file version a plan was computed from. */
+interface SettingsSnapshot {
+  target: string;
+  ino: bigint;
+  size: bigint;
+  mtimeNs: bigint;
+  mode: number;
+}
+
+interface SettingsRead {
+  settings: JsonObject;
+  /** Undefined when no file exists at the path. */
+  snapshot: SettingsSnapshot | undefined;
+}
 
 export function defaultClaudeConfigDirectory(): string {
   return join(homedir(), '.claude');
@@ -111,7 +129,7 @@ export function parseOwnedHookCommand(command: unknown): OwnedHookCommand | unde
   const helperPath = unquote(match[1] ?? '');
   const dataDirectory = unquote(match[2] ?? '');
   if (!isAbsolute(helperPath) || !isAbsolute(dataDirectory)) return undefined;
-  if (helperPath.split('/').at(-1) !== HELPER_BASENAME) return undefined;
+  if (basename(helperPath) !== HELPER_BASENAME) return undefined;
   return { helperPath, dataDirectory };
 }
 
@@ -132,8 +150,14 @@ function isOwnedHook(hook: unknown): boolean {
   return isRecord(hook) && parseOwnedHookCommand(hook.command) !== undefined;
 }
 
-function ownedCommandOf(hook: unknown): OwnedHookCommand | undefined {
-  return isRecord(hook) ? parseOwnedHookCommand(hook.command) : undefined;
+/** True only for the exact entry `ownedHookEntry` writes: same keys, same values. */
+function isCurrentOwnedEntry(hook: unknown, expected: JsonObject): boolean {
+  if (!isRecord(hook)) return false;
+  const keys = Object.keys(hook);
+  return (
+    keys.length === Object.keys(expected).length &&
+    keys.every((key) => Object.hasOwn(expected, key) && hook[key] === expected[key])
+  );
 }
 
 /** A matcher group is `{ matcher?, hooks: [...] }`; anything else is left untouched. */
@@ -141,14 +165,14 @@ function isMatcherGroup(group: unknown): group is JsonObject & { hooks: unknown[
   return isRecord(group) && Array.isArray(group.hooks);
 }
 
-function readHooksSection(settings: JsonObject): JsonObject {
+function readHooksSection(settings: JsonObject): Record<string, unknown[]> {
   const hooks = settings.hooks;
   if (hooks === undefined) return {};
   if (!isRecord(hooks)) throw new ClaudeHookSettingsError('hooks-unsupported');
   for (const groups of Object.values(hooks)) {
     if (!Array.isArray(groups)) throw new ClaudeHookSettingsError('hooks-unsupported');
   }
-  return hooks;
+  return hooks as Record<string, unknown[]>;
 }
 
 /** Drop owned hooks from one event's matcher groups, removing groups that become empty. */
@@ -169,6 +193,22 @@ function withoutOwnedHooks(groups: readonly unknown[]): unknown[] {
   return result;
 }
 
+/** Replace the `hooks` key in place (or drop it) without moving any other key. */
+function withHooksSection(settings: JsonObject, hooks: JsonObject | undefined): JsonObject {
+  const next: JsonObject = {};
+  let placed = false;
+  for (const [key, value] of Object.entries(settings)) {
+    if (key !== 'hooks') {
+      next[key] = value;
+    } else if (hooks !== undefined) {
+      next.hooks = hooks;
+      placed = true;
+    }
+  }
+  if (hooks !== undefined && !placed) next.hooks = hooks;
+  return next;
+}
+
 /**
  * Return the settings object with exactly one owned entry per event, keeping
  * every unrelated key, event, matcher group, and hook in place and in order.
@@ -177,10 +217,10 @@ export function planClaudeHookInstall(settings: JsonObject, command: OwnedHookCo
   const hooks = readHooksSection(settings);
   const nextHooks: JsonObject = { ...hooks };
   for (const event of CLAUDE_HOOK_EVENTS) {
-    const groups = Array.isArray(hooks[event]) ? (hooks[event] as unknown[]) : [];
+    const groups = hooks[event] ?? [];
     nextHooks[event] = [...withoutOwnedHooks(groups), { hooks: [ownedHookEntry(command)] }];
   }
-  return { ...settings, hooks: nextHooks };
+  return withHooksSection(settings, nextHooks);
 }
 
 /** Return the settings object with every owned entry removed and empty containers dropped. */
@@ -188,61 +228,103 @@ export function planClaudeHookRemoval(settings: JsonObject): JsonObject {
   const hooks = readHooksSection(settings);
   const nextHooks: JsonObject = {};
   for (const [event, groups] of Object.entries(hooks)) {
-    const remaining = withoutOwnedHooks(groups as unknown[]);
+    const remaining = withoutOwnedHooks(groups);
     if (remaining.length > 0) nextHooks[event] = remaining;
   }
-  const rest: JsonObject = {};
-  for (const [key, value] of Object.entries(settings)) {
-    if (key !== 'hooks') rest[key] = value;
-  }
-  return Object.keys(nextHooks).length === 0 ? rest : { ...rest, hooks: nextHooks };
+  return withHooksSection(settings, Object.keys(nextHooks).length === 0 ? undefined : nextHooks);
 }
 
-/** Compare the file's owned entries against the intended command without writing. */
+/** Compare the file's owned entries against the intended entry without writing. */
 export function verifyClaudeHooks(
   settings: JsonObject,
   command: OwnedHookCommand,
 ): ClaudeHookVerification {
-  let hooks: JsonObject;
+  let hooks: Record<string, unknown[]>;
   try {
     hooks = readHooksSection(settings);
   } catch (error) {
     if (error instanceof ClaudeHookSettingsError) return { status: 'unreadable', code: error.code };
     throw error;
   }
-  const expected = formatOwnedHookCommand(command);
+  const expected = ownedHookEntry(command);
   let ownedCount = 0;
-  let currentCount = 0;
+  let currentEvents = 0;
   for (const event of CLAUDE_HOOK_EVENTS) {
-    const groups = Array.isArray(hooks[event]) ? (hooks[event] as unknown[]) : [];
-    const owned = groups
-      .filter(isMatcherGroup)
-      .flatMap((group) => group.hooks.map(ownedCommandOf))
-      .filter((value): value is OwnedHookCommand => value !== undefined);
-    ownedCount += owned.length;
-    if (owned.length === 1 && formatOwnedHookCommand(owned[0]!) === expected) currentCount += 1;
+    let ownedInEvent = 0;
+    let currentInEvent = 0;
+    for (const group of (hooks[event] ?? []).filter(isMatcherGroup)) {
+      for (const hook of group.hooks) {
+        if (!isOwnedHook(hook)) continue;
+        ownedInEvent += 1;
+        // A matcher would filter callbacks and any other field (a sync hook,
+        // a different timeout) changes behaviour, so only the exact written
+        // shape in a matcher-less group counts as current.
+        if (!Object.hasOwn(group, 'matcher') && isCurrentOwnedEntry(hook, expected)) {
+          currentInEvent += 1;
+        }
+      }
+    }
+    ownedCount += ownedInEvent;
+    if (ownedInEvent === 1 && currentInEvent === 1) currentEvents += 1;
   }
   if (ownedCount === 0) return { status: 'missing' };
-  if (currentCount !== CLAUDE_HOOK_EVENTS.length || ownedCount !== CLAUDE_HOOK_EVENTS.length) {
+  if (currentEvents !== CLAUDE_HOOK_EVENTS.length || ownedCount !== CLAUDE_HOOK_EVENTS.length) {
     return { status: 'stale' };
   }
   if (settings.disableAllHooks === true) return { status: 'disabled' };
   return { status: 'installed' };
 }
 
-async function readSettingsFile(path: string): Promise<{ settings: JsonObject; exists: boolean }> {
-  let raw: string;
+function errorCode(error: unknown): unknown {
+  return (error as { code?: unknown }).code;
+}
+
+/**
+ * Resolve the file behind the settings path. A symlink (dotfile setups) is
+ * followed so writes go through it; a dangling link or a non-file is the
+ * user's to repair and is reported as unreadable, never replaced.
+ */
+async function resolveSettingsTarget(path: string): Promise<SettingsSnapshot | undefined> {
+  let link: Awaited<ReturnType<typeof lstat>>;
   try {
-    const metadata = await stat(path);
-    if (!metadata.isFile()) throw new ClaudeHookSettingsError('settings-unreadable');
-    if (metadata.size > MAX_SETTINGS_BYTES) throw new ClaudeHookSettingsError('settings-oversized');
-    raw = await readFile(path, 'utf8');
+    link = await lstat(path);
   } catch (error) {
-    if (error instanceof ClaudeHookSettingsError) throw error;
-    if ((error as { code?: unknown }).code === 'ENOENT') return { settings: {}, exists: false };
+    if (errorCode(error) === 'ENOENT') return undefined;
     throw new ClaudeHookSettingsError('settings-unreadable');
   }
-  if (raw.trim().length === 0) return { settings: {}, exists: true };
+  try {
+    const target = link.isSymbolicLink() ? await realpath(path) : path;
+    const metadata = await stat(target, { bigint: true });
+    if (!metadata.isFile()) throw new ClaudeHookSettingsError('settings-unreadable');
+    return {
+      target,
+      ino: metadata.ino,
+      size: metadata.size,
+      mtimeNs: metadata.mtimeNs,
+      mode: Number(metadata.mode & 0o777n),
+    };
+  } catch (error) {
+    if (error instanceof ClaudeHookSettingsError) throw error;
+    throw new ClaudeHookSettingsError('settings-unreadable');
+  }
+}
+
+async function readSettingsFile(path: string): Promise<SettingsRead> {
+  const snapshot = await resolveSettingsTarget(path);
+  if (snapshot === undefined) return { settings: {}, snapshot };
+  if (snapshot.size > BigInt(MAX_SETTINGS_BYTES)) {
+    throw new ClaudeHookSettingsError('settings-oversized');
+  }
+  let raw: string;
+  try {
+    raw = await readFile(snapshot.target, 'utf8');
+  } catch {
+    throw new ClaudeHookSettingsError('settings-unreadable');
+  }
+  if (Buffer.byteLength(raw) > MAX_SETTINGS_BYTES) {
+    throw new ClaudeHookSettingsError('settings-oversized');
+  }
+  if (raw.trim().length === 0) return { settings: {}, snapshot };
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
@@ -250,41 +332,50 @@ async function readSettingsFile(path: string): Promise<{ settings: JsonObject; e
     throw new ClaudeHookSettingsError('settings-not-json');
   }
   if (!isRecord(parsed)) throw new ClaudeHookSettingsError('settings-not-object');
-  return { settings: parsed, exists: true };
+  return { settings: parsed, snapshot };
 }
 
 /**
- * Write through a symlinked settings file (dotfile setups) rather than
- * replacing the link, and land the new content with a rename so a crash never
- * leaves a truncated file behind.
+ * Land the new content through a temporary file and rename, so a crash never
+ * leaves a truncated file. Claude Desktop and the CLI write this file too, so
+ * the version the plan was computed from is re-checked right before the
+ * rename and a changed file aborts the write without touching it.
  */
-async function writeSettingsFile(path: string, settings: JsonObject): Promise<void> {
-  let target = path;
-  let mode = 0o600;
-  try {
-    const link = await lstat(path);
-    if (link.isSymbolicLink()) target = await realpath(path);
-    mode = (await stat(target)).mode & 0o777;
-  } catch (error) {
-    if ((error as { code?: unknown }).code !== 'ENOENT') {
-      throw new ClaudeHookSettingsError('settings-unreadable');
-    }
-    await mkdir(dirname(target), { mode: 0o700, recursive: true });
-  }
+async function writeSettingsFile(
+  path: string,
+  settings: JsonObject,
+  expected: SettingsSnapshot | undefined,
+): Promise<void> {
+  const target = expected?.target ?? path;
+  const mode = expected?.mode ?? 0o600;
   const payload = `${JSON.stringify(settings, null, 2)}\n`;
   const temporaryPath = join(dirname(target), `.settings.json.${process.pid}.${randomUUID()}.tmp`);
-  const handle = await open(temporaryPath, 'wx', mode);
   try {
-    await handle.writeFile(payload, 'utf8');
-    await handle.sync();
-  } finally {
-    await handle.close();
-  }
-  try {
+    if (expected === undefined) await mkdir(dirname(target), { mode: 0o700, recursive: true });
+    const handle = await open(temporaryPath, 'wx', mode);
+    try {
+      // fchmod ignores the umask, so the file keeps exactly the mode it had.
+      await handle.chmod(mode);
+      await handle.writeFile(payload, 'utf8');
+      await handle.sync();
+    } finally {
+      await handle.close();
+    }
+    const current = await resolveSettingsTarget(path);
+    const unchanged =
+      expected === undefined
+        ? current === undefined
+        : current !== undefined &&
+          current.target === expected.target &&
+          current.ino === expected.ino &&
+          current.size === expected.size &&
+          current.mtimeNs === expected.mtimeNs;
+    if (!unchanged) throw new ClaudeHookSettingsError('settings-changed');
     await rename(temporaryPath, target);
   } catch (error) {
     await unlink(temporaryPath).catch(() => undefined);
-    throw error;
+    if (error instanceof ClaudeHookSettingsError) throw error;
+    throw new ClaudeHookSettingsError('settings-unwritable');
   }
 }
 
@@ -295,15 +386,24 @@ function commandFor(options: ClaudeHookInstallerOptions): OwnedHookCommand {
   return { helperPath: options.helperPath, dataDirectory: options.dataDirectory };
 }
 
-/** Install or refresh the owned hooks; a file that already matches is left untouched. */
+function isSameContent(a: JsonObject, b: JsonObject): boolean {
+  return JSON.stringify(a) === JSON.stringify(b);
+}
+
+/**
+ * Install or refresh the owned hooks. The planned file is compared with the
+ * current one, so a complete install is never rewritten, including one the
+ * user has silenced with `disableAllHooks`.
+ */
 export async function installClaudeHooks(
   options: ClaudeHookInstallerOptions,
 ): Promise<ClaudeHookChange> {
   const command = commandFor(options);
   const path = claudeSettingsPath(options.configDirectory);
-  const { settings } = await readSettingsFile(path);
-  if (verifyClaudeHooks(settings, command).status === 'installed') return { changed: false };
-  await writeSettingsFile(path, planClaudeHookInstall(settings, command));
+  const { settings, snapshot } = await readSettingsFile(path);
+  const next = planClaudeHookInstall(settings, command);
+  if (snapshot !== undefined && isSameContent(next, settings)) return { changed: false };
+  await writeSettingsFile(path, next, snapshot);
   return { changed: true };
 }
 
@@ -312,11 +412,11 @@ export async function removeClaudeHooks(
   options: Pick<ClaudeHookInstallerOptions, 'configDirectory'>,
 ): Promise<ClaudeHookChange> {
   const path = claudeSettingsPath(options.configDirectory);
-  const { settings, exists } = await readSettingsFile(path);
-  if (!exists) return { changed: false };
+  const { settings, snapshot } = await readSettingsFile(path);
+  if (snapshot === undefined) return { changed: false };
   const next = planClaudeHookRemoval(settings);
-  if (JSON.stringify(next) === JSON.stringify(settings)) return { changed: false };
-  await writeSettingsFile(path, next);
+  if (isSameContent(next, settings)) return { changed: false };
+  await writeSettingsFile(path, next, snapshot);
   return { changed: true };
 }
 

@@ -10,6 +10,8 @@ export type HookHelperPathCode =
   | 'helper-missing'
   | 'helper-not-regular'
   | 'helper-not-executable'
+  /** An unsigned app launched from Downloads runs from a throwaway translocated path. */
+  | 'helper-translocated'
   | 'resolver-failed';
 
 export type HookHelperPathResolution =
@@ -41,12 +43,18 @@ export function resolveHookHelperPath(options: HookHelperPathOptions): HookHelpe
     : join(options.appRoot, 'build', 'hook-helper');
   const path = join(root, options.arch, 'hook-helper');
   if (!isAbsolute(path)) return { ok: false, code: 'resolver-failed' };
+  // macOS App Translocation mounts a quarantined app at a random private
+  // path that changes on the next launch; persisting it would install hooks
+  // that break silently. The user moves the app out of quarantine first.
+  if (path.includes('/AppTranslocation/')) return { ok: false, code: 'helper-translocated' };
   let metadata: ReturnType<NonNullable<HookHelperPathOptions['lstat']>>;
   try {
     metadata = (options.lstat ?? lstatSync)(path);
   } catch (error) {
     const code = (error as { code?: unknown }).code;
-    return { ok: false, code: code === 'ENOENT' ? 'helper-missing' : 'resolver-failed' };
+    // A stray file where a directory belongs is as actionable as a missing helper.
+    const missing = code === 'ENOENT' || code === 'ENOTDIR';
+    return { ok: false, code: missing ? 'helper-missing' : 'resolver-failed' };
   }
   if (metadata.isSymbolicLink() || !metadata.isFile()) {
     return { ok: false, code: 'helper-not-regular' };
