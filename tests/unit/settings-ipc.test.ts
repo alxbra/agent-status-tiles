@@ -20,9 +20,8 @@ import { IPC_CHANNELS, type SettingsState } from '../../src/shared/ipc';
 function settingsState(): SettingsState {
   return {
     providers: {
-      codexDesktop: { status: 'disconnected', canConnect: true, canDisconnect: false },
-      codexCli: { status: 'unavailable', canConnect: false, canDisconnect: false },
-      claudeCode: { status: 'unavailable', canConnect: false, canDisconnect: false },
+      codex: { status: 'disconnected', canConnect: true, canDisconnect: false },
+      claude: { status: 'unavailable', canConnect: false, canDisconnect: false },
     },
     displays: [
       { id: 'primary', label: 'Primary' },
@@ -139,7 +138,7 @@ describe('settings IPC', () => {
     await expect(
       Promise.resolve().then(() =>
         electronMocks.handlers.get(IPC_CHANNELS.settingsSurfaceConnect)!(validEvent, {
-          connection: 'codexDesktop',
+          connection: 'codex',
           path: '/private',
         }),
       ),
@@ -147,7 +146,7 @@ describe('settings IPC', () => {
     await expect(
       Promise.resolve().then(() =>
         electronMocks.handlers.get(IPC_CHANNELS.settingsSurfaceDisconnect)!(validEvent, {
-          connection: 'codexDesktop',
+          connection: 'codex',
           confirmed: false,
         }),
       ),
@@ -155,20 +154,20 @@ describe('settings IPC', () => {
     await expect(
       Promise.resolve().then(() =>
         electronMocks.handlers.get(IPC_CHANNELS.settingsSurfaceConnect)!(validEvent, {
-          connection: 'codexDesktop',
+          connection: 'codex',
         }),
       ),
     ).resolves.toEqual(settingsState());
     await expect(
       Promise.resolve().then(() =>
         electronMocks.handlers.get(IPC_CHANNELS.settingsSurfaceDisconnect)!(validEvent, {
-          connection: 'codexDesktop',
+          connection: 'codex',
           confirmed: true,
         }),
       ),
     ).resolves.toEqual(settingsState());
-    expect(options.connectSurface).toHaveBeenCalledWith('codexDesktop');
-    expect(options.disconnectSurface).toHaveBeenCalledWith('codexDesktop');
+    expect(options.connectSurface).toHaveBeenCalledWith('codex');
+    expect(options.disconnectSurface).toHaveBeenCalledWith('codex');
 
     cleanup();
     cleanup();

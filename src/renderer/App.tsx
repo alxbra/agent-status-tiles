@@ -29,9 +29,8 @@ const unavailableProvider: SettingsProviderState = {
 
 const INITIAL_SETTINGS: SettingsState = {
   providers: {
-    codexDesktop: unavailableProvider,
-    codexCli: unavailableProvider,
-    claudeCode: unavailableProvider,
+    codex: unavailableProvider,
+    claude: unavailableProvider,
   },
   displays: [{ id: PRIMARY_DISPLAY_ID, label: 'Primary' }],
   selectedDisplayId: PRIMARY_DISPLAY_ID,

@@ -38,37 +38,30 @@ test('renders the controlled settings fields with accessible names', async ({ pa
   await openFixture(page);
 
   await expect(page.getByRole('heading', { name: 'Settings' })).toBeVisible();
-  await expect(page.locator('[data-provider]')).toHaveCount(3);
-  await expect(page.locator('[data-provider="codexDesktop"]')).toContainText('Codex Desktop');
-  await expect(page.locator('[data-provider="codexCli"]')).toContainText('Codex CLI');
-  await expect(page.locator('[data-provider="claudeCode"]')).toContainText('Claude Code');
-  await expect(page.getByRole('button', { name: 'Connect' })).toHaveCount(3);
+  await expect(page.locator('[data-provider]')).toHaveCount(2);
+  await expect(page.locator('[data-provider="codex"]')).toContainText('Codex');
+  await expect(page.locator('[data-provider="claude"]')).toContainText('Claude Code');
+  await expect(page.getByRole('button', { name: 'Connect' })).toHaveCount(2);
   await expect(
-    page.locator('[data-provider="codexDesktop"]').getByRole('button', { name: 'Connect' }),
+    page.locator('[data-provider="codex"]').getByRole('button', { name: 'Connect' }),
   ).toBeEnabled();
   await expect(
-    page.locator('[data-provider="codexCli"]').getByRole('button', { name: 'Connect' }),
-  ).toBeEnabled();
-  await expect(
-    page.locator('[data-provider="claudeCode"]').getByRole('button', { name: 'Connect' }),
+    page.locator('[data-provider="claude"]').getByRole('button', { name: 'Connect' }),
   ).toBeDisabled();
   await expect(page.getByRole('combobox', { name: 'Display' })).toContainText('Primary');
   await expect(page.getByRole('switch', { name: 'Launch at login' })).not.toBeChecked();
   await expect(page.getByRole('switch', { name: 'Reduce motion' })).not.toBeChecked();
 
-  await page
-    .locator('[data-provider="codexDesktop"]')
-    .getByRole('button', { name: 'Connect' })
-    .click();
-  await expect(page.locator('[data-provider="codexDesktop"]')).toContainText('Connected');
-  await page.getByRole('button', { name: 'Actions for Codex Desktop' }).click();
+  await page.locator('[data-provider="codex"]').getByRole('button', { name: 'Connect' }).click();
+  await expect(page.locator('[data-provider="codex"]')).toContainText('Connected');
+  await page.getByRole('button', { name: 'Actions for Codex' }).click();
   await page.getByRole('menuitem', { name: 'Disconnect' }).click();
   await expect(page.getByRole('alertdialog')).toContainText(
     "Disconnect removes this app's local status history but does not change Codex data.",
   );
   await page.getByRole('button', { name: 'Disconnect', exact: true }).click();
   await expect(
-    page.locator('[data-provider="codexDesktop"]').getByRole('button', { name: 'Connect' }),
+    page.locator('[data-provider="codex"]').getByRole('button', { name: 'Connect' }),
   ).toBeVisible();
 
   const display = page.getByRole('combobox', { name: 'Display' });
@@ -131,9 +124,9 @@ test('names Claude Code in a retained connection disconnect confirmation', async
   await page.evaluate(() => {
     (
       window as Window & {
-        __settingsFixture?: { markProviderConnected: (connection: 'claudeCode') => void };
+        __settingsFixture?: { markProviderConnected: (connection: 'claude') => void };
       }
-    ).__settingsFixture?.markProviderConnected('claudeCode');
+    ).__settingsFixture?.markProviderConnected('claude');
   });
   await page.getByRole('button', { name: 'Actions for Claude Code' }).click();
   await page.getByRole('menuitem', { name: 'Disconnect' }).click();
@@ -153,7 +146,7 @@ test('serializes connect and disconnect operations for one provider', async ({ p
     ).__settingsFixture?.deferNextAction();
   });
 
-  const codex = page.locator('[data-provider="codexDesktop"]');
+  const codex = page.locator('[data-provider="codex"]');
   const codexConnect = codex.getByRole('button', { name: 'Connect' });
   await codexConnect.click();
   await expect(codex.getByRole('button', { name: 'Connecting…' })).toBeDisabled();
@@ -163,29 +156,27 @@ test('serializes connect and disconnect operations for one provider', async ({ p
       (
         window as Window & {
           __settingsFixture?: {
-            getProviderActionCalls: (
-              connection: 'codexDesktop' | 'codexCli' | 'claudeCode',
-            ) => number;
+            getProviderActionCalls: (connection: 'codex' | 'claude') => number;
           };
         }
-      ).__settingsFixture?.getProviderActionCalls('codexDesktop'),
+      ).__settingsFixture?.getProviderActionCalls('codex'),
     ),
   ).toBe(1);
   await expect(
-    page.locator('[data-provider="codexCli"]').getByRole('button', { name: 'Connect' }),
-  ).toBeEnabled();
+    page.locator('[data-provider="claude"]').getByRole('button', { name: 'Connect' }),
+  ).toBeVisible();
 
   await page.evaluate(() => {
     (
       window as Window & {
         __settingsFixture?: {
-          markProviderConnected: (connection: 'codexDesktop' | 'codexCli' | 'claudeCode') => void;
+          markProviderConnected: (connection: 'codex' | 'claude') => void;
         };
       }
-    ).__settingsFixture?.markProviderConnected('codexDesktop');
+    ).__settingsFixture?.markProviderConnected('codex');
   });
 
-  await codex.getByRole('button', { name: 'Actions for Codex Desktop' }).click();
+  await codex.getByRole('button', { name: 'Actions for Codex' }).click();
   const disconnect = page.getByRole('menuitem');
   await expect(disconnect).toBeDisabled();
 

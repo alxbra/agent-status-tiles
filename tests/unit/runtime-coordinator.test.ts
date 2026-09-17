@@ -17,6 +17,7 @@ import {
   loadSessionState,
   saveSessionState,
 } from '../../src/main/sessions/persistence';
+import { MonitorPrerequisiteError } from '../../src/main/runtime/monitor-errors';
 import { reduceSessionState } from '../../src/main/sessions/reducer';
 import { createInitialSessionState, makeSessionId } from '../../src/shared/session';
 
@@ -625,6 +626,144 @@ describe('runtime coordinator', () => {
     ).toHaveLength(300);
 
     await runtime.stop();
+  });
+
+  it('keeps a surface quietly unavailable when its installation is missing', async () => {
+    const dataPath = await appDataPath();
+    const timers = new Map<number, { callback: () => void; delayMs: number }>();
+    let nextTimer = 1;
+    const healthChanges: string[] = [];
+    let installed = false;
+    const missing = monitor('codex:cli', [], async () => ({
+      events: [],
+      cursors: {},
+      complete: true,
+    }));
+    missing.start = vi.fn(async () => {
+      if (!installed) throw new MonitorPrerequisiteError('codex-cli-path-unavailable');
+    });
+    const runtime = createRuntimeCoordinator({
+      appDataPath: dataPath,
+      monitors: [missing],
+      setTimeout: (callback, delayMs) => {
+        const id = nextTimer++;
+        timers.set(id, { callback, delayMs });
+        return id as unknown as ReturnType<typeof setTimeout>;
+      },
+      clearTimeout: (timer) => {
+        timers.delete(timer as unknown as number);
+      },
+      onHealthChanged: (key, health) => healthChanges.push(`${key}:${health.status}`),
+    });
+    try {
+      await runtime.start();
+      await runtime.connect('codex', 'cli');
+      const health = runtime.getHealth()['codex:cli'];
+      expect(health.status).toBe('unavailable');
+      // A missing installation is re-checked at the slowest cadence without
+      // exponential backoff and is never reported as an error.
+      expect(health.retryInMs).toBe(15_000);
+      const retry = [...timers.values()].find((timer) => timer.delayMs === 15_000);
+      if (retry === undefined) throw new Error('Expected a 15 s prerequisite retry');
+      expect(healthChanges).not.toContain('codex:cli:error');
+
+      // A later install is noticed by that retry alone.
+      installed = true;
+      retry.callback();
+      await vi.waitFor(() => expect(runtime.getHealth()['codex:cli'].status).toBe('available'));
+      expect(missing.start).toHaveBeenCalledTimes(2);
+    } finally {
+      await runtime.stop();
+    }
+  });
+
+  it('cancels the prerequisite retry when the surface is disconnected', async () => {
+    const dataPath = await appDataPath();
+    const timers = new Map<number, number>();
+    const cleared: number[] = [];
+    let nextTimer = 1;
+    const missing = monitor('codex:cli', [], async () => ({
+      events: [],
+      cursors: {},
+      complete: true,
+    }));
+    missing.start = vi.fn(async () => {
+      throw new MonitorPrerequisiteError('codex-cli-path-unavailable');
+    });
+    const runtime = createRuntimeCoordinator({
+      appDataPath: dataPath,
+      monitors: [missing],
+      setTimeout: (_callback, delayMs) => {
+        const id = nextTimer++;
+        timers.set(id, delayMs);
+        return id as unknown as ReturnType<typeof setTimeout>;
+      },
+      clearTimeout: (timer) => {
+        cleared.push(timer as unknown as number);
+        timers.delete(timer as unknown as number);
+      },
+    });
+    try {
+      await runtime.start();
+      await runtime.connect('codex', 'cli');
+      const [retryId] = [...timers.entries()].find(([, delayMs]) => delayMs === 15_000) ?? [];
+      if (retryId === undefined) throw new Error('Expected a 15 s prerequisite retry');
+      await runtime.disconnect('codex', 'cli');
+      expect(cleared).toContain(retryId);
+      expect(runtime.getHealth()['codex:cli'].status).toBe('stopped');
+      expect([...timers.values()]).not.toContain(15_000);
+    } finally {
+      await runtime.stop();
+    }
+  });
+
+  it('reports an error with backoff when a monitor fails to start for another reason', async () => {
+    const dataPath = await appDataPath();
+    const timers = new Map<number, { callback: () => void; delayMs: number }>();
+    let nextTimer = 1;
+    const broken = monitor('codex:cli', [], async () => ({
+      events: [],
+      cursors: {},
+      complete: true,
+    }));
+    broken.start = vi.fn(async () => {
+      throw new Error('codex-cli-code-signature-invalid');
+    });
+    const runtime = createRuntimeCoordinator({
+      appDataPath: dataPath,
+      monitors: [broken],
+      setTimeout: (callback, delayMs) => {
+        const id = nextTimer++;
+        timers.set(id, { callback, delayMs });
+        return id as unknown as ReturnType<typeof setTimeout>;
+      },
+      clearTimeout: (timer) => {
+        timers.delete(timer as unknown as number);
+      },
+    });
+    try {
+      await runtime.start();
+      await runtime.connect('codex', 'cli');
+      expect(runtime.getHealth()['codex:cli']).toMatchObject({
+        status: 'error',
+        retryInMs: DEFAULT_FILE_POLL_INTERVAL_MS,
+      });
+      const retry = [...timers.values()].find(
+        (timer) => timer.delayMs === DEFAULT_FILE_POLL_INTERVAL_MS,
+      );
+      if (retry === undefined) throw new Error('Expected an error retry');
+      retry.callback();
+      // A repeated real failure doubles the delay, unlike a missing installation.
+      await vi.waitFor(() =>
+        expect(runtime.getHealth()['codex:cli']).toMatchObject({
+          status: 'error',
+          retryInMs: 2 * DEFAULT_FILE_POLL_INTERVAL_MS,
+        }),
+      );
+      expect(broken.start).toHaveBeenCalledTimes(2);
+    } finally {
+      await runtime.stop();
+    }
   });
 
   it('does not publish or mark a baseline ready when a bounded read is incomplete', async () => {

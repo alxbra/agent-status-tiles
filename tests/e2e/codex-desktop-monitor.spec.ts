@@ -258,13 +258,17 @@ process.stdin.on('data', chunk => {
       .windows()
       .find((window) => window.url().includes('/renderer/index.html'));
     if (settings === undefined) throw new Error('Expected native Settings window');
-    const desktop = settings.getByRole('group', { name: 'Codex Desktop connection' });
-    const cli = settings.getByRole('group', { name: 'Codex CLI connection' });
+    const desktop = settings.getByRole('group', { name: 'Codex connection' });
     await expect(desktop).toContainText('Connected');
+    // The CLI surface joined the bundle at launch; without an executable it
+    // stays quietly unavailable and never produces an error sentence.
+    await expect
+      .poll(async () => (await loadSessionState(userDataDir)).monitoring.partitions['codex:cli'])
+      .toMatchObject({ enabled: true, sessions: {} });
     await expect(settings.getByRole('alert')).toHaveCount(0);
-    await expect(desktop.getByRole('button', { name: 'Actions for Codex Desktop' })).toBeVisible();
-    await expect(cli.getByRole('button', { name: 'Connect' })).toBeEnabled();
-    await desktop.getByRole('button', { name: 'Actions for Codex Desktop' }).click();
+    await expect(desktop.getByRole('button', { name: 'Actions for Codex' })).toBeVisible();
+    await expect(settings.getByRole('group', { name: /connection$/ })).toHaveCount(2);
+    await desktop.getByRole('button', { name: 'Actions for Codex' }).click();
     await settings.getByRole('menuitem', { name: 'Disconnect' }).click();
     const confirmation = settings.getByRole('alertdialog');
     await expect(confirmation).toContainText(
@@ -275,7 +279,7 @@ process.stdin.on('data', chunk => {
       (await loadSessionState(userDataDir)).monitoring.partitions['codex:desktop'].enabled,
     ).toBe(true);
     const codexFileBefore = await readFile(rolloutPath, 'utf8');
-    await desktop.getByRole('button', { name: 'Actions for Codex Desktop' }).click();
+    await desktop.getByRole('button', { name: 'Actions for Codex' }).click();
     await settings.getByRole('menuitem', { name: 'Disconnect' }).click();
     await settings.getByRole('alertdialog').getByRole('button', { name: 'Disconnect' }).click();
     await expect
@@ -305,6 +309,13 @@ process.stdin.on('data', chunk => {
             .status,
       )
       .toBe('ready');
+    // One Connect click enables both surfaces through IPC; the CLI surface
+    // has no executable here and stays quietly unavailable behind the row.
+    await expect
+      .poll(async () => (await loadSessionState(userDataDir)).monitoring.partitions['codex:cli'])
+      .toMatchObject({ enabled: true, sessions: {} });
+    await expect(desktop).toContainText('Connected');
+    await expect(settings.getByRole('alert')).toHaveCount(0);
     await expect
       .poll(() =>
         restartedOverlay.evaluate(
@@ -456,10 +467,10 @@ test('enabled Desktop connection remains disconnectable when its reader is lost'
       .windows()
       .find((window) => window.url().includes('/renderer/index.html'));
     if (settings === undefined) throw new Error('Expected native Settings window');
-    const desktop = settings.getByRole('group', { name: 'Codex Desktop connection' });
+    const desktop = settings.getByRole('group', { name: 'Codex connection' });
     await expect(desktop).toContainText('Unavailable');
-    await expect(settings.getByRole('alert')).toContainText('coverage is incomplete');
-    await desktop.getByRole('button', { name: 'Actions for Codex Desktop' }).click();
+    await expect(settings.getByRole('alert')).toContainText('Codex connection failed');
+    await desktop.getByRole('button', { name: 'Actions for Codex' }).click();
     await settings.getByRole('menuitem', { name: 'Disconnect' }).click();
     await settings.getByRole('alertdialog').getByRole('button', { name: 'Disconnect' }).click();
     await expect

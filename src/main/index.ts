@@ -20,7 +20,17 @@ import type { SessionSnapshot } from '../shared/session';
 import { PRIMARY_DISPLAY_ID } from '../shared/settings';
 import { createAppLifecycleController } from './app-lifecycle';
 import { createRuntimeCoordinator, type RuntimeCoordinator } from './runtime/coordinator';
-import type { Provider, Surface } from '../shared/session';
+import {
+  CONNECTABLE_CONNECTIONS,
+  completeProviderBundles,
+  connectProviderSurfaces,
+  connectionIssue,
+  connectionState,
+  disconnectProviderSurfaces,
+  enabledSurfaceKeysFor,
+  isConnectable,
+  isFullyEnabled,
+} from './settings-connections';
 import {
   CodexDesktopMonitor,
   type CodexDesktopMonitorOptions,
@@ -45,19 +55,21 @@ let isQuitting = false;
 let runtimeInitialized = false;
 const pendingConnectionActions = new Set<SettingsConnectionKey>();
 
-const CONNECTION_TARGETS: Readonly<Record<SettingsConnectionKey, readonly [Provider, Surface]>> = {
-  codexDesktop: ['codex', 'desktop'],
-  codexCli: ['codex', 'cli'],
-  claudeCode: ['claude', 'desktop'],
-};
+function isTestRuntime(): boolean {
+  return !app.isPackaged && process.env.NODE_ENV === 'test';
+}
 
 function desktopMonitorOptions(): CodexDesktopMonitorOptions {
   // Native E2E supplies a controlled app-server and rollout root. This path is
   // unavailable in packaged builds and is never received over renderer IPC.
-  if (app.isPackaged || process.env.NODE_ENV !== 'test') return {};
+  if (!isTestRuntime()) return {};
   const binaryPath = process.env.AGENT_STATUS_TILES_TEST_CODEX_BINARY;
   const sessionsRoot = process.env.AGENT_STATUS_TILES_TEST_CODEX_SESSIONS_ROOT;
-  if (!binaryPath || !sessionsRoot) return {};
+  // A test run never reaches a real installation: an unsupplied surface is
+  // reported as not installed, so it stays quietly unavailable.
+  if (!binaryPath || !sessionsRoot) {
+    return { resolveBinary: async () => ({ ok: false, code: 'bundle-not-found' }) };
+  }
   return {
     sessionsRoot,
     resolveBinary: async () => ({
@@ -71,10 +83,12 @@ function desktopMonitorOptions(): CodexDesktopMonitorOptions {
 }
 
 function cliMonitorOptions(): CodexCliMonitorOptions {
-  if (app.isPackaged || process.env.NODE_ENV !== 'test') return {};
+  if (!isTestRuntime()) return {};
   const binaryPath = process.env.AGENT_STATUS_TILES_TEST_CODEX_CLI_BINARY;
   const sessionsRoot = process.env.AGENT_STATUS_TILES_TEST_CODEX_SESSIONS_ROOT;
-  if (!binaryPath || !sessionsRoot) return {};
+  if (!binaryPath || !sessionsRoot) {
+    return { resolveBinary: async () => ({ ok: false, code: 'path-unavailable' }) };
+  }
   return {
     sessionsRoot,
     resolveBinary: async () => ({ ok: true, binaryPath }),
@@ -100,38 +114,6 @@ function assertSettingsSender(event: IpcMainInvokeEvent): void {
   }
 }
 
-function unavailableProviderState(): SettingsState['providers'][SettingsConnectionKey] {
-  return {
-    status: 'unavailable',
-    canConnect: false,
-    canDisconnect: false,
-  };
-}
-
-function connectionState(
-  connection: SettingsConnectionKey,
-): SettingsState['providers'][SettingsConnectionKey] {
-  const coordinator = runtimeCoordinator;
-  if (coordinator === null) return unavailableProviderState();
-  const [provider, surface] = CONNECTION_TARGETS[connection];
-  const key = `${provider}:${surface}` as const;
-  const enabled = coordinator.getMonitoringState().partitions[key].enabled;
-  if (!enabled) {
-    return {
-      status: connection === 'claudeCode' ? 'unavailable' : 'disconnected',
-      canConnect: connection !== 'claudeCode',
-      canDisconnect: false,
-    };
-  }
-  const health = coordinator.getHealth()[key].status;
-  return {
-    status:
-      health === 'available' ? 'connected' : health === 'starting' ? 'connecting' : 'unavailable',
-    canConnect: false,
-    canDisconnect: true,
-  };
-}
-
 function getSettingsState(): SettingsState {
   const preferences = desktopPreferences?.get();
   const preferredDisplayId = preferences?.preferredDisplayId ?? PRIMARY_DISPLAY_ID;
@@ -142,29 +124,16 @@ function getSettingsState(): SettingsState {
       ? { enabled: false }
       : evaluateLoginItemSettings(loginSettings, requestedLoginItemState);
   if (loginItemState.error === undefined) requestedLoginItemState = undefined;
-  const codexConnectionIssues = (['codexDesktop', 'codexCli'] as const).flatMap((connection) => {
-    const coordinator = runtimeCoordinator;
-    if (coordinator === null) return [];
-    const [provider, surface] = CONNECTION_TARGETS[connection];
-    const key = `${provider}:${surface}` as const;
-    const health = coordinator.getHealth()[key].status;
-    if (!coordinator.getMonitoringState().partitions[key].enabled) return [];
-    const label = connection === 'codexDesktop' ? 'Codex Desktop' : 'Codex CLI';
-    // Partial catalog coverage is not a connection failure. Keep confirmed
-    // sessions visible without showing a persistent Settings error.
-    if (health !== 'error' && health !== 'unavailable') return [];
-    return [
-      `${label} connection or coverage is incomplete. Check the installation, then disconnect and reconnect.`,
-    ];
-  });
-  const settingsError = [loginItemState.error, monitoringCoverageWarning, ...codexConnectionIssues]
+  const connectionIssues = CONNECTABLE_CONNECTIONS.map((connection) =>
+    connectionIssue(runtimeCoordinator, connection),
+  );
+  const settingsError = [loginItemState.error, monitoringCoverageWarning, ...connectionIssues]
     .filter((message): message is string => message !== undefined)
     .join(' ');
   return {
     providers: {
-      codexDesktop: connectionState('codexDesktop'),
-      codexCli: connectionState('codexCli'),
-      claudeCode: connectionState('claudeCode'),
+      codex: connectionState(runtimeCoordinator, 'codex'),
+      claude: connectionState(runtimeCoordinator, 'claude'),
     },
     displays: displayOptionsWithPreference(connectedDisplays(), preferredDisplayId),
     selectedDisplayId: preferredDisplayId,
@@ -361,19 +330,18 @@ if (!hasSingleInstanceLock) {
         return state;
       },
       connectSurface: async (connection) => {
-        if (connection === 'claudeCode') throw new Error('Connection is not available');
+        if (!isConnectable(connection)) throw new Error('Connection is not available');
         await runtimeStartPromise;
         if (pendingConnectionActions.has(connection))
           throw new Error('Connection action is pending');
         const coordinator = runtimeCoordinator;
         if (coordinator === null) throw new Error('Monitoring is unavailable');
-        const [provider, surface] = CONNECTION_TARGETS[connection];
-        if (coordinator.getMonitoringState().partitions[`${provider}:${surface}`].enabled) {
+        if (isFullyEnabled(coordinator, connection)) {
           throw new Error('Connection is already enabled');
         }
         pendingConnectionActions.add(connection);
         try {
-          await coordinator.connect(provider, surface);
+          await connectProviderSurfaces(coordinator, connection);
           const state = getSettingsState();
           publishSettingsState(getSettingsWindow(), state);
           return state;
@@ -387,13 +355,12 @@ if (!hasSingleInstanceLock) {
           throw new Error('Connection action is pending');
         const coordinator = runtimeCoordinator;
         if (coordinator === null) throw new Error('Monitoring is unavailable');
-        const [provider, surface] = CONNECTION_TARGETS[connection];
-        if (!coordinator.getMonitoringState().partitions[`${provider}:${surface}`].enabled) {
+        if (enabledSurfaceKeysFor(coordinator, connection).length === 0) {
           throw new Error('Connection is not enabled');
         }
         pendingConnectionActions.add(connection);
         try {
-          await coordinator.disconnect(provider, surface);
+          await disconnectProviderSurfaces(coordinator, connection);
           const state = getSettingsState();
           publishSettingsState(getSettingsWindow(), state);
           return state;
@@ -402,7 +369,12 @@ if (!hasSingleInstanceLock) {
         }
       },
     });
-    runtimeStartPromise = runtimeCoordinator.start().catch(() => undefined);
+    const startedCoordinator = runtimeCoordinator;
+    runtimeStartPromise = startedCoordinator
+      .start()
+      .then(() => completeProviderBundles(startedCoordinator))
+      .then(() => publishCurrentSettings())
+      .catch(() => undefined);
     const onDisplayTopologyChanged = (): void => publishCurrentSettings();
     const onActivate = (): void => lifecycle.handleActivate();
     const onSystemSuspend = (): void => {

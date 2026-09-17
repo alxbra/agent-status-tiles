@@ -8,27 +8,25 @@ import {
 
 describe('settings connection boundary', () => {
   it('accepts only exact surface keys and payload fields', () => {
-    for (const connection of ['codexDesktop', 'codexCli', 'claudeCode']) {
+    for (const connection of ['codex', 'claude']) {
       expect(isSettingsConnectionKey(connection)).toBe(true);
       expect(isSettingsConnectionRequest({ connection })).toBe(true);
       expect(isSettingsDisconnectRequest({ connection, confirmed: true })).toBe(true);
     }
-    expect(isSettingsConnectionKey('codex')).toBe(false);
-    expect(isSettingsConnectionRequest({ connection: 'codexDesktop', path: '/private' })).toBe(
-      false,
-    );
-    expect(isSettingsDisconnectRequest({ connection: 'codexDesktop' })).toBe(false);
-    expect(isSettingsDisconnectRequest({ connection: 'codexDesktop', confirmed: false })).toBe(
-      false,
-    );
+    // Surfaces are bundled behind their provider row; per-surface keys are not accepted.
+    for (const legacy of ['codexDesktop', 'codexCli', 'claudeCode']) {
+      expect(isSettingsConnectionKey(legacy)).toBe(false);
+    }
+    expect(isSettingsConnectionRequest({ connection: 'codex', path: '/private' })).toBe(false);
+    expect(isSettingsDisconnectRequest({ connection: 'codex' })).toBe(false);
+    expect(isSettingsDisconnectRequest({ connection: 'codex', confirmed: false })).toBe(false);
   });
 
-  it('requires all three independent connection rows in Settings state', () => {
+  it('requires exactly one row per provider in Settings state', () => {
     const state = {
       providers: {
-        codexDesktop: { status: 'disconnected', canConnect: true, canDisconnect: false },
-        codexCli: { status: 'unavailable', canConnect: false, canDisconnect: false },
-        claudeCode: { status: 'unavailable', canConnect: false, canDisconnect: false },
+        codex: { status: 'disconnected', canConnect: true, canDisconnect: false },
+        claude: { status: 'unavailable', canConnect: false, canDisconnect: false },
       },
       displays: [{ id: 'primary', label: 'Primary' }],
       selectedDisplayId: 'primary',
@@ -37,8 +35,12 @@ describe('settings connection boundary', () => {
       recentThreadLimit: 5,
     };
     expect(isSettingsState(state)).toBe(true);
+    expect(isSettingsState({ ...state, providers: { codex: state.providers.codex } })).toBe(false);
     expect(
-      isSettingsState({ ...state, providers: { codexDesktop: state.providers.codexDesktop } }),
+      isSettingsState({
+        ...state,
+        providers: { ...state.providers, codexCli: state.providers.codex },
+      }),
     ).toBe(false);
   });
 });
