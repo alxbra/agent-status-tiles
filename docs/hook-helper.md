@@ -71,8 +71,9 @@ For accepted events it retains only these bounded fields:
   an SSH session, produces no field;
 - `entrypoint`, Claude Code's `CLAUDE_CODE_ENTRYPOINT` when it is exactly
   `claude-desktop` or `cli`; other entrypoints produce no field;
-- `is_subagent: true` when the hook input carries an `agent_id`. Subagent
-  hooks reuse the parent session ID; the agent ID itself is discarded;
+- `is_subagent: true` when the hook input carries a non-empty `agent_id`
+  string. Subagent hooks reuse the parent session ID; the agent ID itself is
+  discarded;
 - `session_source` on `SessionStart` (`startup`, `resume`, `clear`, `compact`,
   or `fork`) and `end_reason` on `SessionEnd` (`clear`, `resume`, `logout`,
   `prompt_input_exit`, or `other`).
@@ -117,11 +118,13 @@ schema is version `1` and has the following shape (optional fields are omitted):
   "stop_hook_active": false,
   "host": "claude-desktop",
   "entrypoint": "claude-desktop",
-  "is_subagent": true,
-  "session_source": "resume",
-  "end_reason": "logout"
+  "is_subagent": true
 }
 ```
+
+Version 1 evolves by adding optional fields; the version bumps only when a
+required field or a field's meaning changes, so a reader always tolerates
+records older than itself.
 
 `elicitation_id` appears only on `Elicitation` and `ElicitationResult`
 records. `notification_type` appears only on `Notification` records.

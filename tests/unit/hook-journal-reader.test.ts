@@ -576,6 +576,7 @@ describe('HookJournalReader', () => {
         serializeRecord({ event_name: 'Stop', session_source: 'resume' }),
         serializeRecord({ event_name: 'SessionStart', end_reason: 'logout' }),
         serializeRecord({ event_name: 'SessionEnd', end_reason: 'PRIVATE_REASON' }),
+        serializeRecord({ event_name: 'SessionStart', session_source: 'PRIVATE_SOURCE' }),
       ].join(''),
     );
 
@@ -595,7 +596,7 @@ describe('HookJournalReader', () => {
     expect(result.events[1]).not.toHaveProperty('isSubagent');
     expect(JSON.stringify(result.events)).not.toMatch(/VSCode|sdk-ts|PRIVATE_/u);
     expect(result.diagnostics.map((diagnostic) => diagnostic.code)).toEqual(
-      Array.from({ length: 6 }, () => 'record-malformed'),
+      Array.from({ length: 7 }, () => 'record-malformed'),
     );
   });
 

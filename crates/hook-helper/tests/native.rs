@@ -171,13 +171,21 @@ fn native_helper_records_allowlisted_host_identity_and_session_lifecycle() {
             ("CLAUDE_CODE_ENTRYPOINT", "sdk-ts"),
         ],
     );
+    invoke(
+        &data_dir,
+        r#"{"hook_event_name":"SessionStart","session_id":"host-1","source":"PRIVATE_SOURCE"}"#,
+    );
+    invoke(
+        &data_dir,
+        r#"{"hook_event_name":"SessionEnd","session_id":"host-1","reason":"PRIVATE_REASON"}"#,
+    );
     let file = journal_files(&data_dir).pop().unwrap();
     let content = fs::read_to_string(file).unwrap();
     let records: Vec<Value> = content
         .lines()
         .map(|line| serde_json::from_str(line).unwrap())
         .collect();
-    assert_eq!(records.len(), 3);
+    assert_eq!(records.len(), 5);
 
     assert_eq!(records[0]["host"], "claude-desktop");
     assert_eq!(records[0]["entrypoint"], "claude-desktop");
@@ -198,6 +206,11 @@ fn native_helper_records_allowlisted_host_identity_and_session_lifecycle() {
     assert!(records[2].get("is_subagent").is_none());
     assert!(!content.contains("VSCode"));
     assert!(!content.contains("sdk-ts"));
+
+    // Values outside the documented lists are dropped, not recorded.
+    assert!(records[3].get("session_source").is_none());
+    assert!(records[4].get("end_reason").is_none());
+    assert!(!content.contains("PRIVATE_"));
     fs::remove_dir_all(data_dir).unwrap();
 }
 
