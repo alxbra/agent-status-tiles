@@ -96,7 +96,7 @@ describe('claude journal discovery', () => {
     expect(byId.unknown).toMatchObject({ surface: 'cli', ended: false });
     expect(byId.unknown).not.toHaveProperty('host');
     expect(byId.unknown).not.toHaveProperty('projectName');
-    expect(JSON.stringify(summaries)).not.toContain('journals/');
+    expect(JSON.stringify(summaries)).not.toContain(root);
   });
 
   it('returns nothing for a missing directory and refreshes a changed journal', async () => {
@@ -190,14 +190,16 @@ describe('claude journal discovery', () => {
     expect(ids[0]).toBe(`session-${String(total - 1).padStart(3, '0')}`);
 
     const tied = await appData();
-    for (const id of ['tie-b', 'tie-a']) {
+    for (const id of ['tie-c', 'tie-a', 'tie-b']) {
       await writeFile(journalPath(tied, id), record(id, { host: 'terminal' }));
       await utimes(journalPath(tied, id), new Date(1_700_000_000_000), new Date(1_700_000_000_000));
     }
     const names = (await new ClaudeJournalDiscovery({ appDataPath: tied }).list()).map(
       (summary) => summary.baseName,
     );
-    expect(names).toEqual([...names].sort());
+    expect(names).toEqual(
+      ['tie-a', 'tie-b', 'tie-c'].map((id) => makeHookJournalBaseName('claude', id)).sort(),
+    );
   });
 
   it('keeps a session through a helper rotation instead of treating it as ended', async () => {
@@ -212,10 +214,16 @@ describe('claude journal discovery', () => {
     await writeFile(journalPath(root, 'rot'), '');
     expect((await discovery.list()).map((summary) => summary.nativeSessionId)).toEqual(['rot']);
 
-    // Without an archive an empty or missing active file is simply gone.
-    await rm(`${journalPath(root, 'rot')}.1`);
-    expect(await discovery.list()).toEqual([]);
+    // Retention is bounded: a journal that stays gone is forgotten even with
+    // a stale archive beside it, and without an archive it is gone at once.
     await rm(journalPath(root, 'rot'));
     expect(await discovery.list()).toEqual([]);
+    const fresh = new ClaudeJournalDiscovery({ appDataPath: root });
+    await writeFile(journalPath(root, 'rot'), record('rot', { host: 'warp' }));
+    await fresh.list();
+    await writeFile(journalPath(root, 'rot'), '');
+    expect(await fresh.list()).toHaveLength(1);
+    await rm(`${journalPath(root, 'rot')}.1`);
+    expect(await fresh.list()).toEqual([]);
   });
 });

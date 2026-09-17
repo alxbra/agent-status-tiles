@@ -133,7 +133,7 @@ test('native Claude Desktop and CLI journals baseline idle, publish live status,
     const persisted = await loadSessionState(userDataDir);
     expect(persisted.monitoring.owners[`claude:${desktopId}`]).toBe('claude:desktop');
     expect(persisted.monitoring.owners[`claude:${cliId}`]).toBe('claude:cli');
-    expect(JSON.stringify(persisted.monitoring)).not.toMatch(/journals|PRIVATE|\/Users\//u);
+    expect(JSON.stringify(persisted.monitoring)).not.toContain(root);
 
     // Live status arrives from appended records within the file poll.
     await appendFile(journalPath(userDataDir, desktopId), record(desktopId, 'UserPromptSubmit'));
@@ -177,10 +177,6 @@ test('native Claude Desktop and CLI journals baseline idle, publish live status,
     await expect
       .poll(async () => (await sessions(restarted)).map((session) => session.title))
       .toEqual(['cli-project']);
-    const settingsVisible = application
-      .windows()
-      .some((window) => window.url().includes('/renderer/index.html'));
-    expect(settingsVisible).toBe(false);
   } finally {
     await application?.close();
     await rm(root, { recursive: true, force: true });

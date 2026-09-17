@@ -128,13 +128,13 @@ describe('claude surface monitor', () => {
     expect(second.events).toEqual([
       { event: expect.objectContaining({ type: 'turn-completed' }), historical: false },
     ]);
-    expect(JSON.stringify([discovery, first, second])).not.toContain('journals');
+    expect(JSON.stringify([discovery, first, second])).not.toContain(root);
 
     desktop.stop();
     await expect(desktop.discover()).rejects.toThrow('not-started');
   });
 
-  it('drops an ended session from the cohort and marks unreadable journals unavailable', async () => {
+  it('drops an ended session from the cohort and marks malformed journals coverage-incomplete', async () => {
     const root = await appData();
     await writeFile(journalPath(root, 'live'), record('live', 'SessionStart'));
     await writeFile(
@@ -152,6 +152,7 @@ describe('claude surface monitor', () => {
     await writeFile(join(root, 'journals', 'claude', `${sources[0]!.id}.jsonl`), 'not json\n');
     const read = await monitor.read(readRequest(sources));
     expect(read.coverageIncomplete).toBe(true);
+    expect(read.unavailableSourceIds).toBeUndefined();
     expect(read.events).toEqual([]);
     await expect(
       monitor.read(readRequest([{ ...sources[0]!, nativeSessionId: 'other' }])),
@@ -234,7 +235,7 @@ describe('claude surface monitor', () => {
     const targetsSeen: number[] = [];
     const monitor = new ClaudeDesktopMonitor({
       appDataPath: '/unused',
-      discovery: { list: async () => summaries },
+      discovery: { list: async () => summaries, truncated: false },
       reader: {
         read: async (targets) => {
           targetsSeen.push(targets.length);
@@ -254,32 +255,44 @@ describe('claude surface monitor', () => {
   it('pages long journals so one read never exceeds the coordinator event cap', async () => {
     const root = await appData();
     // Lean records keep the journal under the reader's 256 KiB file bound
-    // while still exceeding the per-read record page.
-    const pairs = 800;
+    // while still exceeding the per-read record page. Each turn stays under
+    // the per-turn request bound, and the leading activity record shifts the
+    // page boundary onto a request so the next page starts by resolving it.
     const lean = { project_name: undefined, host: undefined };
-    let content = record('busy', 'SessionStart') + record('busy', 'UserPromptSubmit');
-    for (let index = 0; index < pairs; index += 1) {
-      content +=
-        record('busy', 'PermissionRequest', { ...lean, tool_call_id: `call-${index}` }) +
-        record('busy', 'PostToolUse', { ...lean, tool_call_id: `call-${index}` });
+    const turns = 8;
+    const pairsPerTurn = 100;
+    let content = record('busy', 'SessionStart') + record('busy', 'PreToolUse', lean);
+    for (let turn = 0; turn < turns; turn += 1) {
+      content += record('busy', 'UserPromptSubmit', lean);
+      for (let index = 0; index < pairsPerTurn; index += 1) {
+        content +=
+          record('busy', 'PermissionRequest', { ...lean, tool_call_id: `call-${turn}-${index}` }) +
+          record('busy', 'PostToolUse', { ...lean, tool_call_id: `call-${turn}-${index}` });
+      }
+      content += record('busy', 'Stop', lean);
     }
+    const records = 2 + turns * (2 + pairsPerTurn * 2);
     expect(Buffer.byteLength(content)).toBeLessThan(256 * 1024);
-    expect(2 + pairs * 2).toBeGreaterThan(MAX_CLAUDE_RECORDS_PER_READ);
+    expect(records).toBeGreaterThan(MAX_CLAUDE_RECORDS_PER_READ);
     await writeFile(journalPath(root, 'busy'), content);
     const monitor = new ClaudeDesktopMonitor({ appDataPath: root });
     monitor.start();
     const sources = monitor.capture((await monitor.discover()).sources);
 
-    const first = await monitor.read(readRequest(sources, { baseline: true }));
+    const first = await monitor.read(readRequest(sources));
     expect(first.events.length).toBeLessThanOrEqual(MAX_RUNTIME_EVENTS_PER_READ);
     expect(first.events.length).toBeGreaterThan(MAX_CLAUDE_RECORDS_PER_READ);
+    expect(first.events.at(-1)).toEqual({
+      event: expect.objectContaining({ type: 'input-requested' }),
+      historical: false,
+    });
     expect(first.complete).toBe(false);
     expect(first.nextSourceIndex).toBe(0);
     expect(first.exhaustedSourceIds).toEqual([]);
     expect(first.coverageIncomplete).toBeUndefined();
 
     // The coordinator hands the reduced record back between pages so the open
-    // turn and its requests continue across the boundary.
+    // turn and its request continue across the boundary.
     let state = reduceSessionState(createInitialSessionState(), {
       type: 'upsert',
       provider: 'claude',
@@ -292,8 +305,9 @@ describe('claude surface monitor', () => {
       updatedAt: 1,
     });
     const reduceAll = (entries: typeof first.events): void => {
-      for (const entry of entries)
+      for (const entry of entries) {
         state = reduceSessionState(state, 'event' in entry ? entry.event : entry);
+      }
     };
     reduceAll(first.events);
     let cursors = first.cursors;
@@ -301,23 +315,82 @@ describe('claude surface monitor', () => {
     let passes = 1;
     let result = first;
     while (!result.complete) {
+      if (passes > 8) throw new Error('paging did not converge');
+      const openTurn = state.sessions['claude:busy']!.activeTurnId;
       result = await monitor.read(
         readRequest(sources, {
-          baseline: true,
           cursors,
           sessions: state.sessions,
           sourceStart: result.nextSourceIndex,
         }),
       );
-      reduceAll(result.events);
       expect(result.events.length).toBeLessThanOrEqual(MAX_RUNTIME_EVENTS_PER_READ);
+      if (passes === 1) {
+        expect(result.events[0]).toEqual({
+          event: expect.objectContaining({ type: 'input-resolved', turnId: openTurn }),
+          historical: false,
+        });
+      }
+      reduceAll(result.events);
       cursors = result.cursors;
       total += result.events.length;
       passes += 1;
     }
     expect(passes).toBeGreaterThan(1);
     expect(result.exhaustedSourceIds).toEqual([sources[0]!.id]);
-    // One turn start, then a request, a resolution, and an activity per pair.
-    expect(total).toBe(1 + pairs * 3);
+    // One activity before any turn; per turn a start, three events per pair, and a completion.
+    expect(total).toBe(1 + turns * (2 + pairsPerTurn * 3));
+    expect(state.sessions['claude:busy']!.status).toBe('unread');
+  });
+
+  it('keeps only turn events during a baseline and survives a turn with many prompts', async () => {
+    const root = await appData();
+    let content = record('many', 'SessionStart') + record('many', 'UserPromptSubmit');
+    for (let index = 0; index < 70; index += 1) {
+      content +=
+        record('many', 'PermissionRequest', { tool_call_id: `p-${index}` }) +
+        record('many', 'Notification', { notification_type: 'permission_prompt' }) +
+        record('many', 'PostToolUse', { tool_call_id: `p-${index}` });
+    }
+    content += record('many', 'PermissionRequest', { tool_call_id: 'open' });
+    await writeFile(journalPath(root, 'many'), content);
+    const monitoring = createInitialMonitoringState();
+    monitoring.partitions['claude:desktop'].enabled = true;
+    await saveSessionState(root, monitoring);
+    const runtime = createRuntimeCoordinator({
+      appDataPath: root,
+      monitors: [new ClaudeDesktopMonitor({ appDataPath: root })],
+      catalogPollIntervalMs: 20,
+      filePollIntervalMs: 10,
+    });
+    try {
+      await runtime.start();
+      await expect
+        .poll(() => runtime.getMonitoringState().partitions['claude:desktop'].baseline.status)
+        .toBe('ready');
+      expect(runtime.getHealth()['claude:desktop'].status).toBe('available');
+      // The wait open at connect time shows as working until its next record.
+      expect(runtime.getOverlayState().sessions).toEqual([
+        expect.objectContaining({ id: 'claude:many', status: 'working' }),
+      ]);
+      // Live records after the baseline: another 70 prompts in the same turn
+      // stay within the persisted bound and the surface stays healthy.
+      let live = '';
+      for (let index = 0; index < 70; index += 1) {
+        live +=
+          record('many', 'PermissionRequest', { tool_call_id: `q-${index}` }) +
+          record('many', 'PostToolUse', { tool_call_id: `q-${index}` });
+      }
+      live += record('many', 'PermissionRequest', { tool_call_id: 'last' });
+      await appendFile(journalPath(root, 'many'), live);
+      await expect
+        .poll(() => runtime.getOverlayState().sessions[0]?.status, { timeout: 5_000 })
+        .toBe('needs-input');
+      expect(runtime.getHealth()['claude:desktop'].status).toBe('available');
+      await appendFile(journalPath(root, 'many'), record('many', 'Stop'));
+      await expect.poll(() => runtime.getOverlayState().sessions[0]?.status).toBe('unread');
+    } finally {
+      await runtime.stop();
+    }
   });
 });

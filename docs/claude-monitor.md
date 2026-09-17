@@ -16,11 +16,15 @@ are inspected per pass. Inspecting a journal reads only its first and last
 complete records (8 KiB at each end, never following a symlink). The first
 record must carry a `session_id` whose hash is the file name, and the last
 record must belong to the same session; the file is otherwise ignored. A
-journal that has not changed size or modification time is not re-read. While
-the helper rotates a journal (the active file is briefly absent or empty next
-to a `.1` archive) the previous summary is kept, so a rotation never looks like
-an ended session. Nothing deletes old journals yet; journal garbage collection
-for ended sessions is a required follow-up before release.
+journal that has not changed size or modification time is not re-read, and
+overlapping listings from the two monitors share one pass. While the helper
+rotates a journal (the active file is briefly absent or empty next to a `.1`
+archive) the previous summary is kept for at most two passes, so a rotation
+never looks like an ended session while a deleted journal with a stale archive
+is forgotten. A directory holding more journals than can be stat'ed reports
+incomplete coverage. Nothing deletes old journals yet; journal garbage
+collection for ended sessions, removing every suffix, is a required follow-up
+before release.
 
 Each inspected journal yields display-safe facts only: the session ID, the
 project folder name from the newest record, the surface, the recognised
@@ -68,6 +72,14 @@ pass, and a record landing between them during a baseline is replayed as
 historical, which can hide a completion from that moment but never surfaces
 a stale one.
 
+A baseline exists only to land history idle and place the cursor, so during a
+baseline pass the monitor keeps the turn events that decide a session's final
+state (`turn-started`, `turn-completed`, `turn-failed`) and drops per-tool
+progress and waits. A first replay of ten sessions with full archives then
+stays far below the coordinator's per-replay event bound. The one visible
+consequence: a wait that is already open when the surface connects shows as
+working until its next hook record.
+
 ## Normalization
 
 `normalizeClaudeEvents` maps journal records onto the lifecycle events of the
@@ -89,8 +101,12 @@ the start of each read.
 | `StopFailure` | `turn-failed` |
 | `SessionStart`, `SessionEnd`, other notifications | nothing (`SessionEnd` acts through discovery) |
 
-A subagent stopping never completes the parent, and an ordinary tool failure
-never reddens a session. `Stop` and `StopFailure` close the tracked turn so a
+Prompt notifications are supplementary: they open a wait only when no request
+from a permission, question, or elicitation hook is already open. Persistence
+keeps at most 128 requests per session, resolved ones included, so after 128
+requests in one turn further prompts count as progress rather than waits and
+the surface stays up. A subagent stopping never completes the parent, and an
+ordinary tool failure never reddens a session. `Stop` and `StopFailure` close the tracked turn so a
 late record after them is plain activity the reducer ignores. In a parallel
 tool batch, another tool finishing while one permission prompt is still open
 resolves that prompt too: confirmed activity means the user acted, and a

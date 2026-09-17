@@ -34,7 +34,7 @@ export interface ClaudeJournalSummary {
   /** The newest record is `SessionEnd`; the session left the cohort. */
   ended: boolean;
   updatedAt: number;
-  /** Active file size, the fixed replay boundary for a baseline. */
+  /** Active file size at listing; reported to the coordinator as the source boundary. */
   endOffset: number;
 }
 
@@ -48,7 +48,12 @@ interface CacheEntry {
   mtimeMs: number;
   size: number;
   summary: ClaudeJournalSummary | undefined;
+  /** Passes this entry was kept without a readable active file; a rotation takes one. */
+  retainedPasses: number;
 }
+
+/** A rotation is milliseconds; a session still absent after this many passes is gone. */
+const MAX_RETAINED_PASSES = 2;
 
 interface Probe {
   sessionId?: string;
@@ -124,28 +129,52 @@ export function surfaceForIdentity(
  * the user's home directory: the helper wrote every file here, each file is
  * verified against the hash of the session ID it claims, and only display-safe
  * metadata is returned. Missing directories mean no sessions. One instance is
- * shared by both surface monitors so the directory is read once per pass.
+ * shared by both surface monitors; overlapping calls share one listing, and
+ * unchanged journals are not probed again.
  */
 export class ClaudeJournalDiscovery {
   private readonly directory: string;
   private readonly cache = new Map<string, CacheEntry>();
+  private inFlight: Promise<readonly ClaudeJournalSummary[]> | undefined;
+  private wasTruncated = false;
 
   constructor(options: { appDataPath: string }) {
     this.directory = join(options.appDataPath, 'journals', 'claude');
   }
 
-  async list(): Promise<readonly ClaudeJournalSummary[]> {
+  /** True when the last listing had more journals than it could stat. */
+  get truncated(): boolean {
+    return this.wasTruncated;
+  }
+
+  /** Both surface monitors call this every pass; concurrent calls share one listing. */
+  list(): Promise<readonly ClaudeJournalSummary[]> {
+    if (this.inFlight === undefined) {
+      this.inFlight = this.listOnce().finally(() => {
+        this.inFlight = undefined;
+      });
+    }
+    return this.inFlight;
+  }
+
+  private async listOnce(): Promise<readonly ClaudeJournalSummary[]> {
     let names: string[];
     try {
       names = await readdir(this.directory);
     } catch (error) {
-      if ((error as { code?: unknown }).code === 'ENOENT') return [];
+      if ((error as { code?: unknown }).code === 'ENOENT') {
+        this.cache.clear();
+        this.wasTruncated = false;
+        return [];
+      }
       throw error;
     }
+    const present = new Set(names.filter((name) => JOURNAL_NAME.test(name)));
+    this.wasTruncated = present.size > MAX_JOURNAL_ENTRIES;
     const candidates: Candidate[] = [];
     let statted = 0;
-    for (const name of names) {
-      if (!JOURNAL_NAME.test(name) || statted >= MAX_JOURNAL_ENTRIES) continue;
+    for (const name of present) {
+      if (statted >= MAX_JOURNAL_ENTRIES) break;
       statted += 1;
       try {
         const metadata = await lstat(join(this.directory, name));
@@ -158,10 +187,10 @@ export class ClaudeJournalDiscovery {
     candidates.sort(
       (left, right) => right.mtimeMs - left.mtimeMs || (left.name < right.name ? -1 : 1),
     );
-    const live = new Set<string>();
+    const inspected = new Set<string>();
     const summaries: ClaudeJournalSummary[] = [];
     for (const candidate of candidates.slice(0, MAX_INSPECTED_JOURNALS)) {
-      live.add(candidate.name);
+      inspected.add(candidate.name);
       const cached = this.cache.get(candidate.name);
       if (
         cached !== undefined &&
@@ -171,30 +200,52 @@ export class ClaudeJournalDiscovery {
         if (cached.summary !== undefined) summaries.push(cached.summary);
         continue;
       }
-      const summary = await this.summarize(candidate);
-      if (summary === undefined && cached?.summary !== undefined && candidate.size === 0) {
-        // The helper rotates by renaming the active file away and recreating it;
-        // an empty active file with an archive beside it is that moment, not an
-        // ended session. Keep the last summary until the next record lands.
-        if (await this.hasArchive(candidate.name)) {
-          summaries.push(cached.summary);
-          continue;
-        }
+      if (
+        candidate.size === 0 &&
+        cached?.summary !== undefined &&
+        (await this.retain(candidate.name, cached))
+      ) {
+        summaries.push(cached.summary);
+        continue;
       }
-      this.cache.set(candidate.name, { mtimeMs: candidate.mtimeMs, size: candidate.size, summary });
+      const summary = await this.summarize(candidate);
+      this.cache.set(candidate.name, {
+        mtimeMs: candidate.mtimeMs,
+        size: candidate.size,
+        summary,
+        retainedPasses: 0,
+      });
       if (summary !== undefined) summaries.push(summary);
     }
     for (const [name, cached] of this.cache) {
-      if (live.has(name)) continue;
-      // Between the rename and the recreate the active file is absent for a
-      // moment; keep the session while its archive proves the rotation.
-      if (cached.summary !== undefined && (await this.hasArchive(name))) {
+      if (inspected.has(name)) continue;
+      // A journal that merely fell out of the newest set is forgotten; one
+      // whose active file vanished is kept only while a rotation explains it.
+      if (!present.has(name) && cached.summary !== undefined && (await this.retain(name, cached))) {
         summaries.push(cached.summary);
         continue;
       }
       this.cache.delete(name);
     }
+    // Retained entries were appended out of order.
+    summaries.sort(
+      (left, right) =>
+        right.updatedAt - left.updatedAt || (left.baseName < right.baseName ? -1 : 1),
+    );
     return summaries;
+  }
+
+  /**
+   * The helper rotates by renaming the active file to `.1` and recreating it,
+   * so for a moment the active file is absent or empty. Keep the previous
+   * summary for a bounded number of passes while the archive proves the
+   * rotation; anything longer is a deleted journal.
+   */
+  private async retain(name: string, cached: CacheEntry): Promise<boolean> {
+    if (cached.retainedPasses >= MAX_RETAINED_PASSES) return false;
+    if (!(await this.hasArchive(name))) return false;
+    cached.retainedPasses += 1;
+    return true;
   }
 
   private async hasArchive(name: string): Promise<boolean> {

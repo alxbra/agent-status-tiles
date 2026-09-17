@@ -54,7 +54,6 @@ export const HOOK_JOURNAL_HOSTS: ReadonlySet<string> = new Set([
   'ghostty',
   'warp',
 ]);
-const HOSTS = HOOK_JOURNAL_HOSTS;
 const ENTRYPOINTS = new Set(['claude-desktop', 'cli']);
 const SESSION_SOURCES = new Set(['startup', 'resume', 'clear', 'compact', 'fork']);
 const END_REASONS = new Set(['clear', 'resume', 'logout', 'prompt_input_exit', 'other']);
@@ -346,7 +345,8 @@ function createEventFromRecord(
   const typedNotificationType = notificationType as HookJournalEvent['notificationType'];
 
   const host = getOptionalString(value, 'host', 64);
-  if (Object.hasOwn(value, 'host') && (host === undefined || !HOSTS.has(host))) return undefined;
+  if (Object.hasOwn(value, 'host') && (host === undefined || !HOOK_JOURNAL_HOSTS.has(host)))
+    return undefined;
   const entrypoint = getOptionalString(value, 'entrypoint', 64);
   if (
     Object.hasOwn(value, 'entrypoint') &&

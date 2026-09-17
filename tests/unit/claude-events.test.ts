@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { normalizeClaudeEvents } from '../../src/main/providers/claude/events';
+import { MAX_INPUT_REQUESTS } from '../../src/main/sessions/persistence';
 import type { HookJournalEvent } from '../../src/main/providers/hooks/hook-journal-reader';
 import { createInitialSessionState, makeSessionId } from '../../src/shared/session';
 import { reduceSessionState } from '../../src/main/sessions/reducer';
@@ -61,12 +62,33 @@ describe('claude event normalization', () => {
       'turn-started:working',
       'activity:working',
       'input-requested:needs-input',
-      'input-requested:needs-input',
-      'input-resolved:needs-input',
+      // The prompt notification is supplementary while a request is open.
       'input-resolved:working',
       'activity:working',
       'turn-completed:unread',
     ]);
+  });
+
+  it('reports progress instead of a wait once a turn has issued the persisted request bound', () => {
+    const events = normalizeClaudeEvents(
+      [
+        journal('UserPromptSubmit'),
+        ...Array.from({ length: MAX_INPUT_REQUESTS + 5 }, (_, index) => [
+          journal('PermissionRequest', { toolCallId: `call-${index}` }),
+          journal('PostToolUse', { toolCallId: `call-${index}` }),
+        ]).flat(),
+        journal('UserPromptSubmit'),
+        journal('PermissionRequest', { toolCallId: 'fresh' }),
+      ],
+      {},
+    );
+    const requested = events.filter((event) => event.type === 'input-requested');
+    expect(requested).toHaveLength(MAX_INPUT_REQUESTS + 1);
+    expect(requested.at(-1)).toMatchObject({ callId: 'fresh' });
+    // Beyond the bound each prompt still counts as progress.
+    expect(events.filter((event) => event.type === 'activity').length).toBeGreaterThan(
+      MAX_INPUT_REQUESTS + 5,
+    );
   });
 
   it('treats questions and elicitations as waiting until answered', () => {

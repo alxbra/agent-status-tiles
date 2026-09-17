@@ -1,4 +1,5 @@
 import { makeSessionId, type SessionEvent, type SessionRecord } from '../../../shared/session';
+import { MAX_INPUT_REQUESTS } from '../../sessions/persistence';
 import type { HookJournalEvent } from '../hooks/hook-journal-reader';
 
 /** The lifecycle subset a Claude journal can produce; upserts come from discovery. */
@@ -18,18 +19,21 @@ export type ClaudeSessionEvent = Extract<
 interface TurnState {
   turnId: string | undefined;
   openRequests: Set<string>;
+  /** Requests issued in this turn, resolved ones included; bounded by persistence. */
+  issued: number;
 }
 
 function seedState(record: SessionRecord | undefined): TurnState {
   const openRequests = new Set<string>();
+  let issued = 0;
   if (record?.activeTurnId !== undefined) {
     for (const [callId, request] of Object.entries(record.inputRequests)) {
-      if (request.turnId === record.activeTurnId && request.resolvedAt === undefined) {
-        openRequests.add(callId);
-      }
+      if (request.turnId !== record.activeTurnId) continue;
+      issued += 1;
+      if (request.resolvedAt === undefined) openRequests.add(callId);
     }
   }
-  return { turnId: record?.activeTurnId, openRequests };
+  return { turnId: record?.activeTurnId, openRequests, issued };
 }
 
 /**
@@ -72,8 +76,24 @@ export function normalizeClaudeEvents(
       }
       current.openRequests.clear();
     };
+    const activity = (): void => {
+      output.push({
+        type: 'activity',
+        sessionId,
+        ...(current.turnId === undefined ? {} : { turnId: current.turnId }),
+        timestamp,
+      });
+    };
     const request = (callId: string): void => {
       if (current.turnId === undefined || current.openRequests.has(callId)) return;
+      // Persistence keeps a bounded set of requests per session, resolved
+      // ones included, so a turn past the bound reports progress instead of
+      // a wait rather than taking the surface down.
+      if (current.issued >= MAX_INPUT_REQUESTS) {
+        activity();
+        return;
+      }
+      current.issued += 1;
       current.openRequests.add(callId);
       output.push({
         type: 'input-requested',
@@ -82,6 +102,11 @@ export function normalizeClaudeEvents(
         callId,
         timestamp,
       });
+    };
+    // Prompt notifications are supplementary: they only open a wait when no
+    // request from a permission, question, or elicitation hook is open.
+    const supplementaryRequest = (callId: string): void => {
+      if (current.openRequests.size === 0) request(callId);
     };
     const resolve = (callId: string): void => {
       if (current.turnId === undefined) return;
@@ -102,19 +127,12 @@ export function normalizeClaudeEvents(
         if (open.startsWith('notification:')) resolve(open);
       }
     };
-    const activity = (): void => {
-      output.push({
-        type: 'activity',
-        sessionId,
-        ...(current.turnId === undefined ? {} : { turnId: current.turnId }),
-        timestamp,
-      });
-    };
 
     switch (event.eventName) {
       case 'UserPromptSubmit': {
         current.turnId = `turn:${timestamp}`;
         current.openRequests.clear();
+        current.issued = 0;
         output.push({ type: 'turn-started', sessionId, turnId: current.turnId, timestamp });
         break;
       }
@@ -140,7 +158,7 @@ export function normalizeClaudeEvents(
           event.notificationType === 'permission_prompt' ||
           event.notificationType === 'elicitation_dialog'
         ) {
-          request(`notification:${timestamp}`);
+          supplementaryRequest(`notification:${timestamp}`);
         } else if (
           event.notificationType === 'elicitation_complete' ||
           event.notificationType === 'elicitation_response'

@@ -15,6 +15,7 @@ import {
   type HookJournalReadResult,
   type HookJournalTarget,
 } from '../hooks/hook-journal-reader';
+import { MAX_INPUT_REQUESTS } from '../../sessions/persistence';
 import { normalizeClaudeEvents } from './events';
 import {
   ClaudeJournalDiscovery,
@@ -27,7 +28,7 @@ export interface ClaudeMonitorOptions {
   appDataPath: string;
   /** Test injection. */
   reader?: Pick<HookJournalReader, 'read'>;
-  discovery?: Pick<ClaudeJournalDiscovery, 'list'>;
+  discovery?: Pick<ClaudeJournalDiscovery, 'list' | 'truncated'>;
 }
 
 /** A journal that could not be read safely; its session shows as unavailable. */
@@ -46,16 +47,15 @@ const COVERAGE_DIAGNOSTICS: ReadonlySet<HookJournalDiagnosticCode> = new Set([
   'possible-retention-gap',
   'cursor-truncated',
 ]);
-/** Every persisted session keeps at most this many open requests (persistence bound). */
-const MAX_PERSISTED_INPUT_REQUESTS = 128;
 /**
  * A record can expand into two lifecycle events (a resolution plus a
  * progress or completion event), and seeding a read can resolve every open
- * request of every target, so the reader page is sized to keep one read's
- * events under the coordinator's cap in the worst case.
+ * request of every target; the normalizer issues at most
+ * `MAX_INPUT_REQUESTS` requests per turn, so the reader page is sized to keep
+ * one read's events under the coordinator's cap in the worst case.
  */
 export const MAX_CLAUDE_RECORDS_PER_READ = Math.floor(
-  (MAX_RUNTIME_EVENTS_PER_READ - MAX_PERSISTED_INPUT_REQUESTS * MAX_RECENT_THREAD_LIMIT) / 2,
+  (MAX_RUNTIME_EVENTS_PER_READ - MAX_INPUT_REQUESTS * MAX_RECENT_THREAD_LIMIT) / 2,
 );
 
 function readerCursorKey(baseName: string): string {
@@ -77,7 +77,7 @@ export class ClaudeSurfaceMonitor implements ProviderSurfaceMonitor {
   readonly key: 'claude:desktop' | 'claude:cli';
   private readonly surface: Surface;
   private readonly reader: Pick<HookJournalReader, 'read'>;
-  private readonly discovery: Pick<ClaudeJournalDiscovery, 'list'>;
+  private readonly discovery: Pick<ClaudeJournalDiscovery, 'list' | 'truncated'>;
   private journals = new Map<string, ClaudeJournalSummary>();
   private unavailableSourceIds = new Set<string>();
   private started = false;
@@ -121,7 +121,13 @@ export class ClaudeSurfaceMonitor implements ProviderSurfaceMonitor {
     }
     this.journals = journals;
     this.unavailableSourceIds.clear();
-    return { complete: true, capturedAt: Date.now(), sources };
+    return {
+      complete: true,
+      capturedAt: Date.now(),
+      sources,
+      // More journals than the listing can stat means the newest may be missing.
+      ...(this.discovery.truncated ? { coverageIncomplete: true } : {}),
+    };
   }
 
   capture(sources: readonly RuntimeMonitorSource[]): readonly RuntimeMonitorSource[] {
@@ -170,7 +176,18 @@ export class ClaudeSurfaceMonitor implements ProviderSurfaceMonitor {
       }
       // `read-limit` is an ordinary budget stop followed by a continuation.
     }
-    const sessionEvents = normalizeClaudeEvents(result.events, request.sessions);
+    // A baseline exists only to land history idle and place the cursor, so
+    // it keeps the turn events that decide a session's final state and drops
+    // per-tool progress and waits; this keeps a first replay of full journals
+    // far under the coordinator's per-replay event bound. A wait that is
+    // already open at connect time shows as working until its next record.
+    const sessionEvents = normalizeClaudeEvents(result.events, request.sessions).filter(
+      (event) =>
+        !request.baseline ||
+        event.type === 'turn-started' ||
+        event.type === 'turn-completed' ||
+        event.type === 'turn-failed',
+    );
     const readIds = active.map((source) => source.id);
     const finished = result.nextTargetIndex === undefined;
     return {

@@ -843,4 +843,26 @@ describe('HookJournalReader', () => {
     expect(full.diagnostics.map((diagnostic) => diagnostic.code)).toContain('cursor-limit');
     expect(full.nextTargetIndex).toBe(0);
   });
+
+  it('honours a smaller record page and rejects invalid page sizes', async () => {
+    const root = await createIsolatedJournalRoot();
+    const journalTarget = createTarget();
+    await writeFile(getArchivePath(root, journalTarget, 1), serializeRecord().repeat(3));
+    await writeFile(getActivePath(root, journalTarget), serializeRecord().repeat(3));
+    const reader = new HookJournalReader({ appDataPath: root });
+
+    const first = await reader.read([journalTarget], {}, { maxRecords: 4 });
+    expect(first.events).toHaveLength(4);
+    expect(first.nextTargetIndex).toBe(0);
+    expect(first.diagnostics.map((diagnostic) => diagnostic.code)).toEqual(['read-limit']);
+    const second = await reader.read([journalTarget], first.cursors, { maxRecords: 4 });
+    expect(second.events).toHaveLength(2);
+    expect(second.nextTargetIndex).toBeUndefined();
+
+    for (const maxRecords of [0, 4_097, 1.5, -1]) {
+      await expect(reader.read([journalTarget], {}, { maxRecords })).rejects.toMatchObject({
+        code: 'invalid-options',
+      });
+    }
+  });
 });
