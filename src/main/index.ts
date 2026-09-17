@@ -36,6 +36,8 @@ import {
   type CodexDesktopMonitorOptions,
 } from './providers/codex/desktop-monitor';
 import { CodexCliMonitor, type CodexCliMonitorOptions } from './providers/codex/cli-monitor';
+import { ClaudeCliMonitor, ClaudeDesktopMonitor } from './providers/claude/surface-monitor';
+import { ClaudeJournalDiscovery } from './providers/claude/journal-discovery';
 
 const hasSingleInstanceLock = app.requestSingleInstanceLock();
 const TEST_KEYBOARD_ENTRY_HOOK = Symbol.for('agent-status-tiles.test.keyboard-entry');
@@ -244,12 +246,21 @@ if (!hasSingleInstanceLock) {
     });
     overlayController.setQualifyingSessionCount(qualifyingSessionCount(overlayState.sessions));
     const preserveFixtureOverlay = !app.isPackaged && overlayState.sessions.length > 0;
+    // Both Claude surfaces share one listing of the journal directory.
+    const claudeJournals = new ClaudeJournalDiscovery({ appDataPath: app.getPath('userData') });
     runtimeCoordinator = createRuntimeCoordinator({
       appDataPath: app.getPath('userData'),
       recentThreadLimit: preferences.recentThreadLimit,
       monitors: [
         new CodexDesktopMonitor(desktopMonitorOptions()),
         new CodexCliMonitor(cliMonitorOptions()),
+        // Claude surfaces run only once their partitions are enabled; the
+        // Settings row stays unavailable until the hook installer is wired.
+        new ClaudeDesktopMonitor({
+          appDataPath: app.getPath('userData'),
+          discovery: claudeJournals,
+        }),
+        new ClaudeCliMonitor({ appDataPath: app.getPath('userData'), discovery: claudeJournals }),
       ],
       onOverlayState: (state) => {
         if (preserveFixtureOverlay && state.sessions.length === 0) return;

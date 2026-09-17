@@ -32,7 +32,8 @@ const MAX_ID_BYTES = 256;
 const MAX_SESSION_ID_BYTES = MAX_ID_BYTES + 'claude:'.length;
 const MAX_TITLE_BYTES = 256;
 const MAX_SESSIONS = 1024;
-const MAX_INPUT_REQUESTS = 128;
+/** Open and resolved requests kept per session; shared with the Claude normalizer. */
+export const MAX_INPUT_REQUESTS = 128;
 const MAX_CURSORS = 512;
 // The checkpoint retains at most 1,024 canonical IDs across all four surfaces.
 // Each partition is independently bounded by the same limit for malformed input.

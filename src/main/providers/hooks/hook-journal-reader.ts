@@ -46,7 +46,14 @@ const NOTIFICATION_TYPES = new Set([
   'elicitation_response',
 ]);
 const TOOL_NAMES = new Set(['AskUserQuestion', 'request_user_input']);
-const HOSTS = new Set(['claude-desktop', 'terminal', 'iterm2', 'ghostty', 'warp']);
+/** Launching applications the helper records; shared with journal discovery. */
+export const HOOK_JOURNAL_HOSTS: ReadonlySet<string> = new Set([
+  'claude-desktop',
+  'terminal',
+  'iterm2',
+  'ghostty',
+  'warp',
+]);
 const ENTRYPOINTS = new Set(['claude-desktop', 'cli']);
 const SESSION_SOURCES = new Set(['startup', 'resume', 'clear', 'compact', 'fork']);
 const END_REASONS = new Set(['clear', 'resume', 'logout', 'prompt_input_exit', 'other']);
@@ -192,7 +199,7 @@ function hasControlCharacters(value: string): boolean {
   return /\p{Cc}/u.test(value);
 }
 
-function isSafeString(value: unknown, maxBytes: number): value is string {
+export function isSafeString(value: unknown, maxBytes: number): value is string {
   return (
     typeof value === 'string' &&
     value.length > 0 &&
@@ -338,7 +345,8 @@ function createEventFromRecord(
   const typedNotificationType = notificationType as HookJournalEvent['notificationType'];
 
   const host = getOptionalString(value, 'host', 64);
-  if (Object.hasOwn(value, 'host') && (host === undefined || !HOSTS.has(host))) return undefined;
+  if (Object.hasOwn(value, 'host') && (host === undefined || !HOOK_JOURNAL_HOSTS.has(host)))
+    return undefined;
   const entrypoint = getOptionalString(value, 'entrypoint', 64);
   if (
     Object.hasOwn(value, 'entrypoint') &&
@@ -413,7 +421,7 @@ export class HookJournalReader {
   async read(
     targets: readonly HookJournalTarget[],
     cursors: FileCursorMap = {},
-    options: { startTargetIndex?: number } = {},
+    options: { startTargetIndex?: number; maxRecords?: number } = {},
   ): Promise<HookJournalReadResult> {
     this.validateTargets(targets);
     this.validateCursorInput(cursors);
@@ -423,6 +431,12 @@ export class HookJournalReader {
       startTargetIndex < 0 ||
       startTargetIndex > targets.length
     ) {
+      throw new HookJournalReaderError('invalid-options');
+    }
+    // A caller that expands records into several events may need a smaller
+    // page than the reader's own bound.
+    const maxRecords = options.maxRecords ?? MAX_RECORDS;
+    if (!Number.isSafeInteger(maxRecords) || maxRecords < 1 || maxRecords > MAX_RECORDS) {
       throw new HookJournalReaderError('invalid-options');
     }
 
@@ -449,7 +463,7 @@ export class HookJournalReader {
         target,
         previous,
         diagnostics,
-        MAX_RECORDS - totalRecords,
+        maxRecords - totalRecords,
         MAX_TOTAL_BYTES - totalBytes,
       );
       totalBytes += result.bytesRead;
@@ -457,7 +471,7 @@ export class HookJournalReader {
       events.push(...result.events);
       if (result.cursor !== undefined) updatedCursors[key] = result.cursor;
       const isBounded =
-        result.isBounded || totalBytes >= MAX_TOTAL_BYTES || totalRecords >= MAX_RECORDS;
+        result.isBounded || totalBytes >= MAX_TOTAL_BYTES || totalRecords >= maxRecords;
       if (isBounded) addDiagnostic(diagnostics, 'read-limit', target);
       if (result.hasMore || isBounded) {
         nextTargetIndex = result.hasMore ? targetIndex : targetIndex + 1;
