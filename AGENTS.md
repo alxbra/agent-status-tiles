@@ -11,19 +11,23 @@ Do not add application scaffolding as part of the repository bootstrap.
 ## UI contract
 
 The overlay has a strict visual contract; it is not a redesign invitation.
-Keep the exact status palette and meanings in `MVP_PLAN.md`. In particular:
+Keep the exact status palette and meanings in `MVP_PLAN.md`. The user replaced
+the rounded-square tile strip with a document-tab dock on 2026-09-17; the
+approved mockup lives in `docs/mockups/tab-dock.html`. In particular:
 
-- Collapsed tiles are visibly square rounded squares sized **10 × 10 CSS px**
-  with a **3 px radius**, 24 px center spacing, and 12 px from the usable right
-  edge. They contain color only and have a 24 × 24 px hit target.
-- Dock magnification is calculated from stable, unmagnified slot coordinates.
-  The hovered tile reaches 40 × 40 px, expanded corners reach an 8 px radius,
-  the right edge stays anchored, and visible surfaces keep at least 6 px between
-  them. Tiles remain rounded squares throughout; never turn them into circles
-  or pills.
-- Expanded tiles contain only one provider/lab icon and one status icon. Use a
-  single-line stock tooltip for the session title; do not add permanent labels,
-  legends, decorative copy, or prompt-derived titles.
+- Each session is one document-style tab anchored to the usable right edge:
+  **28 px tall**, **4 px apart**, an **8 px radius** on the left corners only,
+  filled with the status color, and vertically centered as a stack.
+- Folded tabs show only a **12 px** colored sliver with a 24 px wide native
+  hit target. A pointer within 48 px of the edge slides every tab out to
+  **34 px** so the lab icon shows; hovering or focusing one tab slides it fully
+  out. The slide is one transform transition of **140 ms** with an ease-out
+  curve and an 8 ms per-tab stagger; the hovered tab never waits.
+- A tab contains, in order, one lab icon (OpenAI or Anthropic), the session
+  title, and one lucide status icon. Nothing else: no legends, badges, or
+  decorative copy. Titles truncate at 220 px, and the stock tooltip appears
+  only for truncated titles.
+- No frosted backdrop or native vibrancy window sits behind the tabs.
 - Settings use stock shadcn/ui components and standard styling. Keep one
   concise label per setting and omit redundant descriptions, cards, badges,
   sublines, and Save buttons. Add only actionable error text when needed.

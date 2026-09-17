@@ -15,11 +15,6 @@ body[data-fixture-theme='dark'] {
   background: #242424;
 }
 
-#fixture-root {
-  display: flex;
-  justify-content: flex-end;
-}
-
 #fixture-root > .status-tiles {
   height: var(--fixture-height, 480px);
   margin: 0;

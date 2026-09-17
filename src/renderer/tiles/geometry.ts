@@ -1,34 +1,29 @@
 import type { SessionSnapshot } from '../../shared/session';
-import {
-  DEFAULT_STRIP_HEIGHT,
-  DEFAULT_STRIP_WIDTH,
-  EXPANDED_TILE_SIZE,
-  RIGHT_EDGE_INSET,
-} from '../../shared/dock-backdrop';
-export {
-  DEFAULT_STRIP_HEIGHT,
-  DEFAULT_STRIP_WIDTH,
-  DOCK_BACKDROP_PADDING,
-  EXPANDED_TILE_SIZE,
-  RIGHT_EDGE_INSET,
-  dockBackdropBounds,
-} from '../../shared/dock-backdrop';
-export type { DockBackdropBounds } from '../../shared/dock-backdrop';
 
-export const TILE_SIZE = 10;
-export const TILE_RADIUS = 3;
-export const EXPANDED_TILE_RADIUS = 8;
-export const SLOT_SPACING = 24;
-export const TILE_HIT_SIZE = 24;
-export const MIN_SURFACE_GAP = 6;
-export const MAGNIFICATION_RADIUS_SLOTS = 2;
-export const MAX_VISIBLE_TILES = 12;
-export const TILE_CONTENT_SIZE = 38;
-
-export interface TilePoint {
-  x: number;
-  y: number;
-}
+/** Document-style tabs tucked into the right screen edge. Sizes are CSS px. */
+export const TAB_HEIGHT = 28;
+export const TAB_GAP = 4;
+export const TAB_RADIUS = 8;
+export const TAB_PADDING_START = 10;
+export const TAB_PADDING_END = 12;
+export const TAB_ICON_SIZE = 14;
+export const TAB_ICON_GAP = 10;
+export const TAB_LABEL_MAX_WIDTH = 220;
+/** Folded in: only a colored sliver of each tab stays on screen. */
+export const TAB_PEEK_IDLE = 12;
+/** Dock hovered: the lab icon and its gutter show; the label starts exactly at the fold. */
+export const TAB_PEEK_DOCK = TAB_PADDING_START + TAB_ICON_SIZE + TAB_ICON_GAP;
+/** The folded sliver keeps a wider native hit target than its visible width. */
+export const TAB_HIT_MIN_WIDTH = 24;
+/** Pointer distance from the right edge that pulls every tab out to the icon depth. */
+export const DOCK_HOVER_WIDTH = 48;
+/** Vertical breathing room around the stack; also hosts the overflow indicators. */
+export const DOCK_PADDING = 14;
+export const MAX_VISIBLE_TABS = 12;
+export const TAB_MOTION_MS = 140;
+export const TAB_STAGGER_MS = 8;
+export const DEFAULT_STRIP_WIDTH = 360;
+export const DEFAULT_STRIP_HEIGHT = 480;
 
 export interface TileHitRegion {
   x: number;
@@ -38,31 +33,27 @@ export interface TileHitRegion {
   sessionId: string;
 }
 
-export interface TileGeometry {
+export interface TabSlot {
   index: number;
   sessionId: string;
-  /** Stable unmagnified slot coordinate used by pointer influence math. */
-  stableCenterY: number;
-  centerY: number;
-  size: number;
-  radius: number;
-  x: number;
   y: number;
-  influence: number;
+  /** Folded-state target: the sliver plus invisible padding toward the desktop. */
   hitRegion: TileHitRegion;
 }
 
-export interface TileLayoutOptions {
+export interface TabLayoutOptions {
   width?: number;
   height: number;
-  pointer?: TilePoint | null;
   scrollOffset?: number;
   maxVisible?: number;
 }
 
-export interface TileLayout {
-  tiles: readonly TileGeometry[];
+export interface TabLayout {
+  slots: readonly TabSlot[];
   hitRegions: readonly TileHitRegion[];
+  /** Top of the first slot and bottom of the last slot. */
+  top: number;
+  bottom: number;
   visibleStart: number;
   visibleCount: number;
   maxStart: number;
@@ -70,10 +61,12 @@ export interface TileLayout {
   hasNext: boolean;
 }
 
-function emptyLayout(): TileLayout {
+function emptyLayout(): TabLayout {
   return {
-    tiles: [],
+    slots: [],
     hitRegions: [],
+    top: 0,
+    bottom: 0,
     visibleStart: 0,
     visibleCount: 0,
     maxStart: 0,
@@ -91,197 +84,78 @@ function finiteOr(value: number | undefined, fallback: number): number {
 }
 
 export function normalizeStripWidth(width?: number): number {
-  return Math.max(DEFAULT_STRIP_WIDTH, finiteOr(width, DEFAULT_STRIP_WIDTH));
+  return Math.max(TAB_HIT_MIN_WIDTH, finiteOr(width, DEFAULT_STRIP_WIDTH));
 }
 
-/** Smoothstep falloff keeps adjacent tiles calm while retaining a two-slot influence radius. */
-export function magnificationInfluence(pointerY: number | undefined, slotCenterY: number): number {
-  if (pointerY === undefined || !Number.isFinite(pointerY)) return 0;
-
-  const normalizedDistance = Math.abs(pointerY - slotCenterY) / SLOT_SPACING;
-  const progress = clamp(1 - normalizedDistance / MAGNIFICATION_RADIUS_SLOTS, 0, 1);
-  return progress * progress * (3 - 2 * progress);
-}
-
-export function tileSizeForInfluence(influence: number): number {
-  return TILE_SIZE + (EXPANDED_TILE_SIZE - TILE_SIZE) * clamp(influence, 0, 1);
-}
-
-export function tileRadiusForInfluence(influence: number): number {
-  return TILE_RADIUS + (EXPANDED_TILE_RADIUS - TILE_RADIUS) * clamp(influence, 0, 1);
-}
-
-function packSurfaceCenters(
-  desiredCenters: readonly number[],
-  sizes: readonly number[],
-): readonly number[] {
-  if (desiredCenters.length === 0) return [];
-  const centers = [...desiredCenters];
-  for (let index = 1; index < centers.length; index += 1) {
-    const previousHitSize = Math.max(TILE_HIT_SIZE, sizes[index - 1]);
-    const hitSize = Math.max(TILE_HIT_SIZE, sizes[index]);
-    const surfaceMinimum = (sizes[index - 1] + sizes[index]) / 2 + MIN_SURFACE_GAP;
-    const hitMinimum = (previousHitSize + hitSize) / 2;
-    const minimum = centers[index - 1] + Math.max(surfaceMinimum, hitMinimum);
-    centers[index] = Math.max(centers[index], minimum);
-  }
-  return centers;
-}
-
-function calculateMinimumHeightForSlots(count: number): number {
-  const slotCount = Math.max(0, Math.floor(count));
-  if (slotCount === 0) return 0;
-
-  const centers = Array.from({ length: slotCount }, (_, index) => index * SLOT_SPACING);
-  const samplePoints = new Set<number>();
-  const firstCenter = centers[0];
-  const lastCenter = centers.at(-1)!;
-  for (let point = firstCenter - SLOT_SPACING; point <= lastCenter + SLOT_SPACING; point += 1) {
-    samplePoints.add(point);
-  }
-  centers.forEach((center) => {
-    samplePoints.add(center);
-    samplePoints.add(center + SLOT_SPACING / 2);
-  });
-
-  let required = (slotCount - 1) * SLOT_SPACING + TILE_HIT_SIZE;
-  for (const pointerY of samplePoints) {
-    const sizes = centers.map((center) =>
-      tileSizeForInfluence(magnificationInfluence(pointerY, center)),
-    );
-    const packedCenters = packSurfaceCenters(centers, sizes);
-    const top = Math.min(
-      ...packedCenters.map((center, index) => center - Math.max(TILE_HIT_SIZE, sizes[index]) / 2),
-    );
-    const bottom = Math.max(
-      ...packedCenters.map((center, index) => center + Math.max(TILE_HIT_SIZE, sizes[index]) / 2),
-    );
-    required = Math.max(required, bottom - top);
-  }
-  return required;
-}
-
-const MINIMUM_HEIGHT_BY_SLOTS = Array.from({ length: MAX_VISIBLE_TILES + 1 }, (_, count) =>
-  calculateMinimumHeightForSlots(count),
-);
-
-/**
- * Returns the vertical space needed for a given number of slots, including
- * 24px hit targets and the worst two-slot magnification neighborhood. This
- * prevents a short work area from producing clipped expanded surfaces.
- */
-export function minimumHeightForSlots(count: number): number {
+export function stackHeight(count: number): number {
   const slotCount = Number.isFinite(count) ? Math.max(0, Math.floor(count)) : 0;
   if (slotCount === 0) return 0;
-  return slotCount <= MAX_VISIBLE_TILES
-    ? MINIMUM_HEIGHT_BY_SLOTS[slotCount]!
-    : calculateMinimumHeightForSlots(slotCount);
+  return slotCount * TAB_HEIGHT + (slotCount - 1) * TAB_GAP;
 }
 
-export function visibleSlotCount(height: number, requested = MAX_VISIBLE_TILES): number {
-  const usableHeight = Math.max(0, finiteOr(height, DEFAULT_STRIP_HEIGHT));
-  const requestedSlots = Math.min(MAX_VISIBLE_TILES, Math.max(0, Math.floor(requested)));
-  for (let count = requestedSlots; count >= 1; count -= 1) {
-    if (minimumHeightForSlots(count) <= usableHeight) return count;
+/** Vertical space needed for a slot count, including dock padding for overflow cues. */
+export function minimumHeightForSlots(count: number): number {
+  const height = stackHeight(count);
+  return height === 0 ? 0 : height + DOCK_PADDING * 2;
+}
+
+export function visibleSlotCount(height: number, requested = MAX_VISIBLE_TABS): number {
+  const usableHeight = Math.max(0, finiteOr(height, DEFAULT_STRIP_HEIGHT)) - DOCK_PADDING * 2;
+  const requestedSlots = Math.min(MAX_VISIBLE_TABS, Math.max(0, Math.floor(requested)));
+  const fitting = Math.floor((usableHeight + TAB_GAP) / (TAB_HEIGHT + TAB_GAP));
+  return clamp(Math.min(requestedSlots, fitting), 0, MAX_VISIBLE_TABS);
+}
+
+/** Width of the on-screen part of a tab in each reveal state. */
+export function revealedTabWidth(state: 'folded' | 'dock' | 'extended', fullWidth: number): number {
+  switch (state) {
+    case 'folded':
+      return Math.min(TAB_PEEK_IDLE, fullWidth);
+    case 'dock':
+      return Math.min(TAB_PEEK_DOCK, fullWidth);
+    case 'extended':
+      return fullWidth;
   }
-  return 0;
 }
 
-function unmagnifiedCenters(height: number, count: number): readonly number[] {
-  const center = finiteOr(height, DEFAULT_STRIP_HEIGHT) / 2;
-  const first = center - ((count - 1) * SLOT_SPACING) / 2;
-  return Array.from({ length: count }, (_, index) => first + index * SLOT_SPACING);
-}
-
-/**
- * Magnification is calculated from these stable slot coordinates. Packing only
- * keeps visible surfaces apart; it never feeds the resulting positions back
- * into the pointer calculation, avoiding hover oscillation.
- */
-function packCenters(
-  desiredCenters: readonly number[],
-  sizes: readonly number[],
-  height: number,
-): readonly number[] {
-  if (desiredCenters.length === 0) return [];
-
-  const centers = [...packSurfaceCenters(desiredCenters, sizes)];
-
-  const top = centers[0] - Math.max(TILE_HIT_SIZE, sizes[0]) / 2;
-  const bottom = centers.at(-1)! + Math.max(TILE_HIT_SIZE, sizes.at(-1)!) / 2;
-  const minimumShift = -top;
-  const maximumShift = height - bottom;
-  const shift =
-    minimumShift <= maximumShift
-      ? clamp(0, minimumShift, maximumShift)
-      : (minimumShift + maximumShift) / 2;
-
-  return centers.map((center) => center + shift);
-}
-
-function hitRegionForTile(
-  tile: Pick<TileGeometry, 'x' | 'size' | 'centerY' | 'sessionId'>,
-): TileHitRegion {
-  const hitSize = Math.max(TILE_HIT_SIZE, tile.size);
-  return {
-    x: tile.x + tile.size / 2 - hitSize / 2,
-    y: tile.centerY - hitSize / 2,
-    width: hitSize,
-    height: hitSize,
-    sessionId: tile.sessionId,
-  };
-}
-
-export function layoutTiles(
+export function layoutTabs(
   sessions: readonly SessionSnapshot[],
-  options: TileLayoutOptions,
-): TileLayout {
+  options: TabLayoutOptions,
+): TabLayout {
   const height = Math.max(0, finiteOr(options.height, DEFAULT_STRIP_HEIGHT));
   const width = normalizeStripWidth(options.width);
   const visibleCount = Math.min(
     sessions.length,
-    visibleSlotCount(height, finiteOr(options.maxVisible, MAX_VISIBLE_TILES)),
+    visibleSlotCount(height, finiteOr(options.maxVisible, MAX_VISIBLE_TABS)),
   );
   if (visibleCount === 0) return emptyLayout();
   const maxStart = Math.max(0, sessions.length - visibleCount);
   const visibleStart = clamp(Math.round(finiteOr(options.scrollOffset, 0)), 0, maxStart);
   const visibleSessions = sessions.slice(visibleStart, visibleStart + visibleCount);
-  const stableCenters = unmagnifiedCenters(height, visibleSessions.length);
-  const pointerY = options.pointer?.y;
-  const influences = stableCenters.map((center) => magnificationInfluence(pointerY, center));
-  const sizes = influences.map(tileSizeForInfluence);
-  const centers = packCenters(stableCenters, sizes, height);
+  const total = stackHeight(visibleSessions.length);
+  const top = Math.round((height - total) / 2);
 
-  const tiles = visibleSessions.map((session, index) => {
-    const size = sizes[index];
-    const influence = influences[index];
-    const centerY = centers[index];
-    const x = width - RIGHT_EDGE_INSET - size;
-    const tile: TileGeometry = {
+  const slots = visibleSessions.map((session, index): TabSlot => {
+    const y = top + index * (TAB_HEIGHT + TAB_GAP);
+    return {
       index: visibleStart + index,
       sessionId: session.id,
-      stableCenterY: stableCenters[index],
-      centerY,
-      size,
-      radius: tileRadiusForInfluence(influence),
-      x,
-      y: centerY - size / 2,
-      influence,
+      y,
       hitRegion: {
-        x: 0,
-        y: 0,
-        width: 0,
-        height: 0,
+        x: width - TAB_HIT_MIN_WIDTH,
+        y,
+        width: TAB_HIT_MIN_WIDTH,
+        height: TAB_HEIGHT,
         sessionId: session.id,
       },
     };
-    tile.hitRegion = hitRegionForTile(tile);
-    return tile;
   });
 
   return {
-    tiles,
-    hitRegions: tiles.map((tile) => tile.hitRegion),
+    slots,
+    hitRegions: slots.map((slot) => slot.hitRegion),
+    top,
+    bottom: top + total,
     visibleStart,
     visibleCount,
     maxStart,
@@ -293,16 +167,39 @@ export function layoutTiles(
 export function sessionHitRegions(
   sessions: readonly SessionSnapshot[],
   height = DEFAULT_STRIP_HEIGHT,
+  width = DEFAULT_STRIP_WIDTH,
 ): readonly TileHitRegion[] {
-  return layoutTiles(sessions, { height }).hitRegions;
+  return layoutTabs(sessions, { height, width }).hitRegions;
 }
 
-export function surfacesHaveMinimumGap(tiles: readonly TileGeometry[]): boolean {
-  const sorted = [...tiles].sort((left, right) => left.centerY - right.centerY);
-  return sorted.every((tile, index) => {
-    const previous = sorted[index - 1];
-    return (
-      previous === undefined || tile.y >= previous.y + previous.size + MIN_SURFACE_GAP - 0.0001
-    );
-  });
+/**
+ * Converts a rendered tab rectangle (root-local, possibly translated past the
+ * right edge) into its native hit target: clipped to the strip and never
+ * narrower than the folded minimum so the sliver stays easy to reach.
+ */
+export function tabHitRegion(
+  rendered: { left: number; top: number; width: number; height: number },
+  stripWidth: number,
+  sessionId: string,
+): TileHitRegion | null {
+  const width = normalizeStripWidth(stripWidth);
+  if (
+    !Number.isFinite(rendered.left) ||
+    !Number.isFinite(rendered.top) ||
+    !Number.isFinite(rendered.width) ||
+    !Number.isFinite(rendered.height) ||
+    rendered.height <= 0
+  ) {
+    return null;
+  }
+  const right = Math.min(width, rendered.left + rendered.width);
+  const left = Math.max(0, Math.min(rendered.left, right - TAB_HIT_MIN_WIDTH));
+  if (right <= left) return null;
+  return {
+    x: left,
+    y: rendered.top,
+    width: right - left,
+    height: rendered.height,
+    sessionId,
+  };
 }

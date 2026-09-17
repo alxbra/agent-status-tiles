@@ -1,109 +1,101 @@
 .status-tiles {
+  --status-tiles-tab-height: 28px;
+  --status-tiles-tab-radius: 8px;
+  --status-tiles-peek-idle: 12px;
+  --status-tiles-peek-dock: 34px;
+  --status-tiles-motion: 140ms;
+  --status-tiles-stagger: 8ms;
+  --status-tiles-ease: cubic-bezier(0.2, 0, 0, 1);
+  --status-tiles-glyph: #111315;
+
   position: relative;
+  width: 100%;
   height: 100%;
-  margin-left: auto;
   isolation: isolate;
   pointer-events: none;
   user-select: none;
 }
 
-.status-tiles__backdrop {
-  position: absolute;
-  z-index: 0;
-  box-sizing: border-box;
-  border: 1px solid rgb(255 255 255 / 55%);
-  border-radius: 14px;
-  background: rgb(147 153 164 / 32%);
-  box-shadow:
-    0 7px 24px rgb(17 19 21 / 16%),
-    inset 0 1px rgb(255 255 255 / 38%);
-  backdrop-filter: blur(20px) saturate(170%);
-  -webkit-backdrop-filter: blur(20px) saturate(170%);
-  pointer-events: none;
-  transition:
-    top 160ms ease,
-    height 160ms ease;
-}
-
-.status-tiles--dark .status-tiles__backdrop {
-  border-color: rgb(255 255 255 / 22%);
-  background: rgb(30 34 40 / 62%);
-  box-shadow:
-    0 9px 28px rgb(0 0 0 / 30%),
-    inset 0 1px rgb(255 255 255 / 12%);
-}
-
+/* Each tab is right-anchored and slid past the strip edge; the transform
+   alone drives folded, dock-hovered, and extended states. */
 .status-tiles__tile {
   position: absolute;
   z-index: 1;
-  display: block;
+  right: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: var(--status-tiles-tab-height);
+  margin: 0;
+  padding: 0 12px 0 10px;
   border: 0;
-  padding: 0;
+  border-radius: var(--status-tiles-tab-radius) 0 0 var(--status-tiles-tab-radius);
   box-sizing: border-box;
-  background: transparent;
+  background: var(--status-tiles-color, #f1f1ed);
+  color: var(--status-tiles-glyph);
+  font:
+    500 12px/1 -apple-system,
+    BlinkMacSystemFont,
+    'SF Pro Text',
+    'Helvetica Neue',
+    sans-serif;
+  white-space: nowrap;
   cursor: default;
   pointer-events: auto;
   overflow: visible;
+  box-shadow:
+    0 1px 2px rgb(0 0 0 / 14%),
+    0 4px 12px rgb(0 0 0 / 14%),
+    inset 0 1px 0 rgb(255 255 255 / 55%),
+    inset 1px 0 0 rgb(255 255 255 / 35%);
+  transform: translateX(calc(100% - var(--status-tiles-peek-idle)));
   transition:
-    left 160ms ease,
-    top 160ms ease,
-    width 160ms ease,
-    height 160ms ease;
+    transform var(--status-tiles-motion) var(--status-tiles-ease),
+    top var(--status-tiles-motion) var(--status-tiles-ease),
+    box-shadow var(--status-tiles-motion) var(--status-tiles-ease);
+  transition-delay: calc(var(--status-tiles-index, 0) * var(--status-tiles-stagger)), 0ms, 0ms;
+}
+
+.status-tiles--active .status-tiles__tile {
+  transform: translateX(calc(100% - var(--status-tiles-peek-dock)));
+}
+
+.status-tiles__tile[data-extended='true'] {
+  transform: translateX(0);
+  transition-delay: 0ms;
+  box-shadow:
+    0 2px 4px rgb(0 0 0 / 16%),
+    0 10px 24px rgb(0 0 0 / 20%),
+    inset 0 1px 0 rgb(255 255 255 / 55%),
+    inset 1px 0 0 rgb(255 255 255 / 35%);
 }
 
 .status-tiles__tile:focus-visible {
-  outline: 2px solid #111315;
-  outline-offset: 3px;
+  outline: 2px solid var(--status-tiles-glyph);
+  outline-offset: 2px;
 }
 
 .status-tiles__tile:focus:not(:focus-visible) {
   outline: none;
 }
 
-.status-tiles__tile-surface {
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  display: grid;
-  place-items: center;
-  transform: translate(-50%, -50%);
-  container-type: inline-size;
-  box-sizing: border-box;
-  color: #111315;
-  pointer-events: none;
-  transition:
-    top 160ms ease,
-    width 160ms ease,
-    height 160ms ease,
-    border-radius 160ms ease,
-    background-color 160ms ease;
-}
-
 .status-tiles__provider-icon,
 .status-tiles__status-icon {
-  position: absolute;
+  flex: none;
   width: 14px;
   height: 14px;
-  opacity: 0;
   pointer-events: none;
-  visibility: hidden;
-  transition: opacity 160ms ease;
-}
-
-.status-tiles__provider-icon {
-  left: 5px;
 }
 
 .status-tiles__status-icon {
-  right: 5px;
+  margin-left: 2px;
 }
 
-@container (min-width: 38px) {
-  .status-tiles__provider-icon,
-  .status-tiles__status-icon {
-    visibility: visible;
-    opacity: 1;
-  }
+.status-tiles__label {
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  pointer-events: none;
 }
 
 .status-tiles__working-glyph {
@@ -111,10 +103,27 @@
   transform-origin: center;
 }
 
+/* A folded working tab breathes so activity reads without hovering. */
+.status-tiles__tile[data-status='working']::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: linear-gradient(90deg, rgb(255 255 255 / 0%), rgb(255 255 255 / 55%));
+  opacity: 0;
+  animation: status-tiles-breathe 1.8s ease-in-out infinite;
+  pointer-events: none;
+}
+
+.status-tiles--active .status-tiles__tile[data-status='working']::after {
+  animation: none;
+  opacity: 0;
+}
+
 .status-tiles__indicator {
   position: absolute;
   z-index: 2;
-  right: 10px;
+  right: 2px;
   color: #111315;
   font-size: 8px;
   line-height: 1;
@@ -127,27 +136,34 @@
 
 .status-tiles__tooltip {
   box-sizing: border-box;
-  /* Reserve the right-edge tile target and collision gap inside the host viewport. */
-  max-width: calc(100vw - 4.5rem);
+  max-width: calc(100vw - 1rem);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.status-tiles--reduced-motion .status-tiles__tile,
-.status-tiles--reduced-motion .status-tiles__backdrop,
-.status-tiles--reduced-motion .status-tiles__tile-surface,
-.status-tiles--reduced-motion .status-tiles__provider-icon,
-.status-tiles--reduced-motion .status-tiles__status-icon {
+.status-tiles--reduced-motion .status-tiles__tile {
   transition: none;
 }
 
-.status-tiles--reduced-motion .status-tiles__working-glyph {
+.status-tiles--reduced-motion .status-tiles__working-glyph,
+.status-tiles--reduced-motion .status-tiles__tile[data-status='working']::after {
   animation: none;
 }
 
 @keyframes status-tiles-working {
   to {
     transform: rotate(360deg);
+  }
+}
+
+@keyframes status-tiles-breathe {
+  0%,
+  100% {
+    opacity: 0;
+  }
+
+  50% {
+    opacity: 1;
   }
 }

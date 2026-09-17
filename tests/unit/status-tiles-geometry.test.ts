@@ -3,14 +3,21 @@ import { describe, expect, it } from 'vitest';
 import type { SessionSnapshot } from '../../src/shared/session';
 import {
   DEFAULT_STRIP_WIDTH,
-  dockBackdropBounds,
-  layoutTiles,
+  DOCK_PADDING,
+  layoutTabs,
+  MAX_VISIBLE_TABS,
   minimumHeightForSlots,
   normalizeStripWidth,
-  surfacesHaveMinimumGap,
-  TILE_HIT_SIZE,
-  TILE_RADIUS,
-  TILE_SIZE,
+  revealedTabWidth,
+  TAB_GAP,
+  TAB_HEIGHT,
+  TAB_HIT_MIN_WIDTH,
+  TAB_ICON_GAP,
+  TAB_ICON_SIZE,
+  TAB_PADDING_START,
+  TAB_PEEK_DOCK,
+  TAB_PEEK_IDLE,
+  tabHitRegion,
   visibleSlotCount,
 } from '../../src/renderer/tiles';
 
@@ -33,7 +40,7 @@ function sessions(count: number): readonly SessionSnapshot[] {
   return Array.from({ length: count }, (_, index) => session(`codex:session-${index}`));
 }
 
-function expectRegionsInside(layout: ReturnType<typeof layoutTiles>, height: number): void {
+function expectRegionsInside(layout: ReturnType<typeof layoutTabs>, height: number): void {
   for (const region of layout.hitRegions) {
     expect(region.x).toBeGreaterThanOrEqual(0);
     expect(region.y).toBeGreaterThanOrEqual(0);
@@ -42,7 +49,7 @@ function expectRegionsInside(layout: ReturnType<typeof layoutTiles>, height: num
   }
 }
 
-function expectHitRegionsDoNotOverlap(layout: ReturnType<typeof layoutTiles>): void {
+function expectHitRegionsDoNotOverlap(layout: ReturnType<typeof layoutTabs>): void {
   const regions = [...layout.hitRegions].sort((left, right) => left.y - right.y);
   for (let index = 1; index < regions.length; index += 1) {
     expect(regions[index]!.y).toBeGreaterThanOrEqual(
@@ -51,133 +58,112 @@ function expectHitRegionsDoNotOverlap(layout: ReturnType<typeof layoutTiles>): v
   }
 }
 
-describe('status tile geometry', () => {
-  it('normalizes narrow and non-finite strip widths once at the minimum', () => {
-    expect(normalizeStripWidth(72)).toBe(DEFAULT_STRIP_WIDTH);
+describe('tab dock geometry', () => {
+  it('normalizes non-finite and too-narrow strip widths', () => {
     expect(normalizeStripWidth(Number.NaN)).toBe(DEFAULT_STRIP_WIDTH);
     expect(normalizeStripWidth(Number.POSITIVE_INFINITY)).toBe(DEFAULT_STRIP_WIDTH);
-    expect(normalizeStripWidth(120)).toBe(120);
+    expect(normalizeStripWidth(10)).toBe(TAB_HIT_MIN_WIDTH);
+    expect(normalizeStripWidth(500)).toBe(500);
   });
 
-  it('keeps collapsed tiles square, colored-only, and anchored to the right edge', () => {
-    const layout = layoutTiles(sessions(1), { width: DEFAULT_STRIP_WIDTH, height: 480 });
-    const tile = layout.tiles[0]!;
+  it('reveals a colored sliver, then the lab icon, then the whole tab', () => {
+    expect(TAB_PEEK_IDLE).toBe(12);
+    expect(TAB_PEEK_DOCK).toBe(TAB_PADDING_START + TAB_ICON_SIZE + TAB_ICON_GAP);
+    expect(revealedTabWidth('folded', 290)).toBe(TAB_PEEK_IDLE);
+    expect(revealedTabWidth('dock', 290)).toBe(TAB_PEEK_DOCK);
+    expect(revealedTabWidth('extended', 290)).toBe(290);
+    expect(revealedTabWidth('dock', 20)).toBe(20);
+  });
 
-    expect(tile.size).toBe(TILE_SIZE);
-    expect(tile.radius).toBe(TILE_RADIUS);
-    expect(tile.x + tile.size).toBe(DEFAULT_STRIP_WIDTH - 12);
-    expect(tile.hitRegion.width).toBe(TILE_HIT_SIZE);
-    expect(tile.hitRegion.height).toBe(TILE_HIT_SIZE);
+  it('anchors a folded tab to the right edge with a wider native hit target', () => {
+    const layout = layoutTabs(sessions(1), { width: DEFAULT_STRIP_WIDTH, height: 480 });
+    const slot = layout.slots[0]!;
+
+    expect(slot.y).toBe(226);
+    expect(slot.hitRegion).toEqual({
+      x: DEFAULT_STRIP_WIDTH - TAB_HIT_MIN_WIDTH,
+      y: 226,
+      width: TAB_HIT_MIN_WIDTH,
+      height: TAB_HEIGHT,
+      sessionId: 'codex:session-0',
+    });
+    expect(layout.top).toBe(226);
+    expect(layout.bottom).toBe(226 + TAB_HEIGHT);
     expectRegionsInside(layout, 480);
   });
 
-  it('bounds the decorative dock behind visible targets without changing their hit regions', () => {
-    const empty = layoutTiles([], { height: 480 });
-    expect(dockBackdropBounds(empty.hitRegions, DEFAULT_STRIP_WIDTH, 480)).toBeNull();
+  it('centers the stack and keeps a fixed gap between tabs', () => {
+    const layout = layoutTabs(sessions(5), { height: 480 });
+    const top = Math.round((480 - (5 * TAB_HEIGHT + 4 * TAB_GAP)) / 2);
 
-    const collapsed = layoutTiles(sessions(1), { height: 480 });
-    const originalHitRegions = collapsed.hitRegions.map((region) => ({ ...region }));
-    const collapsedBackdrop = dockBackdropBounds(collapsed.hitRegions, DEFAULT_STRIP_WIDTH, 480);
-    expect(collapsedBackdrop).toEqual({ x: 28, y: 220, width: 56, height: 40 });
-    expect(collapsed.hitRegions).toEqual(originalHitRegions);
-
-    const expanded = layoutTiles(sessions(1), {
-      height: 480,
-      pointer: { x: DEFAULT_STRIP_WIDTH - 1, y: 240 },
-    });
-    expect(dockBackdropBounds(expanded.hitRegions, DEFAULT_STRIP_WIDTH, 480)).toEqual({
-      x: 28,
-      y: 212,
-      width: 56,
-      height: 56,
-    });
-    expect(expanded.hitRegions[0]).toMatchObject({ width: 40, height: 40 });
-  });
-
-  it('keeps the dock backdrop inside a short work area while covering every target', () => {
-    const height = minimumHeightForSlots(5);
-    for (let pointerY = 0; pointerY <= Math.ceil(height); pointerY += 1) {
-      const layout = layoutTiles(sessions(5), {
-        height,
-        pointer: { x: DEFAULT_STRIP_WIDTH - 1, y: pointerY },
-      });
-      const backdrop = dockBackdropBounds(layout.hitRegions, DEFAULT_STRIP_WIDTH, height)!;
-      expect(backdrop.x).toBeGreaterThanOrEqual(0);
-      expect(backdrop.x + backdrop.width).toBeLessThanOrEqual(DEFAULT_STRIP_WIDTH);
-      expect(backdrop.y).toBeGreaterThanOrEqual(0);
-      expect(backdrop.y + backdrop.height).toBeLessThanOrEqual(height);
-      for (const target of layout.hitRegions) {
-        expect(target.x).toBeGreaterThanOrEqual(backdrop.x);
-        expect(target.x + target.width).toBeLessThanOrEqual(backdrop.x + backdrop.width);
-        expect(target.y).toBeGreaterThanOrEqual(backdrop.y);
-        expect(target.y + target.height).toBeLessThanOrEqual(backdrop.y + backdrop.height);
-      }
-    }
-  });
-
-  it('reaches 40px at the stable hovered slot and keeps surfaces separated', () => {
-    const layout = layoutTiles(sessions(5), {
-      height: 480,
-      pointer: { x: DEFAULT_STRIP_WIDTH - 1, y: 240 },
-    });
-    const hovered = layout.tiles[2]!;
-
-    expect(hovered.size).toBe(40);
-    expect(hovered.radius).toBe(8);
-    expect(hovered.x + hovered.size).toBe(DEFAULT_STRIP_WIDTH - 12);
-    expect(hovered.hitRegion.width).toBe(40);
-    expect(hovered.hitRegion.height).toBe(40);
-    expect(surfacesHaveMinimumGap(layout.tiles)).toBe(true);
+    expect(layout.slots.map((slot) => slot.y)).toEqual(
+      Array.from({ length: 5 }, (_, index) => top + index * (TAB_HEIGHT + TAB_GAP)),
+    );
+    expect(layout.top).toBe(top);
+    expect(layout.bottom).toBe(top + 5 * TAB_HEIGHT + 4 * TAB_GAP);
+    expectRegionsInside(layout, 480);
     expectHitRegionsDoNotOverlap(layout);
   });
 
-  it('reserves enough room for top and bottom hover at short heights', () => {
-    const height = minimumHeightForSlots(5);
-    expect(visibleSlotCount(height, 5)).toBe(5);
-
-    const firstCenter = height / 2 - 2 * 24;
-    const topHover = layoutTiles(sessions(5), {
-      height,
-      pointer: { x: DEFAULT_STRIP_WIDTH - 1, y: firstCenter },
-    });
-    const bottomHover = layoutTiles(sessions(5), {
-      height,
-      pointer: { x: DEFAULT_STRIP_WIDTH - 1, y: height - firstCenter },
-    });
-
-    expectRegionsInside(topHover, height);
-    expectRegionsInside(bottomHover, height);
-    expect(surfacesHaveMinimumGap(topHover.tiles)).toBe(true);
-    expect(surfacesHaveMinimumGap(bottomHover.tiles)).toBe(true);
-  });
-
-  it('returns no tile when even one bounded hit target cannot fit', () => {
-    const minimum = minimumHeightForSlots(1);
-    expect(minimum).toBeGreaterThanOrEqual(TILE_HIT_SIZE);
-    expect(visibleSlotCount(minimum - 0.1, 1)).toBe(0);
-    expect(layoutTiles(sessions(1), { height: minimum - 0.1 }).tiles).toHaveLength(0);
-  });
-
-  it('keeps every hit target bounded through the full short-height pointer sweep', () => {
-    const height = minimumHeightForSlots(5);
-    for (let pointerY = 0; pointerY <= Math.ceil(height); pointerY += 1) {
-      const layout = layoutTiles(sessions(5), {
-        height,
-        pointer: { x: DEFAULT_STRIP_WIDTH - 1, y: pointerY },
-      });
-      expectRegionsInside(layout, height);
-    }
+  it('fits slots to the available height with room for overflow cues', () => {
+    expect(visibleSlotCount(480)).toBe(MAX_VISIBLE_TABS);
+    expect(minimumHeightForSlots(3)).toBe(3 * TAB_HEIGHT + 2 * TAB_GAP + DOCK_PADDING * 2);
+    expect(visibleSlotCount(minimumHeightForSlots(3))).toBe(3);
+    expect(visibleSlotCount(minimumHeightForSlots(3) - 0.1)).toBe(2);
+    expect(visibleSlotCount(minimumHeightForSlots(1) - 0.1, 1)).toBe(0);
+    expect(layoutTabs(sessions(1), { height: minimumHeightForSlots(1) - 0.1 }).slots).toHaveLength(
+      0,
+    );
+    expect(minimumHeightForSlots(0)).toBe(0);
   });
 
   it('limits visible slots to twelve and exposes directional overflow state', () => {
-    const layout = layoutTiles(sessions(30), { height: 480, scrollOffset: 7 });
+    const layout = layoutTabs(sessions(30), { height: 480, scrollOffset: 7 });
 
-    expect(layout.tiles).toHaveLength(12);
+    expect(layout.slots).toHaveLength(12);
     expect(layout.visibleStart).toBe(7);
     expect(layout.hasPrevious).toBe(true);
     expect(layout.hasNext).toBe(true);
-    expect(layout.tiles[0]?.index).toBe(7);
-    expect(layout.tiles.at(-1)?.index).toBe(18);
+    expect(layout.slots[0]?.index).toBe(7);
+    expect(layout.slots.at(-1)?.index).toBe(18);
     expectRegionsInside(layout, 480);
+  });
+
+  it('turns rendered tab rectangles into bounded native hit targets', () => {
+    const width = DEFAULT_STRIP_WIDTH;
+    const folded = tabHitRegion(
+      { left: width - TAB_PEEK_IDLE, top: 226, width: 290, height: TAB_HEIGHT },
+      width,
+      'codex:a',
+    );
+    expect(folded).toEqual({
+      x: width - TAB_HIT_MIN_WIDTH,
+      y: 226,
+      width: TAB_HIT_MIN_WIDTH,
+      height: TAB_HEIGHT,
+      sessionId: 'codex:a',
+    });
+
+    const dock = tabHitRegion(
+      { left: width - TAB_PEEK_DOCK, top: 226, width: 290, height: TAB_HEIGHT },
+      width,
+      'codex:a',
+    );
+    expect(dock).toMatchObject({ x: width - TAB_PEEK_DOCK, width: TAB_PEEK_DOCK });
+
+    const extended = tabHitRegion(
+      { left: width - 290, top: 226, width: 290, height: TAB_HEIGHT },
+      width,
+      'codex:a',
+    );
+    expect(extended).toMatchObject({ x: width - 290, width: 290 });
+
+    expect(
+      tabHitRegion({ left: width + 1, top: 0, width: 290, height: TAB_HEIGHT }, width, 'codex:a'),
+    ).toMatchObject({ x: width - TAB_HIT_MIN_WIDTH, width: TAB_HIT_MIN_WIDTH });
+    expect(
+      tabHitRegion({ left: Number.NaN, top: 0, width: 290, height: TAB_HEIGHT }, width, 'codex:a'),
+    ).toBeNull();
+    expect(tabHitRegion({ left: 0, top: 0, width: 290, height: 0 }, width, 'codex:a')).toBeNull();
   });
 });

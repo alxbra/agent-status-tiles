@@ -1,4 +1,13 @@
 import type { ReactElement } from 'react';
+import {
+  CircleCheck,
+  CircleDashed,
+  CircleX,
+  LoaderCircle,
+  MessageCircleQuestionMark,
+  Unplug,
+  type LucideIcon,
+} from 'lucide-react';
 
 import type { Provider, SessionStatus } from '../../shared/session';
 import { TILE_COLORS } from './theme';
@@ -36,62 +45,33 @@ export function ProviderIcon({
   );
 }
 
+/** Lucide status marks; the working mark also carries the spin animation class. */
+const STATUS_ICON: Record<SessionStatus, LucideIcon> = {
+  unread: CircleCheck,
+  working: LoaderCircle,
+  'needs-input': MessageCircleQuestionMark,
+  error: CircleX,
+  idle: CircleDashed,
+  unavailable: Unplug,
+};
+
 export function StatusIcon({
   status,
   size = 14,
   className,
 }: IconProps & { status: SessionStatus }): ReactElement {
-  const common = {
-    className,
-    width: size,
-    height: size,
-    viewBox: '0 0 24 24',
-    fill: 'none',
-    stroke: TILE_COLORS.glyph,
-    strokeWidth: 2,
-    strokeLinecap: 'round' as const,
-    strokeLinejoin: 'round' as const,
-    'aria-hidden': true,
-  };
-
-  switch (status) {
-    case 'unread':
-      return (
-        <svg {...common}>
-          <circle cx="12" cy="12" r="7" fill={TILE_COLORS.glyph} stroke="none" />
-        </svg>
-      );
-    case 'working':
-      return (
-        <svg {...common} className={`status-tiles__working-glyph ${className ?? ''}`}>
-          <path d="M12 4a8 8 0 1 1-6.1 2.8" />
-        </svg>
-      );
-    case 'needs-input':
-      return (
-        <svg {...common}>
-          <path d="m12 4 8 15H4L12 4Z" fill={TILE_COLORS.glyph} stroke="none" />
-        </svg>
-      );
-    case 'error':
-      return (
-        <svg {...common}>
-          <circle cx="12" cy="12" r="8" fill={TILE_COLORS.glyph} stroke="none" />
-          <path d="m9 9 6 6m0-6-6 6" stroke="white" />
-        </svg>
-      );
-    case 'idle':
-      return (
-        <svg {...common}>
-          <circle cx="12" cy="12" r="7" />
-        </svg>
-      );
-    case 'unavailable':
-      return (
-        <svg {...common}>
-          <circle cx="12" cy="12" r="7" />
-          <path d="M7.5 16.5 16.5 7.5" />
-        </svg>
-      );
-  }
+  const Icon = STATUS_ICON[status];
+  const classes = [className, status === 'working' ? 'status-tiles__working-glyph' : undefined]
+    .filter(Boolean)
+    .join(' ');
+  return (
+    <Icon
+      className={classes.length > 0 ? classes : undefined}
+      size={size}
+      color={TILE_COLORS.glyph}
+      strokeWidth={2.25}
+      aria-hidden="true"
+      data-status-icon={status}
+    />
+  );
 }

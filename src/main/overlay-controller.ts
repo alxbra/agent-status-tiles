@@ -1,5 +1,4 @@
 import {
-  BaseWindow,
   BrowserWindow,
   app,
   powerMonitor,
@@ -16,14 +15,13 @@ import { protectWebContents } from './security';
 import { connectedDisplays, selectPreferredDisplay } from './display';
 import { PRIMARY_DISPLAY_ID } from '../shared/settings';
 import { MAX_OVERLAY_HIT_REGIONS, type OverlayHitRegion } from '../shared/overlay-ipc';
-import { dockBackdropBounds } from '../shared/dock-backdrop';
 
 export { MAX_OVERLAY_HIT_REGIONS } from '../shared/overlay-ipc';
 export type { OverlayHitRegion } from '../shared/overlay-ipc';
 
 /**
- * The transparent native window includes room for the stock tooltip and
- * context menu. StatusTiles keeps its own 88px right-aligned strip inside it.
+ * The transparent native window hosts the right-anchored tab dock plus room
+ * for a fully extended tab, the stock tooltip, and the context menu.
  */
 export const OVERLAY_WINDOW_WIDTH = 360;
 export const OVERLAY_WINDOW_HEIGHT = 480;
@@ -84,20 +82,6 @@ export function isPointInOverlayHitRegion(
     (region) =>
       x >= region.x && x < region.x + region.width && y >= region.y && y < region.y + region.height,
   );
-}
-
-export function dockBackdropWindowBounds(
-  overlay: Rectangle,
-  regions: readonly OverlayHitRegion[],
-): Rectangle | null {
-  const local = dockBackdropBounds(regions, overlay.width, overlay.height);
-  if (!local || local.height <= 0) return null;
-  return {
-    x: Math.round(overlay.x + local.x),
-    y: Math.round(overlay.y + local.y),
-    width: Math.round(local.width),
-    height: Math.round(local.height),
-  };
 }
 
 function rendererFilePath(): string {
@@ -195,7 +179,6 @@ export interface OverlayControllerOptions {
 
 export function createOverlayController(options: OverlayControllerOptions = {}): OverlayController {
   let overlayWindow: BrowserWindow | null = null;
-  let dockBackdropWindow: BaseWindow | null = null;
   let readyToShow = false;
   let requestedVisible = true;
   let hasQualifyingSessions = false;
@@ -218,61 +201,6 @@ export function createOverlayController(options: OverlayControllerOptions = {}):
     rendererWasReady = false;
     ignoringMouseEvents = true;
     hitRegions = [];
-    if (dockBackdropWindow && !dockBackdropWindow.isDestroyed()) dockBackdropWindow.hide();
-  };
-
-  const destroyDockBackdrop = (): void => {
-    if (dockBackdropWindow && !dockBackdropWindow.isDestroyed()) dockBackdropWindow.destroy();
-    dockBackdropWindow = null;
-  };
-
-  const syncDockBackdrop = (): void => {
-    if (process.platform !== 'darwin') return;
-    const overlay = overlayWindow;
-    const bounds =
-      overlay && !overlay.isDestroyed() && overlay.isVisible()
-        ? dockBackdropWindowBounds(overlay.getBounds(), hitRegions)
-        : null;
-    if (!bounds) {
-      if (dockBackdropWindow && !dockBackdropWindow.isDestroyed()) dockBackdropWindow.hide();
-      return;
-    }
-    if (!dockBackdropWindow || dockBackdropWindow.isDestroyed()) {
-      const dock = new BaseWindow({
-        title: 'Agent Status Tiles Dock Backdrop',
-        ...bounds,
-        frame: false,
-        transparent: true,
-        roundedCorners: true,
-        resizable: false,
-        movable: false,
-        focusable: false,
-        skipTaskbar: true,
-        show: false,
-        hasShadow: false,
-        fullscreenable: false,
-        vibrancy: 'hud',
-        visualEffectState: 'active',
-      });
-      dock.contentView.setBackgroundColor('#00000000');
-      dock.setAlwaysOnTop(true, 'floating');
-      dock.setVisibleOnAllWorkspaces(true, {
-        visibleOnFullScreen: true,
-        skipTransformProcessType: true,
-      });
-      dock.setIgnoreMouseEvents(true);
-      dock.on('closed', () => {
-        if (dockBackdropWindow === dock) dockBackdropWindow = null;
-      });
-      dockBackdropWindow = dock;
-    } else {
-      dockBackdropWindow.setBounds(bounds, false);
-    }
-    if (!dockBackdropWindow.isVisible()) {
-      dockBackdropWindow.showInactive();
-      // The native vibrancy surface must remain behind the interactive tiles.
-      overlay!.moveAbove(dockBackdropWindow.getMediaSourceId());
-    }
   };
 
   const createWindow = (): void => {
@@ -320,7 +248,6 @@ export function createOverlayController(options: OverlayControllerOptions = {}):
     hitRegions = hitRegions.filter((region) =>
       isValidOverlayHitRegion(region, currentBounds.width, currentBounds.height),
     );
-    syncDockBackdrop();
     syncMouseMode();
   };
 
@@ -357,7 +284,6 @@ export function createOverlayController(options: OverlayControllerOptions = {}):
       overlayWindow.setFocusable(false);
       keyboardEntryNotified = false;
     }
-    syncDockBackdrop();
     syncMouseMode();
   };
 
@@ -462,7 +388,6 @@ export function createOverlayController(options: OverlayControllerOptions = {}):
     overlayWindow = null;
     overlayGeneration = 0;
     resetRendererState();
-    destroyDockBackdrop();
     restorePreviousApplication(shouldDeactivate, false);
     if (!failedToLoad) {
       recoverOverlay();
@@ -480,7 +405,6 @@ export function createOverlayController(options: OverlayControllerOptions = {}):
     rendererReady = false;
     keyboardEntryNotified = false;
     hitRegions = [];
-    syncDockBackdrop();
     if (overlayWindow.isVisible()) {
       overlayWindow.hide();
       overlayWindow.setFocusable(false);
@@ -504,7 +428,6 @@ export function createOverlayController(options: OverlayControllerOptions = {}):
     rendererReady = false;
     keyboardEntryNotified = false;
     hitRegions = [];
-    syncDockBackdrop();
     reapplyMousePassthrough();
     if (!window.isDestroyed()) window.destroy();
     onClosed(window, callbackGeneration);
@@ -521,7 +444,6 @@ export function createOverlayController(options: OverlayControllerOptions = {}):
     rendererReady = false;
     keyboardEntryNotified = false;
     hitRegions = [];
-    syncDockBackdrop();
     reapplyMousePassthrough();
     if (!window.isDestroyed()) window.destroy();
     onClosed(window, callbackGeneration);
@@ -618,7 +540,6 @@ export function createOverlayController(options: OverlayControllerOptions = {}):
         regions.length <= MAX_OVERLAY_HIT_REGIONS &&
         regions.every((region) => isValidOverlayHitRegion(region, bounds.width, bounds.height));
       hitRegions = valid ? regions.map((region) => ({ ...region })) : [];
-      syncDockBackdrop();
       syncMouseMode();
       return valid;
     },
@@ -634,7 +555,6 @@ export function createOverlayController(options: OverlayControllerOptions = {}):
       if (overlayWindow && !overlayWindow.isDestroyed()) {
         overlayWindow.destroy();
       }
-      destroyDockBackdrop();
       overlayWindow = null;
       readyToShow = false;
       rendererReady = false;
