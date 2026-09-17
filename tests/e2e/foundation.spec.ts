@@ -213,10 +213,10 @@ test('wires production settings through preload, overlay state, and restart pers
     const overlay = await overlayWindow(application);
 
     await expect(page.getByRole('combobox', { name: 'Display' })).toContainText('Primary');
-    // One row per provider: Codex is connectable, Claude Code is not yet.
+    // One row per provider, both connectable.
     await expect(page.getByRole('button', { name: 'Connect' })).toHaveCount(2);
     await expect(page.getByRole('button', { name: 'Connect' }).first()).toBeEnabled();
-    await expect(page.getByRole('button', { name: 'Connect' }).nth(1)).toBeDisabled();
+    await expect(page.getByRole('button', { name: 'Connect' }).nth(1)).toBeEnabled();
     await expect(page.getByRole('button', { name: 'Open Advanced settings' })).toBeDisabled();
     await expect(page.getByRole('switch', { name: 'Reduce motion' })).not.toBeChecked();
     const settings = await page.evaluate(() => window.agentStatusTiles.getSettings());

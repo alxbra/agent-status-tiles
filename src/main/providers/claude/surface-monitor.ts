@@ -17,6 +17,7 @@ import {
 } from '../hooks/hook-journal-reader';
 import { MAX_INPUT_REQUESTS } from '../../sessions/persistence';
 import { normalizeClaudeEvents } from './events';
+import type { ClaudeIssue, ClaudeReadiness } from './readiness';
 import {
   ClaudeJournalDiscovery,
   selectCohort,
@@ -26,6 +27,11 @@ import {
 export interface ClaudeMonitorOptions {
   /** The app's private data directory; journals live under `journals/claude`. */
   appDataPath: string;
+  /**
+   * Verify the helper and the hooks before observing. Absent in tests that
+   * seed journals directly; production wires the installer's inspection.
+   */
+  checkReadiness?: () => Promise<ClaudeReadiness>;
   /** Test injection. */
   reader?: Pick<HookJournalReader, 'read'>;
   discovery?: Pick<ClaudeJournalDiscovery, 'list' | 'truncated'>;
@@ -78,6 +84,8 @@ export class ClaudeSurfaceMonitor implements ProviderSurfaceMonitor {
   private readonly surface: Surface;
   private readonly reader: Pick<HookJournalReader, 'read'>;
   private readonly discovery: Pick<ClaudeJournalDiscovery, 'list' | 'truncated'>;
+  private readonly checkReadiness: (() => Promise<ClaudeReadiness>) | undefined;
+  private issue: ClaudeIssue | undefined;
   private journals = new Map<string, ClaudeJournalSummary>();
   private unavailableSourceIds = new Set<string>();
   private started = false;
@@ -88,9 +96,23 @@ export class ClaudeSurfaceMonitor implements ProviderSurfaceMonitor {
     this.reader = options.reader ?? new HookJournalReader({ appDataPath: options.appDataPath });
     this.discovery =
       options.discovery ?? new ClaudeJournalDiscovery({ appDataPath: options.appDataPath });
+    this.checkReadiness = options.checkReadiness;
   }
 
-  start(): void {
+  /** The reason the last start failed, for the Settings sentence; undefined once healthy. */
+  get lastIssue(): ClaudeIssue | undefined {
+    return this.issue;
+  }
+
+  async start(): Promise<void> {
+    if (this.checkReadiness !== undefined) {
+      const readiness = await this.checkReadiness();
+      if (readiness.status === 'issue') {
+        this.issue = readiness.issue;
+        throw new Error(`claude-${this.surface}-${readiness.issue}`);
+      }
+    }
+    this.issue = undefined;
     this.started = true;
   }
 

@@ -47,7 +47,7 @@ test('renders the controlled settings fields with accessible names', async ({ pa
   ).toBeEnabled();
   await expect(
     page.locator('[data-provider="claude"]').getByRole('button', { name: 'Connect' }),
-  ).toBeDisabled();
+  ).toBeEnabled();
   await expect(page.getByRole('combobox', { name: 'Display' })).toContainText('Primary');
   await expect(page.getByRole('switch', { name: 'Launch at login' })).not.toBeChecked();
   await expect(page.getByRole('switch', { name: 'Reduce motion' })).not.toBeChecked();
@@ -55,6 +55,8 @@ test('renders the controlled settings fields with accessible names', async ({ pa
   await page.locator('[data-provider="codex"]').getByRole('button', { name: 'Connect' }).click();
   await expect(page.locator('[data-provider="codex"]')).toContainText('Connected');
   await page.getByRole('button', { name: 'Actions for Codex' }).click();
+  // A connected row offers Repair before Disconnect.
+  await expect(page.getByRole('menuitem')).toHaveText(['Repair', 'Disconnect']);
   await page.getByRole('menuitem', { name: 'Disconnect' }).click();
   await expect(page.getByRole('alertdialog')).toContainText(
     "Disconnect removes this app's local status history but does not change Codex data.",
@@ -131,8 +133,35 @@ test('names Claude Code in a retained connection disconnect confirmation', async
   await page.getByRole('button', { name: 'Actions for Claude Code' }).click();
   await page.getByRole('menuitem', { name: 'Disconnect' }).click();
   await expect(page.getByRole('alertdialog')).toContainText(
-    "Disconnect removes this app's local status history but does not change Claude Code data.",
+    "Disconnect removes this app's hooks from Claude Code settings and its local status history but does not change Claude Code data.",
   );
+});
+
+test('runs Repair from the action menu once per click and blocks it while pending', async ({
+  page,
+}) => {
+  await openFixture(page);
+  await page.evaluate(() => {
+    (
+      window as Window & {
+        __settingsFixture?: { markProviderConnected: (connection: 'claude') => void };
+      }
+    ).__settingsFixture?.markProviderConnected('claude');
+  });
+  await page.getByRole('button', { name: 'Actions for Claude Code' }).click();
+  await page.getByRole('menuitem', { name: 'Repair' }).click();
+  await expect
+    .poll(() =>
+      page.evaluate(() =>
+        (
+          window as Window & {
+            __settingsFixture?: { getProviderActionCalls: (connection: 'claude') => number };
+          }
+        ).__settingsFixture?.getProviderActionCalls('claude'),
+      ),
+    )
+    .toBe(1);
+  await expect(page.locator('[data-provider="claude"]')).toContainText('Connected');
 });
 
 test('serializes connect and disconnect operations for one provider', async ({ page }) => {
@@ -164,7 +193,7 @@ test('serializes connect and disconnect operations for one provider', async ({ p
   ).toBe(1);
   await expect(
     page.locator('[data-provider="claude"]').getByRole('button', { name: 'Connect' }),
-  ).toBeVisible();
+  ).toBeEnabled();
 
   await page.evaluate(() => {
     (
@@ -177,8 +206,10 @@ test('serializes connect and disconnect operations for one provider', async ({ p
   });
 
   await codex.getByRole('button', { name: 'Actions for Codex' }).click();
-  const disconnect = page.getByRole('menuitem');
+  // Repair comes first; Disconnect reads "Working…" while the action is pending.
+  const disconnect = page.getByRole('menuitem').last();
   await expect(disconnect).toBeDisabled();
+  await expect(page.getByRole('menuitem').first()).toBeDisabled();
 
   await page.evaluate(() => {
     (

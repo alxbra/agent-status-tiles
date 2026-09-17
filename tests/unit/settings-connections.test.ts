@@ -3,11 +3,15 @@ import { describe, expect, it, vi } from 'vitest';
 import { createInitialMonitoringState } from '../../src/main/sessions/persistence';
 import {
   completeProviderBundles,
+  connectProvider,
   connectProviderSurfaces,
   connectionIssue,
   connectionState,
+  disconnectProvider,
   disconnectProviderSurfaces,
+  repairProvider,
   type ConnectionCoordinator,
+  type ProviderSetup,
 } from '../../src/main/settings-connections';
 import type { RuntimeHealthStatus, RuntimeSurfaceHealth } from '../../src/main/runtime/coordinator';
 import { SURFACE_KEYS, type SurfaceKey } from '../../src/shared/monitoring';
@@ -62,10 +66,9 @@ describe('settings connections', () => {
       canConnect: true,
       canDisconnect: false,
     });
-    // Claude has no live monitors yet, so its row is not connectable.
     expect(connectionState(disconnected, 'claude')).toEqual({
-      status: 'unavailable',
-      canConnect: false,
+      status: 'disconnected',
+      canConnect: true,
       canDisconnect: false,
     });
 
@@ -158,9 +161,9 @@ describe('settings connections', () => {
     await completeProviderBundles(partial);
     expect(partial.connect).toHaveBeenCalledTimes(1);
 
-    const untouched = fakeCoordinator(['claude:desktop']);
-    await completeProviderBundles(untouched);
-    expect(untouched.connect).not.toHaveBeenCalled();
+    const claudePartial = fakeCoordinator(['claude:desktop']);
+    await completeProviderBundles(claudePartial);
+    expect(claudePartial.connect.mock.calls).toEqual([['claude', 'cli']]);
     await completeProviderBundles(fakeCoordinator());
 
     const failing = fakeCoordinator(['codex:desktop']);
@@ -169,5 +172,100 @@ describe('settings connections', () => {
     });
     await expect(completeProviderBundles(failing)).resolves.toBeUndefined();
     expect([...failing.enabled]).toEqual(['codex:desktop']);
+  });
+
+  it('installs the integration before enabling surfaces and enables nothing when it fails', async () => {
+    const order: string[] = [];
+    const coordinator = fakeCoordinator();
+    coordinator.connect.mockImplementation(async (provider, surface) => {
+      order.push(`connect:${provider}:${surface}`);
+      coordinator.enabled.add(`${provider}:${surface}`);
+    });
+    const setup: ProviderSetup = {
+      install: vi.fn(async () => {
+        order.push('install');
+      }),
+      remove: vi.fn(async () => {
+        order.push('remove');
+      }),
+    };
+    await connectProvider(coordinator, 'claude', setup);
+    expect(order).toEqual(['install', 'connect:claude:desktop', 'connect:claude:cli']);
+
+    const failing = fakeCoordinator();
+    await expect(
+      connectProvider(failing, 'claude', {
+        install: async () => {
+          throw new Error('settings-unwritable');
+        },
+      }),
+    ).rejects.toThrow('settings-unwritable');
+    expect(failing.connect).not.toHaveBeenCalled();
+    expect(failing.enabled.size).toBe(0);
+  });
+
+  it('disconnects surfaces first and still removes the integration when one surface fails', async () => {
+    const order: string[] = [];
+    const coordinator = fakeCoordinator(['claude:desktop', 'claude:cli']);
+    coordinator.disconnect.mockImplementation(async (provider, surface) => {
+      order.push(`disconnect:${provider}:${surface}`);
+      if (surface === 'desktop') throw new Error('checkpoint failed');
+      coordinator.enabled.delete(`${provider}:${surface}`);
+    });
+    const remove = vi.fn(async () => {
+      order.push('remove');
+    });
+    await expect(disconnectProvider(coordinator, 'claude', { remove })).rejects.toThrow(
+      'checkpoint failed',
+    );
+    expect(order).toEqual(['disconnect:claude:desktop', 'disconnect:claude:cli', 'remove']);
+
+    const clean = fakeCoordinator(['claude:desktop', 'claude:cli']);
+    await expect(
+      disconnectProvider(clean, 'claude', {
+        remove: async () => {
+          throw new Error('settings-changed');
+        },
+      }),
+    ).rejects.toThrow('settings-changed');
+    expect(clean.enabled.size).toBe(0);
+  });
+
+  it('repairs by reinstalling and restarting only the enabled surfaces', async () => {
+    const coordinator = fakeCoordinator(['claude:desktop']);
+    const install = vi.fn(async () => undefined);
+    await repairProvider(coordinator, 'claude', { install });
+    expect(install).toHaveBeenCalledTimes(1);
+    expect(coordinator.connect.mock.calls).toEqual([['claude', 'desktop']]);
+    expect(coordinator.disconnect).not.toHaveBeenCalled();
+
+    const codex = fakeCoordinator(['codex:desktop', 'codex:cli']);
+    await repairProvider(codex, 'codex');
+    expect(codex.connect.mock.calls).toEqual([
+      ['codex', 'desktop'],
+      ['codex', 'cli'],
+    ]);
+  });
+
+  it('prefers the provider-specific issue sentence when a surface fails', () => {
+    const errored = fakeCoordinator(['claude:desktop', 'claude:cli'], {
+      'claude:desktop': 'error',
+      'claude:cli': 'error',
+    });
+    const setup: ProviderSetup = {
+      issue: () => 'Claude Code hooks are not installed. Use Repair to install them.',
+    };
+    expect(connectionIssue(errored, 'claude', setup)).toBe(
+      'Claude Code hooks are not installed. Use Repair to install them.',
+    );
+    expect(connectionIssue(errored, 'claude', { issue: () => undefined })).toBe(
+      'Claude Code connection failed. Check the installation, then disconnect and reconnect.',
+    );
+    const healthy = fakeCoordinator(['claude:desktop', 'claude:cli'], {
+      'claude:desktop': 'available',
+      'claude:cli': 'available',
+    });
+    // A stale issue from an earlier failure never shows while the row is healthy.
+    expect(connectionIssue(healthy, 'claude', setup)).toBeUndefined();
   });
 });

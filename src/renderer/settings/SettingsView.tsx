@@ -48,6 +48,7 @@ export interface SettingsViewProps {
   error?: string;
   onConnect?: (connection: SettingsConnectionKey) => void | Promise<void>;
   onDisconnect?: (connection: SettingsConnectionKey) => void | Promise<void>;
+  onRepair?: (connection: SettingsConnectionKey) => void | Promise<void>;
   onDisplayChange: (displayId: string) => void | Promise<void>;
   onLaunchAtLoginChange: (enabled: boolean) => void | Promise<void>;
   onReduceMotionChange: (enabled: boolean) => void | Promise<void>;
@@ -62,6 +63,7 @@ function ProviderAction({
   isPending,
   canDisconnect,
   onConnect,
+  onRepair,
   onRequestDisconnect,
 }: {
   connection: SettingsConnectionKey;
@@ -69,6 +71,7 @@ function ProviderAction({
   isPending: (action: SettingsAction) => boolean;
   canDisconnect: boolean;
   onConnect?: (connection: SettingsConnectionKey) => void | Promise<void>;
+  onRepair?: (connection: SettingsConnectionKey) => void | Promise<void>;
   onRequestDisconnect: (connection: SettingsConnectionKey) => void;
 }): ReactElement {
   const label = SETTINGS_CONNECTION_LABELS[connection];
@@ -95,6 +98,16 @@ function ProviderAction({
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end">
+            {onRepair === undefined ? null : (
+              <DropdownMenuItem
+                disabled={isProviderPending}
+                onSelect={() => {
+                  if (!isProviderPending) void onRepair(connection);
+                }}
+              >
+                Repair
+              </DropdownMenuItem>
+            )}
             <DropdownMenuItem
               disabled={!state.canDisconnect || !canDisconnect || isProviderPending}
               onSelect={() => {
@@ -172,6 +185,7 @@ export function SettingsView({
   error,
   onConnect,
   onDisconnect,
+  onRepair,
   onDisplayChange,
   onLaunchAtLoginChange,
   onReduceMotionChange,
@@ -229,6 +243,18 @@ export function SettingsView({
     [onDisconnect, runAction],
   );
 
+  const repair = useCallback(
+    (connection: SettingsConnectionKey): void => {
+      if (onRepair === undefined) return;
+      runAction(
+        `provider:${connection}`,
+        `Could not repair ${SETTINGS_CONNECTION_LABELS[connection]}. Try again.`,
+        () => onRepair(connection),
+      );
+    },
+    [onRepair, runAction],
+  );
+
   const changeDisplay = useCallback<SettingsViewProps['onDisplayChange']>(
     (displayId) =>
       runAction('display', 'Could not change the display. Try again.', () =>
@@ -282,6 +308,7 @@ export function SettingsView({
                     isPending={isPending}
                     canDisconnect={onDisconnect !== undefined}
                     onConnect={onConnect === undefined ? undefined : connect}
+                    onRepair={onRepair === undefined ? undefined : repair}
                     onRequestDisconnect={setDisconnectTarget}
                     connection={connection}
                     state={providers[connection]}
@@ -381,9 +408,9 @@ export function SettingsView({
               {disconnectTarget === undefined ? '' : SETTINGS_CONNECTION_LABELS[disconnectTarget]}?
             </AlertDialogTitle>
             <AlertDialogDescription>
-              Disconnect removes this app&apos;s local status history but does not change{' '}
-              {disconnectTarget === undefined ? '' : SETTINGS_CONNECTION_LABELS[disconnectTarget]}{' '}
-              data.
+              {disconnectTarget === 'claude'
+                ? "Disconnect removes this app's hooks from Claude Code settings and its local status history but does not change Claude Code data."
+                : `Disconnect removes this app's local status history but does not change ${disconnectTarget === undefined ? '' : SETTINGS_CONNECTION_LABELS[disconnectTarget]} data.`}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
