@@ -3,12 +3,16 @@ import { describe, expect, it } from 'vitest';
 import type { SessionSnapshot } from '../../src/shared/session';
 import {
   DEFAULT_STRIP_WIDTH,
+  DOCK_HOVER_WIDTH,
   DOCK_PADDING,
   layoutTabs,
   MAX_VISIBLE_TABS,
   minimumHeightForSlots,
   normalizeStripWidth,
+  reachWidthFor,
+  resolveHover,
   revealedTabWidth,
+  slotIndexAtY,
   TAB_GAP,
   TAB_HEIGHT,
   TAB_HIT_MIN_WIDTH,
@@ -165,5 +169,64 @@ describe('tab dock geometry', () => {
       tabHitRegion({ left: Number.NaN, top: 0, width: 290, height: TAB_HEIGHT }, width, 'codex:a'),
     ).toBeNull();
     expect(tabHitRegion({ left: 0, top: 0, width: 290, height: 0 }, width, 'codex:a')).toBeNull();
+  });
+
+  it('stretches the reach zone to the widest tab and never past the strip', () => {
+    expect(reachWidthFor([], DEFAULT_STRIP_WIDTH)).toBe(DOCK_HOVER_WIDTH);
+    expect(reachWidthFor([20, Number.NaN], DEFAULT_STRIP_WIDTH)).toBe(DOCK_HOVER_WIDTH);
+    expect(reachWidthFor([120, 290, 150], DEFAULT_STRIP_WIDTH)).toBe(290);
+    expect(reachWidthFor([900], DEFAULT_STRIP_WIDTH)).toBe(DEFAULT_STRIP_WIDTH);
+  });
+
+  it('gives each row half of the neighbouring gaps', () => {
+    const layout = layoutTabs(sessions(3), { height: 480 });
+    const [first, second, third] = layout.slots as [
+      (typeof layout.slots)[0],
+      (typeof layout.slots)[0],
+      (typeof layout.slots)[0],
+    ];
+    expect(slotIndexAtY(layout, first.y - TAB_GAP / 2 - 0.01)).toBeNull();
+    expect(slotIndexAtY(layout, first.y - TAB_GAP / 2)).toBe(0);
+    expect(slotIndexAtY(layout, first.y + TAB_HEIGHT + TAB_GAP / 2 - 0.01)).toBe(0);
+    expect(slotIndexAtY(layout, second.y - TAB_GAP / 2)).toBe(1);
+    expect(slotIndexAtY(layout, second.y + TAB_HEIGHT / 2)).toBe(1);
+    expect(slotIndexAtY(layout, third.y + TAB_HEIGHT + TAB_GAP / 2 - 0.01)).toBe(2);
+    expect(slotIndexAtY(layout, third.y + TAB_HEIGHT + TAB_GAP / 2)).toBeNull();
+  });
+
+  it('uses the edge strip before a tab is extended and the reach zone afterwards', () => {
+    const layout = layoutTabs(sessions(3), { height: 480 });
+    const width = DEFAULT_STRIP_WIDTH;
+    const rowY = layout.slots[1]!.y + TAB_HEIGHT / 2;
+    const folded = { stripWidth: width, extended: false, reachWidth: 290 };
+    const extended = { stripWidth: width, extended: true, reachWidth: 290 };
+
+    expect(resolveHover(layout, { x: width - 10, y: rowY }, folded)).toEqual({
+      inside: true,
+      hoveredIndex: null,
+    });
+    expect(resolveHover(layout, { x: width - DOCK_HOVER_WIDTH - 1, y: rowY }, folded).inside).toBe(
+      false,
+    );
+
+    expect(resolveHover(layout, { x: width - 150, y: rowY }, extended)).toEqual({
+      inside: true,
+      hoveredIndex: 1,
+    });
+    expect(resolveHover(layout, { x: width - 290, y: rowY }, extended).inside).toBe(true);
+    expect(resolveHover(layout, { x: width - 291, y: rowY }, extended).inside).toBe(false);
+    expect(resolveHover(layout, { x: width - 150, y: layout.top - 8 }, extended)).toEqual({
+      inside: true,
+      hoveredIndex: null,
+    });
+    expect(
+      resolveHover(layout, { x: width - 150, y: layout.top - DOCK_PADDING - 1 }, extended).inside,
+    ).toBe(false);
+    expect(
+      resolveHover(layout, { x: width - 150, y: rowY }, { ...extended, reachWidth: 20 }),
+    ).toEqual({ inside: false, hoveredIndex: null });
+    expect(
+      resolveHover(layoutTabs([], { height: 480 }), { x: width - 1, y: 240 }, extended),
+    ).toEqual({ inside: false, hoveredIndex: null });
   });
 });

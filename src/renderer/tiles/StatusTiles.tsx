@@ -18,14 +18,14 @@ import {
   DEFAULT_STRIP_HEIGHT,
   DEFAULT_STRIP_WIDTH,
   DOCK_HOVER_WIDTH,
-  DOCK_PADDING,
   layoutTabs,
   MAX_VISIBLE_TABS,
   normalizeStripWidth,
+  reachWidthFor,
+  resolveHover,
   TAB_MOTION_MS,
   TAB_STAGGER_MS,
   tabHitRegion,
-  type TabLayout,
   type TabSlot,
   type TileHitRegion,
 } from './geometry';
@@ -157,23 +157,6 @@ function tabUnderPoint(root: HTMLElement, clientX: number, clientY: number): str
   return tab.dataset.sessionId ?? null;
 }
 
-function pointInDockZone(
-  rootBounds: DOMRect,
-  layout: TabLayout,
-  clientX: number,
-  clientY: number,
-): boolean {
-  if (layout.slots.length === 0) return false;
-  const localX = clientX - rootBounds.left;
-  const localY = clientY - rootBounds.top;
-  return (
-    localX >= rootBounds.width - DOCK_HOVER_WIDTH &&
-    localX <= rootBounds.width &&
-    localY >= layout.top - DOCK_PADDING &&
-    localY <= layout.bottom + DOCK_PADDING
-  );
-}
-
 interface StatusTabProps {
   session: SessionSnapshot;
   slot: TabSlot;
@@ -288,7 +271,10 @@ export function StatusTiles({
   const [measuredHeight, setMeasuredHeight] = useState(height ?? DEFAULT_STRIP_HEIGHT);
   const [measuredWidth, setMeasuredWidth] = useState(width ?? DEFAULT_STRIP_WIDTH);
   const [dockActive, setDockActive] = useState(false);
-  const [hoveredSessionId, setHoveredSessionId] = useState<string | null>(null);
+  const [hoveredSessionId, setHoveredSessionIdState] = useState<string | null>(null);
+  /** Mirrors the hovered tab synchronously for pointer handlers that fire back to back. */
+  const hoveredSessionIdRef = useRef<string | null>(null);
+  const reachWidthRef = useRef(DOCK_HOVER_WIDTH);
   const [scrollOffset, setScrollOffset] = useState(0);
   const [focusedIndex, setFocusedIndex] = useState<number | null>(null);
   const handledKeyboardEntryRevisionRef = useRef(0);
@@ -362,6 +348,12 @@ export function StatusTiles({
     const startedAt = performance.now();
     const publish = (): void => {
       const renderedRegions = readRenderedHitRegions(root, effectiveWidth);
+      const reachWidth = reachWidthFor(
+        [...root.querySelectorAll<HTMLElement>(TAB_SELECTOR)].map((tab) => tab.offsetWidth),
+        effectiveWidth,
+      );
+      reachWidthRef.current = reachWidth;
+      root.dataset.reachWidth = String(reachWidth);
       const regions =
         renderedRegions.length === layout.hitRegions.length ? renderedRegions : layout.hitRegions;
       const regionsKey = JSON.stringify(regions);
@@ -384,10 +376,21 @@ export function StatusTiles({
       const root = rootRef.current;
       if (root === null) return;
       const bounds = root.getBoundingClientRect();
-      const hovered = tabUnderPoint(root, event.clientX, event.clientY);
-      const inside =
-        hovered !== null ||
-        pointInDockZone(bounds, layoutRef.current, event.clientX, event.clientY);
+      const layout = layoutRef.current;
+      const extended = hoveredSessionIdRef.current !== null;
+      const resolution = resolveHover(
+        layout,
+        { x: event.clientX - bounds.left, y: event.clientY - bounds.top },
+        { stripWidth: bounds.width, extended, reachWidth: reachWidthRef.current },
+      );
+      // Before a tab is extended only the tab element itself extends it; once
+      // extended, the pointer's row inside the reach zone selects the tab.
+      const hovered = extended
+        ? resolution.hoveredIndex === null
+          ? null
+          : (layout.slots[resolution.hoveredIndex]?.sessionId ?? null)
+        : tabUnderPoint(root, event.clientX, event.clientY);
+      const inside = hovered !== null || resolution.inside;
       if (inside) {
         if (!pointerInsideRef.current) {
           pointerInsideRef.current = true;
@@ -444,6 +447,11 @@ export function StatusTiles({
     setFocusedIndex(0);
   }, [keyboardEntryRevision, layout.slots]);
 
+  function setHoveredSessionId(sessionId: string | null): void {
+    hoveredSessionIdRef.current = sessionId;
+    setHoveredSessionIdState(sessionId);
+  }
+
   function beginInteractionFromRef(): void {
     if (interactingRef.current) return;
     interactingRef.current = true;
@@ -484,22 +492,21 @@ export function StatusTiles({
     event: PointerEvent<HTMLButtonElement>,
     session: SessionSnapshot,
   ): void {
-    setHoveredSessionId((previous) => (previous === session.id ? null : previous));
     const root = rootRef.current;
     const next = event.relatedTarget;
-    const stillInside =
-      root !== null &&
-      next instanceof Node &&
-      root.contains(next) &&
-      pointInDockZone(
-        root.getBoundingClientRect(),
-        layoutRef.current,
-        event.clientX,
-        event.clientY,
-      );
-    if (stillInside) return;
     const overTab = next instanceof Element && next.closest(TAB_SELECTOR) !== null;
     if (overTab) return;
+    if (root !== null && next instanceof Node && root.contains(next)) {
+      const bounds = root.getBoundingClientRect();
+      const resolution = resolveHover(
+        layoutRef.current,
+        { x: event.clientX - bounds.left, y: event.clientY - bounds.top },
+        { stripWidth: bounds.width, extended: true, reachWidth: reachWidthRef.current },
+      );
+      // Still inside the reach zone: the following pointer move picks the row.
+      if (resolution.inside) return;
+    }
+    if (hoveredSessionIdRef.current === session.id) setHoveredSessionId(null);
     // The cursor left the window or jumped far away; fold everything back.
     pointerInsideRef.current = false;
     leavePointerFromRef();

@@ -203,3 +203,69 @@ export function tabHitRegion(
     sessionId,
   };
 }
+
+export interface HoverPoint {
+  /** Root-local coordinates. */
+  x: number;
+  y: number;
+}
+
+export interface HoverResolution {
+  /** The pointer is somewhere that keeps the dock revealed. */
+  inside: boolean;
+  /**
+   * Local slot index the pointer's row selects while a tab is extended; null
+   * in the padding rows. Always null before a tab is extended, when the caller
+   * decides by the tab element under the pointer instead.
+   */
+  hoveredIndex: number | null;
+}
+
+export interface HoverOptions {
+  stripWidth: number;
+  /** A tab is currently extended by the pointer, so the reach zone applies. */
+  extended: boolean;
+  /** Horizontal depth of the reach zone; see `reachWidthFor`. */
+  reachWidth: number;
+}
+
+/** The reach zone stretches as far left as the widest rendered tab. */
+export function reachWidthFor(tabWidths: readonly number[], stripWidth: number): number {
+  const widest = tabWidths.reduce(
+    (maximum, width) => (Number.isFinite(width) && width > maximum ? width : maximum),
+    DOCK_HOVER_WIDTH,
+  );
+  return Math.min(normalizeStripWidth(stripWidth), widest);
+}
+
+/** Rows own half of each gap so vertical travel never falls between tabs. */
+export function slotIndexAtY(layout: TabLayout, y: number): number | null {
+  const first = layout.slots[0];
+  if (first === undefined || !Number.isFinite(y)) return null;
+  const start = first.y - TAB_GAP / 2;
+  const end = layout.bottom + TAB_GAP / 2;
+  if (y < start || y >= end) return null;
+  const pitch = TAB_HEIGHT + TAB_GAP;
+  return clamp(Math.floor((y - start) / pitch), 0, layout.slots.length - 1);
+}
+
+export function resolveHover(
+  layout: TabLayout,
+  point: HoverPoint,
+  options: HoverOptions,
+): HoverResolution {
+  if (layout.slots.length === 0 || !Number.isFinite(point.x) || !Number.isFinite(point.y)) {
+    return { inside: false, hoveredIndex: null };
+  }
+  const width = normalizeStripWidth(options.stripWidth);
+  const depth = options.extended
+    ? Math.min(width, Math.max(DOCK_HOVER_WIDTH, finiteOr(options.reachWidth, DOCK_HOVER_WIDTH)))
+    : DOCK_HOVER_WIDTH;
+  const inside =
+    point.x >= width - depth &&
+    point.x <= width &&
+    point.y >= layout.top - DOCK_PADDING &&
+    point.y <= layout.bottom + DOCK_PADDING;
+  if (!inside) return { inside: false, hoveredIndex: null };
+  return { inside: true, hoveredIndex: options.extended ? slotIndexAtY(layout, point.y) : null };
+}
