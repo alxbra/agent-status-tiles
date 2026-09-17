@@ -42,6 +42,41 @@ notarization, or Gatekeeper acceptance. See electron-builder's
 [application contents documentation](https://www.electron.build/docs/contents/)
 for the `extraResources` placement contract.
 
+## Installation into Claude Code settings
+
+`src/main/providers/claude/hook-installer.ts` owns the entries the app writes
+into the user's Claude Code settings file, `~/.claude/settings.json` by
+default (Claude Desktop and the terminal CLI share it). The helper path comes
+from `src/main/providers/claude/helper-path.ts`: the packaged resource under
+`Contents/Resources/hook-helper/<arch>/hook-helper`, or
+`build/hook-helper/<arch>/hook-helper` in development, and only when it is a
+regular, owner-executable file rather than a symlink.
+
+The installer writes exactly one matcher-less group per event in the helper's
+allowlist, each holding one command hook:
+
+```json
+{ "type": "command", "command": "'<helper>' --provider claude --data-dir '<app-data>'", "timeout": 5, "async": true }
+```
+
+Both paths are single-quoted for the shell, and the fixed argument order is the
+ownership marker: an entry is owned only when it parses back to an absolute
+`hook-helper` path plus `--provider claude --data-dir` and an absolute data
+directory. Every other key, event, matcher group, and hook in the file is kept
+in place and in order. Installing over a stale owned entry replaces it;
+removing deletes only owned entries and drops the groups, events, and `hooks`
+object that become empty. A file that already holds the intended entries is
+not rewritten.
+
+Writes go through a symlinked settings file rather than replacing the link, keep
+the file's mode, and land through a temporary file and rename. A file that is
+not valid JSON, not a JSON object, larger than 1 MiB, or whose `hooks` section
+has an unexpected shape is never rewritten; the typed error names the reason.
+Verification reports `installed`, `missing`, `stale` (an owned entry is absent
+or points at another helper or data directory), or `disabled` when
+`disableAllHooks` is set in the same file. Connecting the Claude row and
+surfacing these states in Settings belong to later slices.
+
 ## Input and privacy
 
 The helper reads one JSON object from stdin, up to 64 KiB. It accepts the
