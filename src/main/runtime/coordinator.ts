@@ -19,6 +19,7 @@ import {
   type Surface,
 } from '../../shared/session';
 import type { OverlayState } from '../../shared/overlay-ipc';
+import { MonitorPrerequisiteError } from './monitor-errors';
 import {
   connectMonitoringSurface,
   createInitialMonitoringState,
@@ -1377,7 +1378,7 @@ export function createRuntimeCoordinator(options: RuntimeCoordinatorOptions): Ru
     runtime.starting = starting;
     try {
       await starting;
-    } catch {
+    } catch (error) {
       if (
         expectedGeneration !== generation ||
         expectedSurfaceGeneration !== runtime.generation ||
@@ -1385,9 +1386,15 @@ export function createRuntimeCoordinator(options: RuntimeCoordinatorOptions): Ru
         suspended
       )
         return;
-      const delay = runtime.retryMs;
-      runtime.retryMs = Math.min(maxRetryIntervalMs, Math.max(filePollIntervalMs, delay * 2));
-      setHealth(runtime.key, 'error', delay);
+      // A missing installation is not a failure of a connected surface. Keep
+      // it quietly unavailable and re-check at the slowest cadence so a
+      // later install is noticed without backoff churn or an error report.
+      const isPrerequisiteMissing = error instanceof MonitorPrerequisiteError;
+      const delay = isPrerequisiteMissing ? maxRetryIntervalMs : runtime.retryMs;
+      if (!isPrerequisiteMissing) {
+        runtime.retryMs = Math.min(maxRetryIntervalMs, Math.max(filePollIntervalMs, delay * 2));
+      }
+      setHealth(runtime.key, isPrerequisiteMissing ? 'unavailable' : 'error', delay);
       publish();
       clearTimer(runtime);
       const retryGeneration = runtime.generation;

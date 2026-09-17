@@ -9,6 +9,7 @@ import type {
   RuntimeReadRequest,
   RuntimeReadResult,
 } from '../../runtime/coordinator';
+import { MonitorPrerequisiteError } from '../../runtime/monitor-errors';
 import { resolveBundledCodexBinary } from './bundled-binary-resolver';
 import { CodexCatalogClient, type CodexCatalogRecord } from './catalog-client';
 import { qualifyCodexDesktopCatalog } from './catalog-qualification';
@@ -20,6 +21,13 @@ type Reader = Pick<
   CodexRolloutReader,
   'start' | 'stop' | 'inspectSessionMeta' | 'captureRolloutEndOffset' | 'read'
 >;
+
+/** Resolver outcomes that mean Codex is simply not installed for this surface. */
+const MISSING_INSTALLATION_CODES: ReadonlySet<string> = new Set([
+  'bundle-not-found',
+  'binary-missing',
+  'path-unavailable',
+]);
 
 export interface CodexMonitorOptions {
   /** Test injection; production uses the configured surface's validated resolver. */
@@ -113,7 +121,12 @@ export class CodexSurfaceMonitor implements ProviderSurfaceMonitor {
       this.catalog = suppliedCatalog;
     } else {
       const resolution = await this.resolveBinary();
-      if (!resolution.ok) throw new Error(`codex-${this.surface}-${resolution.code}`);
+      if (!resolution.ok) {
+        const message = `codex-${this.surface}-${resolution.code}`;
+        throw MISSING_INSTALLATION_CODES.has(resolution.code)
+          ? new MonitorPrerequisiteError(message)
+          : new Error(message);
+      }
       this.catalog = new CodexCatalogClient({
         binaryPath: resolution.binaryPath,
         targetSurface: this.surface,

@@ -164,7 +164,7 @@ Reduce motion                 [       ○]
 Advanced                            ›
 ```
 
-Connected rows replace `Connect` with a compact status and an appropriate action menu.
+Connected rows replace `Connect` with a compact status and an appropriate action menu. Each provider row bundles that provider's Desktop and CLI surfaces: Connect enables both surfaces and Disconnect disables both, while the surfaces keep separate partitions, baselines, cursors, and health underneath. A row reads `Connected` while at least one of its surfaces is monitoring; a surface whose installation is absent stays quietly unavailable behind it, and a checkpoint from before bundling that enabled only one surface completes the bundle on the next launch through the normal pending baseline.
 
 Advanced contains path overrides, connection repair, hook removal, and diagnostics export.
 
@@ -172,7 +172,7 @@ Rules:
 
 - One concise label per setting.
 - No introductory copy, cards repeating section titles, decorative badges, descriptions, or sublines.
-- Show one actionable error sentence only when a connection or setting actually fails. Do not show a persistent partial-coverage warning for an otherwise healthy Codex connection.
+- Show one actionable error sentence only when a connection or setting actually fails: when a monitored surface reports an error, or when every surface of a connected provider is missing. Do not show a persistent partial-coverage warning for an otherwise healthy Codex connection, and do not report one absent surface while the other monitors.
 - Use brief confirmation text when installing or removing hooks; explain the actual configuration change.
 - Keep diagnostic detail behind an explicit action.
 - Saving settings is immediate; no redundant Save button.

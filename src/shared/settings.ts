@@ -22,7 +22,8 @@ export const MAX_DISPLAY_LABEL_BYTES = 256;
 export type SettingsProviderConnectionStatus =
   'connected' | 'connecting' | 'disconnected' | 'unavailable';
 
-export type SettingsConnectionKey = 'codexDesktop' | 'codexCli' | 'claudeCode';
+/** One Settings row per provider; each row connects that provider's Desktop and CLI surfaces. */
+export type SettingsConnectionKey = 'codex' | 'claude';
 
 export interface SettingsProviderState {
   status: SettingsProviderConnectionStatus;
@@ -86,7 +87,7 @@ const CONNECTION_STATUSES = new Set<SettingsProviderConnectionStatus>([
   'disconnected',
   'unavailable',
 ]);
-const PROVIDER_KEYS = ['codexDesktop', 'codexCli', 'claudeCode'] as const;
+const PROVIDER_KEYS = ['codex', 'claude'] as const;
 const STATE_KEYS = [
   'providers',
   'displays',

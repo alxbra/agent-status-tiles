@@ -34,15 +34,10 @@ import {
 import { Switch } from '../components/ui/switch';
 
 const CONNECTION_LABEL: Readonly<Record<SettingsConnectionKey, string>> = {
-  codexDesktop: 'Codex Desktop',
-  codexCli: 'Codex CLI',
-  claudeCode: 'Claude Code',
+  codex: 'Codex',
+  claude: 'Claude Code',
 };
-const CONNECTION_KEYS: readonly SettingsConnectionKey[] = [
-  'codexDesktop',
-  'codexCli',
-  'claudeCode',
-];
+const CONNECTION_KEYS: readonly SettingsConnectionKey[] = ['codex', 'claude'];
 
 export type ProviderConnectionStatus = SettingsProviderConnectionStatus;
 export type { SettingsDisplayOption, SettingsProviderState };
@@ -390,7 +385,7 @@ export function SettingsView({
             </AlertDialogTitle>
             <AlertDialogDescription>
               Disconnect removes this app&apos;s local status history but does not change{' '}
-              {disconnectTarget === 'claudeCode' ? 'Claude Code' : 'Codex'} data.
+              {disconnectTarget === 'claude' ? 'Claude Code' : 'Codex'} data.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

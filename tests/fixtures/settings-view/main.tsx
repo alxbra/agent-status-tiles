@@ -25,9 +25,8 @@ type FixtureState = {
 
 const initialState: FixtureState = {
   providers: {
-    codexDesktop: { status: 'disconnected', canConnect: true, canDisconnect: false },
-    codexCli: { status: 'disconnected', canConnect: true, canDisconnect: false },
-    claudeCode: { status: 'disconnected', canConnect: false, canDisconnect: false },
+    codex: { status: 'disconnected', canConnect: true, canDisconnect: false },
+    claude: { status: 'disconnected', canConnect: false, canDisconnect: false },
   },
   selectedDisplayId: 'primary',
   launchAtLogin: false,
@@ -52,9 +51,8 @@ function SettingsFixture(): ReactElement {
   const hasDeferredNextAction = useRef(false);
   const deferredAction = useRef<(() => void) | undefined>(undefined);
   const providerActionCalls = useRef<Record<SettingsConnectionKey, number>>({
-    codexDesktop: 0,
-    codexCli: 0,
-    claudeCode: 0,
+    codex: 0,
+    claude: 0,
   });
   const hasRejectedNextAction = useRef(false);
 

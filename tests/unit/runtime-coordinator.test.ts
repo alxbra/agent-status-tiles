@@ -17,6 +17,7 @@ import {
   loadSessionState,
   saveSessionState,
 } from '../../src/main/sessions/persistence';
+import { MonitorPrerequisiteError } from '../../src/main/runtime/monitor-errors';
 import { reduceSessionState } from '../../src/main/sessions/reducer';
 import { createInitialSessionState, makeSessionId } from '../../src/shared/session';
 
@@ -625,6 +626,68 @@ describe('runtime coordinator', () => {
     ).toHaveLength(300);
 
     await runtime.stop();
+  });
+
+  it('keeps a surface quietly unavailable when its installation is missing', async () => {
+    const dataPath = await appDataPath();
+    const scheduled: number[] = [];
+    const healthChanges: string[] = [];
+    const missing = monitor('codex:cli', [], async () => ({
+      events: [],
+      cursors: {},
+      complete: true,
+    }));
+    missing.start = vi.fn(async () => {
+      throw new MonitorPrerequisiteError('codex-cli-path-unavailable');
+    });
+    const runtime = createRuntimeCoordinator({
+      appDataPath: dataPath,
+      monitors: [missing],
+      setTimeout: (callback, delayMs) => {
+        scheduled.push(delayMs);
+        return setTimeout(callback, delayMs);
+      },
+      onHealthChanged: (key, health) => healthChanges.push(`${key}:${health.status}`),
+    });
+    try {
+      await runtime.start();
+      await runtime.connect('codex', 'cli');
+      const health = runtime.getHealth()['codex:cli'];
+      expect(health.status).toBe('unavailable');
+      // A missing installation is re-checked at the slowest cadence without
+      // exponential backoff and is never reported as an error.
+      expect(health.retryInMs).toBe(15_000);
+      expect(scheduled).toContain(15_000);
+      expect(healthChanges).not.toContain('codex:cli:error');
+    } finally {
+      await runtime.stop();
+    }
+  });
+
+  it('reports an error with backoff when a monitor fails to start for another reason', async () => {
+    const dataPath = await appDataPath();
+    const broken = monitor('codex:cli', [], async () => ({
+      events: [],
+      cursors: {},
+      complete: true,
+    }));
+    broken.start = vi.fn(async () => {
+      throw new Error('codex-cli-code-signature-invalid');
+    });
+    const runtime = createRuntimeCoordinator({
+      appDataPath: dataPath,
+      monitors: [broken],
+      setTimeout: () => setTimeout(() => undefined, 0),
+    });
+    try {
+      await runtime.start();
+      await runtime.connect('codex', 'cli');
+      const health = runtime.getHealth()['codex:cli'];
+      expect(health.status).toBe('error');
+      expect(health.retryInMs).toBe(DEFAULT_FILE_POLL_INTERVAL_MS);
+    } finally {
+      await runtime.stop();
+    }
   });
 
   it('does not publish or mark a baseline ready when a bounded read is incomplete', async () => {

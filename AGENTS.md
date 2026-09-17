@@ -38,6 +38,11 @@ approved mockup lives in `docs/mockups/tab-dock.html`. In particular:
 - Settings use stock shadcn/ui components and standard styling. Keep one
   concise label per setting and omit redundant descriptions, cards, badges,
   sublines, and Save buttons. Add only actionable error text when needed.
+- Settings show one row per provider (`Codex`, `Claude Code`). A row connects
+  that provider's Desktop and CLI surfaces together; the surfaces keep
+  separate partitions, baselines, and health underneath. A surface whose
+  installation is absent stays quietly unavailable behind a connected row and
+  produces no error sentence while another surface of that provider works.
 
 Do not change the established theme, spacing, typography, radii, controls, or
 interaction model without explicit product authorization.
