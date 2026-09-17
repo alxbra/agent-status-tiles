@@ -118,7 +118,7 @@ describe('claude event normalization', () => {
     );
   });
 
-  it('never completes a turn from a subagent stop, a continuing stop hook, or without a turn', () => {
+  it('never completes a turn from a subagent stop or a continuing stop hook', () => {
     const events = normalizeClaudeEvents(
       [
         journal('Stop'),
@@ -132,7 +132,9 @@ describe('claude event normalization', () => {
       {},
     );
     expect(events.map((event) => event.type)).toEqual([
-      'activity',
+      // A stop seen before any turn belongs to an inferred turn and completes it.
+      'turn-started',
+      'turn-completed',
       'turn-started',
       'activity',
       'activity',
@@ -140,7 +142,7 @@ describe('claude event normalization', () => {
       'turn-failed',
       'activity',
     ]);
-    expect(events.filter((event) => event.type === 'turn-completed')).toEqual([]);
+    expect(events.filter((event) => event.type === 'turn-completed')).toHaveLength(1);
     expect(statusAfter([journal('UserPromptSubmit'), journal('StopFailure')])).toEqual([
       'turn-started:working',
       'turn-failed:error',
@@ -285,5 +287,89 @@ describe('claude event normalization', () => {
       'activity:',
       expect.stringMatching(/^input-requested:notification:/u),
     ]);
+  });
+
+  it('infers a turn in progress for a session first seen mid-turn', () => {
+    // Hooks installed while the session was already working: the first record
+    // is a tool call, then a permission wait, then the stop.
+    expect(
+      statusAfter([
+        journal('PreToolUse'),
+        journal('PermissionRequest', { toolCallId: 'p-1' }),
+        journal('PostToolUse', { toolCallId: 'p-1' }),
+        journal('Stop'),
+      ]),
+    ).toEqual([
+      'turn-started:working',
+      'activity:working',
+      'input-requested:needs-input',
+      'input-resolved:working',
+      'activity:working',
+      'turn-completed:unread',
+    ]);
+    // A subagent's work also proves the parent is mid-turn, and a subagent
+    // stop still never completes it.
+    expect(
+      statusAfter([
+        journal('PreToolUse', { isSubagent: true }),
+        journal('Stop', { isSubagent: true }),
+      ]),
+    ).toEqual(['turn-started:working', 'activity:working', 'activity:working']);
+    // A stop seen first completes the inferred turn; a failure fails it.
+    expect(statusAfter([journal('Stop')])).toEqual([
+      'turn-started:working',
+      'turn-completed:unread',
+    ]);
+    expect(statusAfter([journal('StopFailure')])).toEqual([
+      'turn-started:working',
+      'turn-failed:error',
+    ]);
+    // Session lifecycle records alone never open a turn.
+    expect(normalizeClaudeEvents([journal('SessionStart'), journal('SessionEnd')], {})).toEqual([]);
+    // The next prompt starts a fresh turn after an inferred one.
+    expect(statusAfter([journal('PostToolUse'), journal('UserPromptSubmit')])).toEqual([
+      'turn-started:working',
+      'activity:working',
+      'turn-started:working',
+    ]);
+    // A session whose persisted record already had a turn never gets one inferred.
+    const settled = reduceSessionState(
+      reduceSessionState(
+        reduceSessionState(createInitialSessionState(), {
+          type: 'upsert',
+          provider: 'claude',
+          nativeSessionId: 'native-1',
+          surface: 'cli',
+          title: 'project',
+          isTopLevel: true,
+          isArchived: false,
+          canOpen: false,
+          updatedAt: 1,
+        }),
+        { type: 'turn-started', sessionId, turnId: 'turn:1', timestamp: 10 },
+      ),
+      { type: 'turn-completed', sessionId, turnId: 'turn:1', completionId: 'c', timestamp: 11 },
+    );
+    expect(
+      normalizeClaudeEvents([journal('PostToolUse')], settled.sessions).map((event) => event.type),
+    ).toEqual(['activity']);
+  });
+
+  it('never infers a turn from idle, sign-in, or untyped notifications', () => {
+    expect(
+      normalizeClaudeEvents(
+        [
+          journal('SessionStart'),
+          journal('Notification', { notificationType: 'idle_prompt' }),
+          journal('Notification', { notificationType: 'auth_success' }),
+          journal('Notification'),
+        ],
+        {},
+      ),
+    ).toEqual([]);
+    // A prompt notification does prove a turn: the session is waiting.
+    expect(
+      statusAfter([journal('Notification', { notificationType: 'permission_prompt' })]),
+    ).toEqual(['turn-started:working', 'input-requested:needs-input']);
   });
 });

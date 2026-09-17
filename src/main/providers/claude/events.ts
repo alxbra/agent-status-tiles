@@ -21,6 +21,8 @@ interface TurnState {
   openRequests: Set<string>;
   /** Requests issued in this turn, resolved ones included; bounded by persistence. */
   issued: number;
+  /** A turn has been observed or persisted; later stray records never open another. */
+  sawTurn: boolean;
 }
 
 function seedState(record: SessionRecord | undefined): TurnState {
@@ -33,7 +35,43 @@ function seedState(record: SessionRecord | undefined): TurnState {
       if (request.resolvedAt === undefined) openRequests.add(callId);
     }
   }
-  return { turnId: record?.activeTurnId, openRequests, issued };
+  return {
+    turnId: record?.activeTurnId,
+    openRequests,
+    issued,
+    sawTurn: record !== undefined && record.lastTurnStartedAt > 0,
+  };
+}
+
+const TURN_PROVING_NOTIFICATIONS = new Set([
+  'permission_prompt',
+  'elicitation_dialog',
+  'elicitation_complete',
+  'elicitation_response',
+]);
+
+/** Records that can only occur while a turn is in progress. */
+function provesTurnInProgress(event: HookJournalEvent): boolean {
+  switch (event.eventName) {
+    case 'PreToolUse':
+    case 'PostToolUse':
+    case 'PostToolUseFailure':
+    case 'PermissionRequest':
+    case 'Elicitation':
+    case 'ElicitationResult':
+    case 'Stop':
+    case 'StopFailure':
+      return true;
+    case 'Notification':
+      return (
+        event.notificationType !== undefined &&
+        TURN_PROVING_NOTIFICATIONS.has(event.notificationType)
+      );
+    case 'SessionStart':
+    case 'SessionEnd':
+    case 'UserPromptSubmit':
+      return false;
+  }
 }
 
 /**
@@ -63,6 +101,13 @@ export function normalizeClaudeEvents(
     }
     const current = state;
     const timestamp = event.timestamp;
+    const startTurn = (): void => {
+      current.turnId = `turn:${timestamp}`;
+      current.openRequests.clear();
+      current.issued = 0;
+      current.sawTurn = true;
+      output.push({ type: 'turn-started', sessionId, turnId: current.turnId, timestamp });
+    };
     const resolveAll = (): void => {
       if (current.turnId === undefined) return;
       for (const callId of current.openRequests) {
@@ -128,12 +173,19 @@ export function normalizeClaudeEvents(
       }
     };
 
+    // A session observed mid-turn (hooks installed while it was already
+    // working, or a journal that begins after the prompt) has no start
+    // record. Its first record that proves work, a wait, or a stop opens a
+    // turn at that moment. Once any turn has been seen, a stray record after
+    // a completion or failure is plain activity again. Idle and sign-in
+    // notifications prove nothing and never open a turn.
+    if (current.turnId === undefined && !current.sawTurn && provesTurnInProgress(event)) {
+      startTurn();
+    }
+
     switch (event.eventName) {
       case 'UserPromptSubmit': {
-        current.turnId = `turn:${timestamp}`;
-        current.openRequests.clear();
-        current.issued = 0;
-        output.push({ type: 'turn-started', sessionId, turnId: current.turnId, timestamp });
+        startTurn();
         break;
       }
       case 'PreToolUse': {

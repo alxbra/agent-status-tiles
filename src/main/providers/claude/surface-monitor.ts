@@ -18,6 +18,7 @@ import {
 import { MAX_INPUT_REQUESTS } from '../../sessions/persistence';
 import { normalizeClaudeEvents } from './events';
 import type { ClaudeIssue, ClaudeReadiness } from './readiness';
+import type { ClaudeSessionNames } from './session-names';
 import type { ClaudeJournalCollector } from './journal-collector';
 import {
   ClaudeJournalDiscovery,
@@ -41,6 +42,8 @@ export interface ClaudeMonitorOptions {
   /** Test injection. */
   reader?: Pick<HookJournalReader, 'read'>;
   discovery?: Pick<ClaudeJournalDiscovery, 'list' | 'truncated'>;
+  /** Claude's own session names, used as tab titles when present. */
+  sessionNames?: Pick<ClaudeSessionNames, 'lookup'>;
 }
 
 /** A journal that could not be read safely; its session shows as unavailable. */
@@ -90,6 +93,7 @@ export class ClaudeSurfaceMonitor implements ProviderSurfaceMonitor {
   private readonly surface: Surface;
   private readonly reader: Pick<HookJournalReader, 'read'>;
   private readonly discovery: Pick<ClaudeJournalDiscovery, 'list' | 'truncated'>;
+  private readonly sessionNames: Pick<ClaudeSessionNames, 'lookup'> | undefined;
   private readonly collector: Pick<ClaudeJournalCollector, 'sweep'> | undefined;
   private readonly checkReadiness: (() => Promise<ClaudeReadiness>) | undefined;
   private issue: ClaudeIssue | undefined;
@@ -105,6 +109,7 @@ export class ClaudeSurfaceMonitor implements ProviderSurfaceMonitor {
       options.discovery ?? new ClaudeJournalDiscovery({ appDataPath: options.appDataPath });
     this.collector = options.collector;
     this.checkReadiness = options.checkReadiness;
+    this.sessionNames = options.sessionNames;
   }
 
   /** Base names of the journals in this surface's current cohort; the collector keeps them. */
@@ -139,6 +144,8 @@ export class ClaudeSurfaceMonitor implements ProviderSurfaceMonitor {
   async discover(): Promise<RuntimeDiscoveryResult> {
     if (!this.started) throw new Error(`claude-${this.surface}-not-started`);
     const cohort = selectCohort(await this.discovery.list(), this.surface);
+    const names =
+      cohort.length > 0 ? ((await this.sessionNames?.lookup()) ?? new Map()) : new Map();
     const journals = new Map<string, ClaudeJournalSummary>();
     const sources: RuntimeMonitorSource[] = [];
     for (const journal of cohort) {
@@ -146,9 +153,13 @@ export class ClaudeSurfaceMonitor implements ProviderSurfaceMonitor {
       sources.push({
         id: journal.baseName,
         nativeSessionId: journal.nativeSessionId,
-        // The project folder name is the plan's title; a short session ID
-        // stands in when no project was recorded. Never prompt content.
-        title: journal.projectName ?? journal.nativeSessionId.slice(0, 8),
+        // Claude's own session name (what its sidebar shows) when it is
+        // known, else the project folder name, else a short session ID. The
+        // companion never derives a title from content itself.
+        title:
+          names.get(journal.nativeSessionId) ??
+          journal.projectName ??
+          journal.nativeSessionId.slice(0, 8),
         updatedAt: journal.updatedAt,
         isTopLevel: true,
         isArchived: false,

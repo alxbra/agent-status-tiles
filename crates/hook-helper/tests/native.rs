@@ -178,13 +178,20 @@ fn native_helper_records_allowlisted_host_identity_and_session_lifecycle() {
         &data_dir,
         r#"{"hook_event_name":"SessionEnd","session_id":"host-1","reason":"PRIVATE_REASON"}"#,
     );
+    invoke(
+        &data_dir,
+        r#"{"hook_event_name":"PostToolUse","session_id":"host-1","cwd":"/Users/x/Projects/repo/.claude/worktrees/cranky-slug-1234"}"#,
+    );
     let file = journal_files(&data_dir).pop().unwrap();
     let content = fs::read_to_string(file).unwrap();
     let records: Vec<Value> = content
         .lines()
         .map(|line| serde_json::from_str(line).unwrap())
         .collect();
-    assert_eq!(records.len(), 5);
+    assert_eq!(records.len(), 6);
+    // A Claude worktree is named after its repository, not the generated slug.
+    assert_eq!(records[5]["project_name"], "repo");
+    assert!(!content.contains("cranky-slug"));
 
     assert_eq!(records[0]["host"], "claude-desktop");
     assert_eq!(records[0]["entrypoint"], "claude-desktop");

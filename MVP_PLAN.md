@@ -103,7 +103,7 @@ An extended tab shows, in order:
 - One lucide status icon.
 - Nothing else.
 
-Show the stock single-line tooltip only when the title had to truncate. For Codex, use a validated catalog `name`, falling back to the project folder name. The user authorized storing this bounded name locally; never derive a title from `preview`, a transcript, or a rollout payload.
+Titles truncate at 220 px with an ellipsis and never show a tooltip; the full title stays in the accessible name (the product owner removed the tooltip on 2026-09-17). For Codex, use a validated catalog `name`, falling back to the project folder name. For Claude Code, use the session's own name from Claude's per-process session registry (conversation-derived or user-set; Claude's folder-based placeholders are ignored), falling back to the project folder name (the repository name for a worktree). The user authorized storing these bounded harness-chosen names locally on 2026-09-17; never derive a title from `preview`, a transcript, a hook payload, or a rollout payload.
 
 Keep titles out of logs and diagnostics.
 
@@ -185,7 +185,6 @@ Rules:
 - Keyboard focus slides the selected tab fully out.
 - Respect system reduced-motion settings; allow explicitly enabling reduced motion.
 - Reduced motion disables the working animation and the animated slide.
-- Tooltips must remain within the selected display.
 - Display disconnection moves the strip to the primary display; reconnecting restores the selected display.
 - Sleep/wake must restore monitoring and placement.
 - Test actual macOS window behavior; browser screenshots alone are insufficient. Electron provides the relevant workspace and mouse-passthrough controls, but their combination needs native verification. [Electron window documentation](https://www.electronjs.org/docs/latest/api/base-window)

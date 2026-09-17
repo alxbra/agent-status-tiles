@@ -68,6 +68,7 @@ import {
   type ClaudeSurfaceMonitor,
 } from './providers/claude/surface-monitor';
 import { ClaudeJournalDiscovery } from './providers/claude/journal-discovery';
+import { ClaudeSessionNames } from './providers/claude/session-names';
 import {
   ClaudeJournalCollector,
   retainedClaudeJournals,
@@ -359,6 +360,12 @@ if (!hasSingleInstanceLock) {
             });
             return readinessInFlight;
           };
+    // Test runs point at an explicit configuration directory; a seeded-journal
+    // test has none, so titles fall back to project names there.
+    const claudeSessionNames =
+      claude === undefined
+        ? undefined
+        : new ClaudeSessionNames({ configDirectory: claude.configDirectory });
     // Ended journals are collected once both cohorts and the persisted
     // cursors and sessions are known; the monitors exist before the sweep runs.
     const claudeMonitors: ClaudeSurfaceMonitor[] = [];
@@ -373,12 +380,14 @@ if (!hasSingleInstanceLock) {
       appDataPath: app.getPath('userData'),
       discovery: claudeJournals,
       collector: claudeCollector,
+      ...(claudeSessionNames === undefined ? {} : { sessionNames: claudeSessionNames }),
       ...(checkClaudeReadiness === undefined ? {} : { checkReadiness: checkClaudeReadiness }),
     });
     const claudeCliMonitor = new ClaudeCliMonitor({
       appDataPath: app.getPath('userData'),
       discovery: claudeJournals,
       collector: claudeCollector,
+      ...(claudeSessionNames === undefined ? {} : { sessionNames: claudeSessionNames }),
       ...(checkClaudeReadiness === undefined ? {} : { checkReadiness: checkClaudeReadiness }),
     });
     claudeMonitors.push(claudeDesktopMonitor, claudeCliMonitor);

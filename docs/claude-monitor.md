@@ -1,9 +1,10 @@
 # Claude monitor contract
 
 `src/main/providers/claude/` turns the helper's private journals into the
-shared session model. It has no knowledge of Claude's own files: it never
-reads `~/.claude`, transcripts, or the settings file, and no path leaves the
-module. One `ClaudeSurfaceMonitor` runs per surface (`claude:desktop`,
+shared session model. Discovery and replay read nothing under `~/.claude`
+except the per-process session registry described under Discovery (two
+fields, read only) and never transcripts; the readiness check described under
+Connecting reads the settings file separately. No path leaves the module. One `ClaudeSurfaceMonitor` runs per surface (`claude:desktop`,
 `claude:cli`) behind the shared `Claude Code` Settings row.
 
 ## Discovery
@@ -45,10 +46,20 @@ that aged off the page, an ended Claude session only returns if it is resumed
 into the same session ID. A session killed without `SessionEnd` keeps its last
 state until it ages out of the window, because silence is never interpreted.
 
-Sources use the journal hash as their ID and cursor key, the project folder
-name as the title (a short session ID when none was recorded), the journal's
+Sources use the journal hash as their ID and cursor key, the journal's
 modification time as `updatedAt`, and the active file size as the baseline
-cutoff. Titles never come from prompt content.
+cutoff. The title is Claude's own session name when one is known, else the
+project folder name (the repository name for a Claude worktree), else a short
+session ID. Claude Code keeps one small JSON file per running process under
+its configuration directory's `sessions` folder with the session ID and the
+name its Desktop sidebar shows, which Claude derives from the conversation or
+the user sets; a placeholder Claude generates from the folder name is marked
+`derived` and ignored. `ClaudeSessionNames` reads only those fields, bounded
+and validated, as best-effort display enrichment. This registry is observed
+rather than documented behaviour, so a missing or unreadable file simply
+means the folder name is used. The companion never derives a title from
+content itself; the conversation-derived name shown is the one the harness
+chose, as with Codex thread names, and the plan records that authorization.
 
 ## Collection
 
@@ -153,7 +164,14 @@ shared reducer, per session and in journal order. Claude hooks carry no turn
 identifier, so a turn is keyed by the receipt time of the `UserPromptSubmit`
 that started it and every later record of the session attaches to the newest
 turn; the persisted record's active turn and open requests seed the state at
-the start of each read.
+the start of each read. A session first seen mid-turn (hooks installed while
+it was already working, or a journal that begins after the prompt) has no
+start record, so for a session with no turn seen at all, persisted or in this
+read, its first record that proves work opens a turn at that moment; only
+tool, permission, question, elicitation, stop, and prompt-notification records
+count, never idle or sign-in notifications, so a session that is idle when the
+hooks arrive shows nothing new until its next prompt. Once any turn has been
+seen, a stray record after a completion or failure is plain activity.
 
 | Journal record | Lifecycle event |
 | --- | --- |
@@ -163,7 +181,8 @@ the start of each read.
 | `ElicitationResult`, `Notification` `elicitation_complete` / `elicitation_response` | `input-resolved` |
 | other `PreToolUse`, `PostToolUseFailure` | resolves everything open, then `activity` |
 | `Stop` with neither `stop_hook_active` nor `is_subagent` | `turn-completed` with a deterministic completion ID |
-| `Stop` from a subagent or while another stop hook continues the turn, or before any turn | `activity` |
+| `Stop` from a subagent or while another stop hook continues the turn | `activity` |
+| `Stop` or `StopFailure` with no open turn after a completed or failed turn | `activity` / nothing |
 | `StopFailure` | `turn-failed` |
 | `SessionStart`, `SessionEnd`, other notifications | nothing (`SessionEnd` acts through discovery) |
 
@@ -213,7 +232,7 @@ restart, and one settings-file read serves both surfaces when they start
 together. A test run supplies the helper path and configuration directory
 explicitly and reads managed settings from a `managed` folder inside that
 directory; without them the monitors run seeded journals with no readiness
-check and never touch a settings file. In development the helper must exist
+check, no session name registry, and never touch a settings file. In development the helper must exist
 under `build/hook-helper/<arch>/`, which requires a Rust toolchain.
 
 ### Hooks silenced by policy

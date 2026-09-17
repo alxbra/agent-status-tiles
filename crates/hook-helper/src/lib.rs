@@ -254,18 +254,30 @@ fn project_metadata(object: &serde_json::Map<String, Value>) -> (Option<String>,
         .filter(|path| Path::new(path).is_absolute())
         .map(|path| {
             let normalized = normalize_absolute_path(Path::new(&path));
-            let name = Path::new(&normalized)
-                .components()
-                .filter_map(|component| match component {
-                    Component::Normal(value) => value.to_str(),
-                    _ => None,
-                })
-                .next_back()
-                .and_then(|name| bounded_text(name, MAX_PROJECT_BYTES));
+            let name =
+                project_name(&normalized).and_then(|name| bounded_text(name, MAX_PROJECT_BYTES));
             (name, Some(sha256_id(&normalized)))
         })
         .unwrap_or((None, None));
     (cwd_name, project_id)
+}
+
+/// The display name for a working directory: its last component, except that
+/// a Claude worktree (`<repo>/.claude/worktrees/<slug>`) is named after the
+/// repository rather than the generated slug.
+fn project_name(normalized: &str) -> Option<&str> {
+    let components: Vec<&str> = Path::new(normalized)
+        .components()
+        .filter_map(|component| match component {
+            Component::Normal(value) => value.to_str(),
+            _ => None,
+        })
+        .collect();
+    match components.as_slice() {
+        [.., repo, ".claude", "worktrees", _slug] => Some(repo),
+        [.., last] => Some(last),
+        [] => None,
+    }
 }
 
 fn normalize_absolute_path(path: &Path) -> String {
@@ -573,3 +585,25 @@ fn add_no_follow(options: &mut OpenOptions) {
 
 #[cfg(not(unix))]
 fn add_no_follow(_options: &mut OpenOptions) {}
+
+#[cfg(test)]
+mod tests {
+    use super::project_name;
+
+    #[test]
+    fn project_name_prefers_the_repository_for_claude_worktrees() {
+        assert_eq!(project_name("/Users/x/Projects/repo"), Some("repo"));
+        assert_eq!(
+            project_name("/Users/x/Projects/repo/.claude/worktrees/slug-1234"),
+            Some("repo")
+        );
+        assert_eq!(project_name("/.claude/worktrees/x"), Some("x"));
+        assert_eq!(project_name("/repo/.claude/worktrees"), Some("worktrees"));
+        assert_eq!(
+            project_name("/repo/.claude/worktrees/a/.claude/worktrees/b"),
+            Some("a")
+        );
+        assert_eq!(project_name("/repo/.claude/worktrees/a/src"), Some("src"));
+        assert_eq!(project_name("/"), None);
+    }
+}

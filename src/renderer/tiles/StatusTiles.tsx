@@ -199,15 +199,7 @@ function StatusTab({
   onKeyDown,
   onDismiss,
 }: StatusTabProps): ReactElement {
-  const labelRef = useRef<HTMLSpanElement>(null);
-  const [isTruncated, setIsTruncated] = useState(false);
   const title = sessionDisplayTitle(session.title, session.id);
-
-  useLayoutEffect(() => {
-    const label = labelRef.current;
-    if (label === null) return;
-    setIsTruncated(label.scrollWidth > label.clientWidth);
-  }, [title]);
 
   const style = {
     top: `${slot.y}px`,
@@ -216,11 +208,7 @@ function StatusTab({
   } as CSSProperties;
 
   return (
-    <TileContextMenu
-      canDismiss={session.status === 'error'}
-      onDismiss={onDismiss}
-      tooltip={isTruncated ? title : null}
-    >
+    <TileContextMenu canDismiss={session.status === 'error'} onDismiss={onDismiss}>
       <button
         ref={buttonRef}
         className="status-tiles__tile"
@@ -244,9 +232,7 @@ function StatusTab({
         onKeyDown={onKeyDown}
       >
         <ProviderIcon provider={session.provider} className="status-tiles__provider-icon" />
-        <span ref={labelRef} className="status-tiles__label">
-          {title}
-        </span>
+        <span className="status-tiles__label">{title}</span>
         <StatusIcon status={session.status} className="status-tiles__status-icon" />
       </button>
     </TileContextMenu>
