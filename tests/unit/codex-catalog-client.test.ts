@@ -117,7 +117,7 @@ process.stdin.on('data', (chunk) => {
     if (mode === 'require-default-page-size' && request.params.limit !== 20) process.exit(5);
     if (mode === 'delay') continue;
     if (mode === 'oversized') {
-      process.stdout.write('x'.repeat(1024 * 1024 + 1) + '\\n');
+      process.stdout.write('x'.repeat(4 * 1024 * 1024 + 1) + '\\n');
       continue;
     }
     if (mode === 'malformed-result') {
@@ -174,6 +174,9 @@ process.stdin.on('data', (chunk) => {
       };
     }
     if (mode === 'empty-name') outputPage.data[0] = { ...outputPage.data[0], name: '   ' };
+    if (mode === 'large-preview') {
+      outputPage.data = outputPage.data.map((record) => ({ ...record, preview: 'PRIVATE_PROMPT_'.repeat(48 * 1024) }));
+    }
     if (mode === 'repeated-cursor') outputPage.nextCursor = 'page-2';
     process.stdout.write(JSON.stringify({ id: request.id, result: outputPage }) + '\\n');
   }
@@ -317,6 +320,21 @@ describe('Codex catalog client', () => {
     expect(result.nextCursor).toBe('page-2');
     expect(result.records).toHaveLength(2);
     expect(result.records.every((record) => record.isArchived === false)).toBe(true);
+    expect(diagnostics).toEqual([]);
+    await client.stop();
+  });
+
+  it('accepts a live page above 1 MiB of discarded preview text', async () => {
+    const diagnostics: CodexCatalogDiagnosticCode[] = [];
+    const client = createClient(await createFakeBinary('large-preview'), diagnostics);
+
+    // Two records carrying ~720 KiB of preview each: ~1.4 MiB on one line,
+    // matching a measured 50-record page, and far below the 4 MiB bound.
+    const result = await client.listThreads({ maxPages: 1 });
+
+    expect(result.records).toHaveLength(2);
+    expect(result.records[0]).not.toHaveProperty('preview');
+    expect(JSON.stringify(result.records)).not.toContain('PRIVATE_PROMPT_');
     expect(diagnostics).toEqual([]);
     await client.stop();
   });

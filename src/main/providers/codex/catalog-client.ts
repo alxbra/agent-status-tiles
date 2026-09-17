@@ -4,7 +4,12 @@ import { basename, isAbsolute } from 'node:path';
 const MAX_PENDING_REQUESTS = 32;
 const MAX_REQUEST_TIMEOUT_MS = 30_000;
 const DEFAULT_REQUEST_TIMEOUT_MS = 10_000;
-const MAX_PROTOCOL_LINE_BYTES = 1024 * 1024;
+// Bounded memory for one protocol line. A `thread/list` page is dominated by
+// per-record `preview` text (the first user prompt), which projection discards:
+// on a real store, 25 records measured 621 KiB (576 KiB preview) and 50
+// records 1,474 KiB. 4 MiB keeps the 25-record discovery page well clear of the
+// limit for users with long prompts while still rejecting runaway output.
+const MAX_PROTOCOL_LINE_BYTES = 4 * 1024 * 1024;
 const MAX_PAGE_SIZE = 100;
 const DEFAULT_PAGE_SIZE = 20;
 const MAX_PAGES = 16;
