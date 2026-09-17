@@ -91,7 +91,7 @@ interface OwnedHookCommand {
   dataDirectory: string;
 }
 
-type JsonObject = Record<string, unknown>;
+export type JsonObject = Record<string, unknown>;
 
 /** Identity of the file version a plan was computed from. */
 export interface SettingsSnapshot {
@@ -282,7 +282,8 @@ export function verifyClaudeHooks(
   return { status: 'installed' };
 }
 
-function errorCode(error: unknown): unknown {
+/** The `code` of a Node filesystem error, or undefined for anything else. */
+export function errorCode(error: unknown): unknown {
   return (error as { code?: unknown }).code;
 }
 

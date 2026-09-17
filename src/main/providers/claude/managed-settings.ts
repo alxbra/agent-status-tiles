@@ -2,7 +2,12 @@ import { readdir, stat } from 'node:fs/promises';
 import { userInfo } from 'node:os';
 import { join } from 'node:path';
 
-import { ClaudeHookSettingsError, readClaudeSettingsFile } from './hook-installer';
+import {
+  ClaudeHookSettingsError,
+  errorCode,
+  readClaudeSettingsFile,
+  type JsonObject,
+} from './hook-installer';
 
 /**
  * Where Claude Code reads file-based managed settings on macOS; see the
@@ -39,8 +44,6 @@ export type ClaudeManagedHooksVerification =
 export type ClaudeManagedHookSetting =
   'disableAllHooks' | 'allowManagedHooksOnly' | 'strictPluginOnlyCustomization';
 
-type JsonObject = Record<string, unknown>;
-
 export function defaultClaudeManagedLocations(): ClaudeManagedLocations {
   const plist = `${MANAGED_PREFERENCES_DOMAIN}.plist`;
   let user: string | undefined;
@@ -56,10 +59,6 @@ export function defaultClaudeManagedLocations(): ClaudeManagedLocations {
       ...(user ? [join(MANAGED_PREFERENCES_ROOT, user, plist)] : []),
     ],
   };
-}
-
-function errorCode(error: unknown): unknown {
-  return (error as { code?: unknown }).code;
 }
 
 /** Whether any MDM plist for the domain exists; unreadable counts as present. */
@@ -121,6 +120,9 @@ function mergeHookPolicy(policy: MergedHookPolicy, settings: JsonObject): void {
   if (strict === true) {
     policy.lockAllSurfaces = true;
   } else if (Array.isArray(strict)) {
+    // Lists combine with an earlier list, but a later value replaces an
+    // earlier single value, so an array after `true` names the locks anew.
+    policy.lockAllSurfaces = false;
     for (const surface of strict) policy.lockedSurfaces.add(surface);
   } else if (strict === false) {
     // A later single value replaces the earlier one, so an explicit `false`

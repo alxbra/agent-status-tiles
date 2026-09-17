@@ -181,8 +181,9 @@ the one residual false-alarm case is an organization that deploys hook
 restrictions in a managed file while its server-managed policy, which
 outranks the file, leaves hooks alone; both come from the same administrator
 and the sentence still names the right person. A managed file that cannot be
-read or parsed reports nothing, because Claude Code refuses to start on such
-a file and the row cannot know what applies.
+read or parsed, or a drop-in directory that cannot be listed or holds more
+files than the bound, reports nothing: the app cannot tell what applies
+(Claude Code itself refuses to start on invalid managed JSON).
 
 Two silencers remain undetectable and are documented rather than reported: a
 `disableAllHooks` in a project's `.claude/settings.json` or

@@ -1,6 +1,6 @@
 import { chmod, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 
 import { afterEach, describe, expect, it } from 'vitest';
 
@@ -26,7 +26,7 @@ async function locations(): Promise<ClaudeManagedLocations & { root: string }> {
 
 async function writeManaged(directory: string, name: string, content: unknown): Promise<void> {
   const path = join(directory, name);
-  await mkdir(join(path, '..'), { recursive: true });
+  await mkdir(dirname(path), { recursive: true });
   await writeFile(path, typeof content === 'string' ? content : JSON.stringify(content));
 }
 
@@ -114,15 +114,31 @@ describe('claude managed settings', () => {
     });
     await writeManaged(dropIns, '47-unlock-all.json', { strictPluginOnlyCustomization: false });
     expect(await inspectClaudeManagedHooks(managed)).toEqual({ status: 'unrestricted' });
+    // A later array replaces an earlier `true` and names the locks anew,
+    // with no earlier list left to combine with.
+    for (const name of ['05-lock', '45-unlock', '46-relock']) {
+      await rm(join(dropIns, `${name}.json`));
+    }
+    await writeManaged(dropIns, '47-unlock-all.json', {
+      strictPluginOnlyCustomization: ['skills'],
+    });
+    expect(await inspectClaudeManagedHooks(managed)).toEqual({ status: 'unrestricted' });
+    await writeManaged(dropIns, '48-lock-all.json', { strictPluginOnlyCustomization: true });
+    expect(await inspectClaudeManagedHooks(managed)).toEqual({
+      status: 'restricted',
+      setting: 'strictPluginOnlyCustomization',
+    });
     await writeManaged(managed.directory, 'managed-settings.json', { disableAllHooks: true });
-    await rm(join(dropIns, '45-unlock.json'));
-    await rm(join(dropIns, '46-relock.json'));
     await rm(join(dropIns, '47-unlock-all.json'));
+    await rm(join(dropIns, '48-lock-all.json'));
 
-    await rm(join(dropIns, '05-lock.json'));
-    await writeManaged(dropIns, '.hidden.json', { disableAllHooks: true });
-    await writeManaged(dropIns, 'notes.txt', '{ "disableAllHooks": true }');
-    await writeManaged(dropIns, 'README.json.bak', { disableAllHooks: true });
+    // Surviving files: managed-settings.json (true), 10 (false), 20 (true),
+    // 30 (false), 40 (skills only); the result is unrestricted, and each
+    // ignored file below would flip it to restricted if it were read, since
+    // a named lock survives every later single-value replacement.
+    await writeManaged(dropIns, '.hidden.json', { strictPluginOnlyCustomization: ['hooks'] });
+    await writeManaged(dropIns, 'notes.txt', '{ "strictPluginOnlyCustomization": ["hooks"] }');
+    await writeManaged(dropIns, 'README.json.bak', { strictPluginOnlyCustomization: ['hooks'] });
     expect(await inspectClaudeManagedHooks(managed)).toEqual({ status: 'unrestricted' });
 
     // A drop-in directory alone, without the main file, is still read.
@@ -176,5 +192,20 @@ describe('claude managed settings', () => {
     });
     await writeFile(plist, 'not parsed');
     expect(await inspectClaudeManagedHooks(withProfile)).toEqual({ status: 'unknown' });
+
+    // A profile that cannot even be stat'ed may still exist, so it counts as present.
+    const locked = join(managed.root, 'locked');
+    await mkdir(locked);
+    await chmod(locked, 0o000);
+    try {
+      expect(
+        await inspectClaudeManagedHooks({
+          ...managed,
+          preferencesPaths: [join(locked, 'com.anthropic.claudecode.plist')],
+        }),
+      ).toEqual({ status: 'unknown' });
+    } finally {
+      await chmod(locked, 0o700);
+    }
   });
 });
