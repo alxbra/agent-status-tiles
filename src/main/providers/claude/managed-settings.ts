@@ -118,8 +118,16 @@ function mergeHookPolicy(policy: MergedHookPolicy, settings: JsonObject): void {
     policy.allowManagedHooksOnly = settings.allowManagedHooksOnly;
   }
   const strict = settings.strictPluginOnlyCustomization;
-  if (strict === true) policy.lockAllSurfaces = true;
-  else if (Array.isArray(strict)) for (const surface of strict) policy.lockedSurfaces.add(surface);
+  if (strict === true) {
+    policy.lockAllSurfaces = true;
+  } else if (Array.isArray(strict)) {
+    for (const surface of strict) policy.lockedSurfaces.add(surface);
+  } else if (strict === false) {
+    // A later single value replaces the earlier one, so an explicit `false`
+    // lifts every lock a previous file set.
+    policy.lockAllSurfaces = false;
+    policy.lockedSurfaces.clear();
+  }
 }
 
 function restrictingSetting(policy: MergedHookPolicy): ClaudeManagedHookSetting | undefined {

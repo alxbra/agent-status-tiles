@@ -158,9 +158,10 @@ three managed keys that keep hooks in the user settings file from running:
 (`true` or an array naming `hooks`). The readiness check reads the file-based
 managed source, `/Library/Application Support/ClaudeCode/managed-settings.json`
 merged with the visible `*.json` drop-ins of `managed-settings.d/` in
-alphabetical order (a later single value replaces an earlier one, lists
-combine, and an `allowManagedHooksOnly` that is present but not `false`
-counts as on, which is how Claude Code treats an invalid value), and reports
+alphabetical order (a later single value replaces an earlier one, so a later
+`false` lifts a lock; lists combine; and an `allowManagedHooksOnly` that is
+present but not `false` counts as on, which is how Claude Code treats an
+invalid value), and reports
 `hooks-blocked` when the merged result blocks them. The sentence asks for an
 administrator and promises that the connection resumes on its own, which the
 coordinator's retry delivers once the policy is lifted. That read is bounded
@@ -173,9 +174,15 @@ source by default, so when an MDM configuration profile for the
 `com.anthropic.claudecode` domain exists under `/Library/Managed Preferences`
 the files may not apply at all, and the check reports nothing rather than a
 possible false alarm; the profile itself, server-managed settings fetched
-from claude.ai, and settings an embedding host passes are not read. A managed
-file that cannot be read or parsed also reports nothing, because Claude Code
-refuses to start on such a file and the row cannot know what applies.
+from claude.ai, and settings an embedding host passes are not read. Whether
+server-managed settings apply cannot be established locally (their cache is
+undocumented and lives under `~/.claude`, which this module never reads), so
+the one residual false-alarm case is an organization that deploys hook
+restrictions in a managed file while its server-managed policy, which
+outranks the file, leaves hooks alone; both come from the same administrator
+and the sentence still names the right person. A managed file that cannot be
+read or parsed reports nothing, because Claude Code refuses to start on such
+a file and the row cannot know what applies.
 
 Two silencers remain undetectable and are documented rather than reported: a
 `disableAllHooks` in a project's `.claude/settings.json` or

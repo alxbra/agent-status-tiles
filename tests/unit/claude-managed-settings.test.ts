@@ -101,6 +101,24 @@ describe('claude managed settings', () => {
       setting: 'strictPluginOnlyCustomization',
     });
 
+    // A later `false` replaces the accumulated lock; a later array locks again.
+    await writeManaged(dropIns, '45-unlock.json', { strictPluginOnlyCustomization: false });
+    expect(await inspectClaudeManagedHooks(managed)).toEqual({ status: 'unrestricted' });
+    await writeManaged(dropIns, '46-relock.json', { strictPluginOnlyCustomization: ['hooks'] });
+    expect(await inspectClaudeManagedHooks(managed)).toEqual({
+      status: 'restricted',
+      setting: 'strictPluginOnlyCustomization',
+    });
+    await writeManaged(managed.directory, 'managed-settings.json', {
+      strictPluginOnlyCustomization: true,
+    });
+    await writeManaged(dropIns, '47-unlock-all.json', { strictPluginOnlyCustomization: false });
+    expect(await inspectClaudeManagedHooks(managed)).toEqual({ status: 'unrestricted' });
+    await writeManaged(managed.directory, 'managed-settings.json', { disableAllHooks: true });
+    await rm(join(dropIns, '45-unlock.json'));
+    await rm(join(dropIns, '46-relock.json'));
+    await rm(join(dropIns, '47-unlock-all.json'));
+
     await rm(join(dropIns, '05-lock.json'));
     await writeManaged(dropIns, '.hidden.json', { disableAllHooks: true });
     await writeManaged(dropIns, 'notes.txt', '{ "disableAllHooks": true }');
