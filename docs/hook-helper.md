@@ -42,6 +42,60 @@ notarization, or Gatekeeper acceptance. See electron-builder's
 [application contents documentation](https://www.electron.build/docs/contents/)
 for the `extraResources` placement contract.
 
+## Installation into Claude Code settings
+
+`src/main/providers/claude/hook-installer.ts` owns the entries the app writes
+into the user's Claude Code settings file, `~/.claude/settings.json` by
+default (Claude Desktop and the terminal CLI share it). The helper path comes
+from `src/main/providers/claude/helper-path.ts`: the packaged resource under
+`Contents/Resources/hook-helper/<arch>/hook-helper`, or
+`build/hook-helper/<arch>/hook-helper` in development, and only when it is a
+regular, owner-executable file rather than a symlink. A quarantined app that
+macOS runs from a throwaway App Translocation path is refused
+(`helper-translocated`), because that path would not survive the next launch.
+
+The installer writes exactly one matcher-less group per event in the helper's
+allowlist, each holding one command hook:
+
+```json
+{ "type": "command", "command": "'<helper>' --provider claude --data-dir '<app-data>'", "timeout": 5, "async": true }
+```
+
+Both paths are single-quoted for the shell, and the fixed argument order is the
+ownership marker: an entry is owned only when it parses back to an absolute
+`hook-helper` path plus `--provider claude --data-dir` and an absolute data
+directory. Because ownership is decided by that shape alone, a development
+build and a packaged build installing into the same settings file replace each
+other's entry. Every other key, event, matcher group, and hook in the file is
+kept in place and in order, including the position of the `hooks` key.
+Installing over a stale owned entry replaces it; removing deletes only owned
+entries and drops the groups, events, and `hooks` object that become empty. A
+file whose planned content equals its current content is not rewritten, which
+also covers a complete install the user has silenced with `disableAllHooks`.
+
+The file is re-serialised as two-space JSON with a trailing newline. A file
+the app creates is mode `0600` inside a `0700` configuration directory it
+creates when absent. Writes go through a symlinked settings file rather
+than replacing the link, keep the file's exact mode regardless of the umask,
+land through a temporary file and rename, and remove that temporary file on
+any failure. Claude Desktop and the CLI write the same file, so the version the
+plan was computed from is re-checked immediately before the rename and a
+changed file aborts the write untouched (`settings-changed`); the caller
+simply retries. A file that is not valid JSON, not a JSON object, larger than
+1 MiB, or whose `hooks` section has an unexpected shape is never rewritten,
+and a dangling symlink or a non-file at the path is reported rather than
+replaced. Typed errors name the reason: `settings-unreadable`,
+`settings-not-json`, `settings-not-object`, `settings-oversized`,
+`hooks-unsupported`, `settings-changed`, or `settings-unwritable`.
+
+Verification reports `installed` (every event carries exactly one owned entry
+with the exact written shape in a matcher-less group), `missing`, `stale` (an
+owned entry is absent, duplicated, matcher-scoped, or differs in any field),
+`disabled` when `disableAllHooks` is set in the same file, or `unreadable`
+with one of the read codes above (`settings-changed` and `settings-unwritable`
+only arise from a write). Connecting the Claude row and surfacing these
+states in Settings belong to later slices.
+
 ## Input and privacy
 
 The helper reads one JSON object from stdin, up to 64 KiB. It accepts the
