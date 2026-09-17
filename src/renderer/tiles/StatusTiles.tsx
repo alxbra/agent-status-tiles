@@ -20,8 +20,8 @@ import {
   DOCK_HOVER_WIDTH,
   layoutTabs,
   MAX_VISIBLE_TABS,
-  DOCK_PADDING,
   normalizeStripWidth,
+  REACH_PADDING,
   reachWidthFor,
   resolveHover,
   TAB_MOTION_MS,
@@ -658,9 +658,9 @@ export function StatusTiles({
           className="status-tiles__reach-zone"
           style={{
             left: `${Math.max(0, effectiveWidth - reachWidth)}px`,
-            top: `${Math.max(0, layout.top - DOCK_PADDING)}px`,
+            top: `${Math.max(0, layout.top - REACH_PADDING)}px`,
             width: `${Math.min(effectiveWidth, reachWidth)}px`,
-            height: `${layout.bottom + DOCK_PADDING - Math.max(0, layout.top - DOCK_PADDING)}px`,
+            height: `${Math.min(measuredHeight, layout.bottom + REACH_PADDING) - Math.max(0, layout.top - REACH_PADDING)}px`,
           }}
           aria-hidden="true"
         />

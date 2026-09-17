@@ -19,6 +19,8 @@ export const TAB_HIT_MIN_WIDTH = 24;
 export const DOCK_HOVER_WIDTH = 48;
 /** Vertical breathing room around the stack; also hosts the overflow indicators. */
 export const DOCK_PADDING = 14;
+/** Vertical margin of the reach zone above and below the stack once a tab is extended. */
+export const REACH_PADDING = 48;
 export const MAX_VISIBLE_TABS = 12;
 export const TAB_MOTION_MS = 140;
 export const TAB_STAGGER_MS = 8;
@@ -261,11 +263,12 @@ export function resolveHover(
   const depth = options.extended
     ? Math.min(width, Math.max(DOCK_HOVER_WIDTH, finiteOr(options.reachWidth, DOCK_HOVER_WIDTH)))
     : DOCK_HOVER_WIDTH;
+  const padding = options.extended ? REACH_PADDING : DOCK_PADDING;
   const inside =
     point.x >= width - depth &&
     point.x <= width &&
-    point.y >= layout.top - DOCK_PADDING &&
-    point.y <= layout.bottom + DOCK_PADDING;
+    point.y >= layout.top - padding &&
+    point.y <= layout.bottom + padding;
   if (!inside) return { inside: false, hoveredIndex: null };
   return { inside: true, hoveredIndex: options.extended ? slotIndexAtY(layout, point.y) : null };
 }

@@ -4,6 +4,7 @@ export {
   DEFAULT_STRIP_WIDTH,
   DOCK_HOVER_WIDTH,
   DOCK_PADDING,
+  REACH_PADDING,
   layoutTabs,
   MAX_VISIBLE_TABS,
   minimumHeightForSlots,

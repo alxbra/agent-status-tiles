@@ -6,6 +6,7 @@ import {
   DOCK_HOVER_WIDTH,
   DOCK_PADDING,
   layoutTabs,
+  REACH_PADDING,
   MAX_VISIBLE_TABS,
   minimumHeightForSlots,
   normalizeStripWidth,
@@ -220,7 +221,16 @@ describe('tab dock geometry', () => {
       hoveredIndex: null,
     });
     expect(
-      resolveHover(layout, { x: width - 150, y: layout.top - DOCK_PADDING - 1 }, extended).inside,
+      resolveHover(layout, { x: width - 150, y: layout.top - REACH_PADDING }, extended),
+    ).toEqual({ inside: true, hoveredIndex: null });
+    expect(
+      resolveHover(layout, { x: width - 150, y: layout.bottom + REACH_PADDING }, extended),
+    ).toEqual({ inside: true, hoveredIndex: null });
+    expect(
+      resolveHover(layout, { x: width - 150, y: layout.top - REACH_PADDING - 1 }, extended).inside,
+    ).toBe(false);
+    expect(
+      resolveHover(layout, { x: width - 10, y: layout.top - DOCK_PADDING - 1 }, folded).inside,
     ).toBe(false);
     expect(
       resolveHover(layout, { x: width - 150, y: rowY }, { ...extended, reachWidth: 20 }),
