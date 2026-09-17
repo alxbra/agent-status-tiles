@@ -276,6 +276,8 @@ export function StatusTiles({
   /** Mirrors the hovered tab synchronously for pointer handlers that fire back to back. */
   const hoveredSessionIdRef = useRef<string | null>(null);
   const reachWidthRef = useRef(DOCK_HOVER_WIDTH);
+  /** Once the pointer has extended a tab, the reach zone stays engaged until the pointer leaves it. */
+  const reachEngagedRef = useRef(false);
   const [reachWidth, setReachWidth] = useState(DOCK_HOVER_WIDTH);
   const [scrollOffset, setScrollOffset] = useState(0);
   const [focusedIndex, setFocusedIndex] = useState<number | null>(null);
@@ -382,7 +384,7 @@ export function StatusTiles({
       if (root === null) return;
       const bounds = root.getBoundingClientRect();
       const layout = layoutRef.current;
-      const extended = hoveredSessionIdRef.current !== null;
+      const extended = reachEngagedRef.current;
       const resolution = resolveHover(
         layout,
         { x: event.clientX - bounds.left, y: event.clientY - bounds.top },
@@ -401,6 +403,7 @@ export function StatusTiles({
           pointerInsideRef.current = true;
           beginInteractionFromRef();
         }
+        if (hovered !== null) reachEngagedRef.current = true;
         setDockActive(true);
         setHoveredSessionId(hovered);
       } else if (pointerInsideRef.current) {
@@ -466,7 +469,7 @@ export function StatusTiles({
       { x: clientX - bounds.left, y: clientY - bounds.top },
       {
         stripWidth: bounds.width,
-        extended: hoveredSessionIdRef.current !== null,
+        extended: reachEngagedRef.current,
         reachWidth: reachWidthRef.current,
       },
     ).inside;
@@ -485,6 +488,7 @@ export function StatusTiles({
   }
 
   function leavePointerFromRef(): void {
+    reachEngagedRef.current = false;
     setDockActive(false);
     setHoveredSessionId(null);
     if (focusWithinRef.current) return;
@@ -508,6 +512,7 @@ export function StatusTiles({
    * overlay appears under a resting cursor, so enter/leave also drive hover. */
   function handleTabPointerEnter(session: SessionSnapshot): void {
     pointerInsideRef.current = true;
+    reachEngagedRef.current = true;
     beginInteractionFromRef();
     setDockActive(true);
     setHoveredSessionId(session.id);

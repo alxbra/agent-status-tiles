@@ -257,6 +257,17 @@ test('keeps the dock open while moving between rows inside the reach zone', asyn
   await page.waitForTimeout(100);
   await expect(tabs.nth(1)).toHaveAttribute('data-extended', 'true');
 
+  // The padding rows above and below the stack keep the dock open with no
+  // tab extended, and coming back onto a row extends it again.
+  await page.mouse.move(VIEWPORT.width - 150, boxes[0]!.y - 8);
+  await expect(page.locator('.status-tiles__tile[data-extended="true"]')).toHaveCount(0);
+  await expect(page.locator('.status-tiles')).toHaveClass(/status-tiles--active/);
+  await page.mouse.move(VIEWPORT.width - 150, boxes[2]!.y + boxes[2]!.height + 8);
+  await expect(page.locator('.status-tiles__tile[data-extended="true"]')).toHaveCount(0);
+  await expect(page.locator('.status-tiles')).toHaveClass(/status-tiles--active/);
+  await page.mouse.move(VIEWPORT.width - 150, rows[1]!);
+  await expect(tabs.nth(1)).toHaveAttribute('data-extended', 'true');
+
   // The gap between rows belongs to the nearest tab instead of folding.
   await page.mouse.move(VIEWPORT.width - 150, boxes[2]!.y - 1);
   await expect(tabs.nth(2)).toHaveAttribute('data-extended', 'true');
