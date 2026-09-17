@@ -20,6 +20,9 @@ const MAX_PROJECT_BYTES: usize = 256;
 const MAX_NAVIGATION_BYTES: usize = 64;
 const LOCK_TIMEOUT: Duration = Duration::from_millis(500);
 const LOCK_WAIT: Duration = Duration::from_millis(5);
+const ENTRYPOINTS: [&str; 2] = ["claude-desktop", "cli"];
+const SESSION_SOURCES: [&str; 5] = ["startup", "resume", "clear", "compact", "fork"];
+const END_REASONS: [&str; 5] = ["clear", "resume", "logout", "prompt_input_exit", "other"];
 
 #[derive(Debug)]
 pub enum HelperError {
@@ -59,6 +62,16 @@ struct ReducedEvent {
     notification_type: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     stop_hook_active: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    host: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    entrypoint: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    is_subagent: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    session_source: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    end_reason: Option<String>,
 }
 
 /// Parse, reduce, and append one hook payload. Errors are intentionally returned
@@ -149,6 +162,26 @@ fn reduce_event(provider: &str, value: &Value) -> Option<ReducedEvent> {
             )
         });
     let stop_hook_active = object.get("stop_hook_active").and_then(Value::as_bool);
+    let (host, entrypoint) = host_identity();
+    // The entrypoint marker belongs to Claude Code; a Codex hook launched from
+    // inside a Claude session would inherit it and must not record it.
+    let entrypoint = entrypoint.filter(|_| provider == "claude");
+    // Subagent hooks reuse the parent session ID and add an agent ID. Only the
+    // fact that one is present is kept, never the ID itself, and no bound is
+    // applied because a dropped marker would fail unsafe.
+    let is_subagent = object
+        .get("agent_id")
+        .and_then(Value::as_str)
+        .is_some_and(|id| !id.trim().is_empty())
+        .then_some(true);
+    let session_source = (event_name == "SessionStart")
+        .then(|| string_field(object, "source", MAX_NAVIGATION_BYTES))
+        .flatten()
+        .filter(|value| SESSION_SOURCES.contains(&value.as_str()));
+    let end_reason = (event_name == "SessionEnd")
+        .then(|| string_field(object, "reason", MAX_NAVIGATION_BYTES))
+        .flatten()
+        .filter(|value| END_REASONS.contains(&value.as_str()));
 
     Some(ReducedEvent {
         schema_version: 1,
@@ -165,7 +198,42 @@ fn reduce_event(provider: &str, value: &Value) -> Option<ReducedEvent> {
         project_id,
         notification_type,
         stop_hook_active,
+        host,
+        entrypoint,
+        is_subagent,
+        session_source,
+        end_reason,
     })
+}
+
+/// Launching applications recognised from `__CFBundleIdentifier`.
+fn host_name(bundle: &str) -> Option<&'static str> {
+    Some(match bundle {
+        "com.anthropic.claudefordesktop" => "claude-desktop",
+        "com.apple.Terminal" => "terminal",
+        "com.googlecode.iterm2" => "iterm2",
+        "com.mitchellh.ghostty" => "ghostty",
+        "dev.warp.Warp-Stable" => "warp",
+        _ => return None,
+    })
+}
+
+/// Hook processes inherit the launching application's environment. Two
+/// variables identify the host: macOS sets `__CFBundleIdentifier` for
+/// GUI-launched processes, and Claude Code sets `CLAUDE_CODE_ENTRYPOINT`. These
+/// are the only variables read. Only exact allowlisted values produce a field;
+/// anything else, including an unknown terminal or an IDE, is omitted rather
+/// than recorded.
+fn host_identity() -> (Option<String>, Option<String>) {
+    let host = std::env::var("__CFBundleIdentifier")
+        .ok()
+        .and_then(|value| host_name(value.trim()))
+        .map(str::to_owned);
+    let entrypoint = std::env::var("CLAUDE_CODE_ENTRYPOINT")
+        .ok()
+        .map(|value| value.trim().to_owned())
+        .filter(|value| ENTRYPOINTS.contains(&value.as_str()));
+    (host, entrypoint)
 }
 
 fn string_field(

@@ -25,14 +25,27 @@ fn invoke(data_dir: &Path, payload: &str) {
 }
 
 fn invoke_provider(data_dir: &Path, provider: &str, payload: &str) {
-    let mut child = Command::new(env!("CARGO_BIN_EXE_hook-helper"))
+    invoke_with_env(data_dir, provider, payload, &[]);
+}
+
+/// Every helper process starts with the two host variables scrubbed so the
+/// developer's own session never leaks into a journal under test.
+fn helper_command(data_dir: &Path, provider: &str, env: &[(&str, &str)]) -> Command {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_hook-helper"));
+    command
         .args(["--provider", provider, "--data-dir"])
         .arg(data_dir)
+        .env_remove("__CFBundleIdentifier")
+        .env_remove("CLAUDE_CODE_ENTRYPOINT")
+        .envs(env.iter().copied())
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .unwrap();
+        .stderr(Stdio::piped());
+    command
+}
+
+fn invoke_with_env(data_dir: &Path, provider: &str, payload: &str, env: &[(&str, &str)]) {
+    let mut child = helper_command(data_dir, provider, env).spawn().unwrap();
     child
         .stdin
         .take()
@@ -70,14 +83,7 @@ fn wait_bounded(mut child: Child) -> Output {
 }
 
 fn spawn(data_dir: &Path, payload: &str) -> Child {
-    let mut child = Command::new(env!("CARGO_BIN_EXE_hook-helper"))
-        .args(["--provider", "claude", "--data-dir"])
-        .arg(data_dir)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .unwrap();
+    let mut child = helper_command(data_dir, "claude", &[]).spawn().unwrap();
     child
         .stdin
         .take()
@@ -134,6 +140,93 @@ fn native_helper_reduces_fixture_and_is_silent_on_malformed_input() {
     assert!(value.get("prompt").is_none());
     assert!(value.get("tool_input").is_none());
     assert!(line.len() <= hook_helper::MAX_RECORD_BYTES);
+    fs::remove_dir_all(data_dir).unwrap();
+}
+
+#[test]
+fn native_helper_records_allowlisted_host_identity_and_session_lifecycle() {
+    let data_dir = temp_dir("identity");
+    invoke_with_env(
+        &data_dir,
+        "claude",
+        r#"{"hook_event_name":"SessionStart","session_id":"host-1","source":"resume","agent_id":"agent-secret","reason":"must-not-apply"}"#,
+        &[
+            ("__CFBundleIdentifier", "com.anthropic.claudefordesktop"),
+            ("CLAUDE_CODE_ENTRYPOINT", "claude-desktop"),
+        ],
+    );
+    invoke_with_env(
+        &data_dir,
+        "claude",
+        r#"{"hook_event_name":"SessionEnd","session_id":"host-1","reason":"logout","source":"startup"}"#,
+        &[("__CFBundleIdentifier", "com.mitchellh.ghostty")],
+    );
+    invoke_with_env(
+        &data_dir,
+        "claude",
+        r#"{"hook_event_name":"Stop","session_id":"host-1","agent_id":""}"#,
+        &[
+            ("__CFBundleIdentifier", "com.microsoft.VSCode"),
+            ("CLAUDE_CODE_ENTRYPOINT", "sdk-ts"),
+        ],
+    );
+    invoke(
+        &data_dir,
+        r#"{"hook_event_name":"SessionStart","session_id":"host-1","source":"PRIVATE_SOURCE"}"#,
+    );
+    invoke(
+        &data_dir,
+        r#"{"hook_event_name":"SessionEnd","session_id":"host-1","reason":"PRIVATE_REASON"}"#,
+    );
+    let file = journal_files(&data_dir).pop().unwrap();
+    let content = fs::read_to_string(file).unwrap();
+    let records: Vec<Value> = content
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(records.len(), 5);
+
+    assert_eq!(records[0]["host"], "claude-desktop");
+    assert_eq!(records[0]["entrypoint"], "claude-desktop");
+    assert_eq!(records[0]["is_subagent"], true);
+    assert_eq!(records[0]["session_source"], "resume");
+    assert!(records[0].get("end_reason").is_none());
+    assert!(!content.contains("agent-secret"));
+
+    assert_eq!(records[1]["host"], "ghostty");
+    assert!(records[1].get("entrypoint").is_none());
+    assert!(records[1].get("is_subagent").is_none());
+    assert_eq!(records[1]["end_reason"], "logout");
+    assert!(records[1].get("session_source").is_none());
+
+    // Unknown hosts, entrypoints, and an empty agent ID produce no field at all.
+    assert!(records[2].get("host").is_none());
+    assert!(records[2].get("entrypoint").is_none());
+    assert!(records[2].get("is_subagent").is_none());
+    assert!(!content.contains("VSCode"));
+    assert!(!content.contains("sdk-ts"));
+
+    // Values outside the documented lists are dropped, not recorded.
+    assert!(records[3].get("session_source").is_none());
+    assert!(records[4].get("end_reason").is_none());
+    assert!(!content.contains("PRIVATE_"));
+
+    // The entrypoint marker belongs to Claude Code; a Codex hook launched from
+    // inside a Claude session inherits it but must not record it.
+    invoke_with_env(
+        &data_dir,
+        "codex",
+        r#"{"hook_event_name":"Stop","session_id":"codex-1"}"#,
+        &[
+            ("__CFBundleIdentifier", "com.apple.Terminal"),
+            ("CLAUDE_CODE_ENTRYPOINT", "cli"),
+        ],
+    );
+    let codex_file = journal_files_for(&data_dir, "codex").pop().unwrap();
+    let codex_record: Value =
+        serde_json::from_str(fs::read_to_string(codex_file).unwrap().trim()).unwrap();
+    assert_eq!(codex_record["host"], "terminal");
+    assert!(codex_record.get("entrypoint").is_none());
     fs::remove_dir_all(data_dir).unwrap();
 }
 

@@ -46,6 +46,10 @@ const NOTIFICATION_TYPES = new Set([
   'elicitation_response',
 ]);
 const TOOL_NAMES = new Set(['AskUserQuestion', 'request_user_input']);
+const HOSTS = new Set(['claude-desktop', 'terminal', 'iterm2', 'ghostty', 'warp']);
+const ENTRYPOINTS = new Set(['claude-desktop', 'cli']);
+const SESSION_SOURCES = new Set(['startup', 'resume', 'clear', 'compact', 'fork']);
+const END_REASONS = new Set(['clear', 'resume', 'logout', 'prompt_input_exit', 'other']);
 
 export type HookJournalEventName =
   | 'SessionStart'
@@ -91,6 +95,14 @@ export interface HookJournalEvent {
     | 'elicitation_complete'
     | 'elicitation_response';
   stopHookActive?: boolean;
+  /** Launching application, from an allowlisted macOS bundle identifier. */
+  host?: 'claude-desktop' | 'terminal' | 'iterm2' | 'ghostty' | 'warp';
+  /** Claude Code's own entrypoint marker, when it is one of the two local kinds. */
+  entrypoint?: 'claude-desktop' | 'cli';
+  /** The hook ran inside a subagent that shares the parent session ID. */
+  isSubagent?: true;
+  sessionSource?: 'startup' | 'resume' | 'clear' | 'compact' | 'fork';
+  endReason?: 'clear' | 'resume' | 'logout' | 'prompt_input_exit' | 'other';
 }
 
 export type HookJournalDiagnosticCode =
@@ -325,6 +337,37 @@ function createEventFromRecord(
   const typedToolName = toolName as HookJournalEvent['toolName'];
   const typedNotificationType = notificationType as HookJournalEvent['notificationType'];
 
+  const host = getOptionalString(value, 'host', 64);
+  if (Object.hasOwn(value, 'host') && (host === undefined || !HOSTS.has(host))) return undefined;
+  const entrypoint = getOptionalString(value, 'entrypoint', 64);
+  if (
+    Object.hasOwn(value, 'entrypoint') &&
+    (entrypoint === undefined || !ENTRYPOINTS.has(entrypoint))
+  ) {
+    return undefined;
+  }
+  if (Object.hasOwn(value, 'is_subagent') && value.is_subagent !== true) return undefined;
+  const sessionSource = getOptionalString(value, 'session_source', 64);
+  if (
+    Object.hasOwn(value, 'session_source') &&
+    (sessionSource === undefined ||
+      eventName !== 'SessionStart' ||
+      !SESSION_SOURCES.has(sessionSource))
+  ) {
+    return undefined;
+  }
+  const endReason = getOptionalString(value, 'end_reason', 64);
+  if (
+    Object.hasOwn(value, 'end_reason') &&
+    (endReason === undefined || eventName !== 'SessionEnd' || !END_REASONS.has(endReason))
+  ) {
+    return undefined;
+  }
+  const typedHost = host as HookJournalEvent['host'];
+  const typedEntrypoint = entrypoint as HookJournalEvent['entrypoint'];
+  const typedSessionSource = sessionSource as HookJournalEvent['sessionSource'];
+  const typedEndReason = endReason as HookJournalEvent['endReason'];
+
   return {
     schemaVersion: 1,
     eventIdentity,
@@ -341,6 +384,11 @@ function createEventFromRecord(
     ...(projectId === undefined ? {} : { projectId }),
     ...(typedNotificationType === undefined ? {} : { notificationType: typedNotificationType }),
     ...(stopHookActive === undefined ? {} : { stopHookActive: stopHookActive as boolean }),
+    ...(typedHost === undefined ? {} : { host: typedHost }),
+    ...(typedEntrypoint === undefined ? {} : { entrypoint: typedEntrypoint }),
+    ...(value.is_subagent === true ? { isSubagent: true as const } : {}),
+    ...(typedSessionSource === undefined ? {} : { sessionSource: typedSessionSource }),
+    ...(typedEndReason === undefined ? {} : { endReason: typedEndReason }),
   };
 }
 

@@ -61,9 +61,29 @@ For accepted events it retains only these bounded fields:
   absolute cwd. The raw cwd is never journaled;
 - validated `notification_type` values (`permission_prompt`, `idle_prompt`,
   `auth_success`, `elicitation_dialog`, `elicitation_complete`, or
-  `elicitation_response`) for `Notification` events; and
+  `elicitation_response`) for `Notification` events;
 - `stop_hook_active` when supplied as a boolean, so a Stop callback is not
-  mistaken for definitive completion while another hook continues the turn.
+  mistaken for definitive completion while another hook continues the turn;
+- `host`, the launching application, taken from the process environment's
+  `__CFBundleIdentifier` (macOS sets it for GUI-launched processes and hook
+  processes inherit it) and mapped, after trimming surrounding whitespace, to
+  exactly `claude-desktop`, `terminal`, `iterm2`, `ghostty`, or `warp`. Any
+  other value, such as an IDE terminal or an SSH session, produces no field;
+- `entrypoint`, Claude Code's `CLAUDE_CODE_ENTRYPOINT` when, after trimming,
+  it is exactly `claude-desktop` or `cli`. Only `--provider claude` records
+  carry it: a Codex hook launched from inside a Claude session inherits the
+  variable but must not record it. Other entrypoints produce no field;
+- `is_subagent: true` when the hook input carries a non-empty `agent_id`
+  string. Subagent hooks reuse the parent session ID; the agent ID itself is
+  discarded;
+- `session_source` on `SessionStart` (`startup`, `resume`, `clear`, `compact`,
+  or `fork`) and `end_reason` on `SessionEnd` (`clear`, `resume`, `logout`,
+  `prompt_input_exit`, or `other`).
+
+No other environment variable is read, and the raw variable values are never
+journaled. The two host variables are observed behaviour rather than a
+documented hook contract, which is why unrecognised values are dropped rather
+than recorded.
 
 `tool_name` is retained only when it is exactly `AskUserQuestion` or
 `request_user_input`. Prompts, answers, text, command/tool input or output,
@@ -97,12 +117,22 @@ schema is version `1` and has the following shape (optional fields are omitted):
   "timestamp": 1700000000000,
   "project_name": "project",
   "project_id": "sha256-of-normalized-project-cwd",
-  "stop_hook_active": false
+  "stop_hook_active": false,
+  "host": "claude-desktop",
+  "entrypoint": "claude-desktop",
+  "is_subagent": true
 }
 ```
 
+Version 1 evolves by adding optional fields; the version bumps only when a
+required field or a field's meaning changes, so a reader always tolerates
+records older than itself.
+
 `elicitation_id` appears only on `Elicitation` and `ElicitationResult`
 records. `notification_type` appears only on `Notification` records.
+`session_source` appears only on `SessionStart` and `end_reason` only on
+`SessionEnd`; `host`, `entrypoint`, and `is_subagent` appear on any record
+when their allowlisted value is present.
 
 Every record, including its newline, is at most 4 KiB. The active journal is
 limited to 256 KiB. Before an append that would exceed the limit, the helper
@@ -124,5 +154,6 @@ Journal directories and files are private (`0700` directories and `0600`
 files on macOS). Existing symlinks or non-regular journal/lock paths cause a
 successful no-op; the helper never follows them. Callbacks continue to journal
 while the companion is closed, allowing replay after restart. Owning-app and
-terminal identity are controlled enrichment supplied by the app/adapter; the
-helper does not trust arbitrary input fields as navigation targets.
+terminal identity come only from the allowlisted environment mapping above,
+never from hook input fields; the helper does not trust arbitrary input fields
+as navigation targets.
