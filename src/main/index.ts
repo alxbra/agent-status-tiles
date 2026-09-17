@@ -55,8 +55,16 @@ import {
   type CodexDesktopMonitorOptions,
 } from './providers/codex/desktop-monitor';
 import { CodexCliMonitor, type CodexCliMonitorOptions } from './providers/codex/cli-monitor';
-import { ClaudeCliMonitor, ClaudeDesktopMonitor } from './providers/claude/surface-monitor';
+import {
+  ClaudeCliMonitor,
+  ClaudeDesktopMonitor,
+  type ClaudeSurfaceMonitor,
+} from './providers/claude/surface-monitor';
 import { ClaudeJournalDiscovery } from './providers/claude/journal-discovery';
+import {
+  ClaudeJournalCollector,
+  retainedClaudeJournals,
+} from './providers/claude/journal-collector';
 
 const hasSingleInstanceLock = app.requestSingleInstanceLock();
 const TEST_KEYBOARD_ENTRY_HOOK = Symbol.for('agent-status-tiles.test.keyboard-entry');
@@ -331,16 +339,33 @@ if (!hasSingleInstanceLock) {
             });
             return readinessInFlight;
           };
+    // Ended journals are collected once both cohorts and the persisted
+    // cursors and sessions are known; the monitors exist before the sweep runs.
+    const claudeMonitors: ClaudeSurfaceMonitor[] = [];
+    const claudeCollector = new ClaudeJournalCollector({
+      appDataPath: app.getPath('userData'),
+      retained: () => {
+        if (runtimeCoordinator === null) throw new Error('runtime-not-ready');
+        const retained = retainedClaudeJournals(runtimeCoordinator.getMonitoringState());
+        for (const monitor of claudeMonitors) {
+          for (const baseName of monitor.cohort) retained.add(baseName);
+        }
+        return retained;
+      },
+    });
     const claudeDesktopMonitor = new ClaudeDesktopMonitor({
       appDataPath: app.getPath('userData'),
       discovery: claudeJournals,
+      collector: claudeCollector,
       ...(checkClaudeReadiness === undefined ? {} : { checkReadiness: checkClaudeReadiness }),
     });
     const claudeCliMonitor = new ClaudeCliMonitor({
       appDataPath: app.getPath('userData'),
       discovery: claudeJournals,
+      collector: claudeCollector,
       ...(checkClaudeReadiness === undefined ? {} : { checkReadiness: checkClaudeReadiness }),
     });
+    claudeMonitors.push(claudeDesktopMonitor, claudeCliMonitor);
     providerSetups =
       claude === undefined
         ? {}

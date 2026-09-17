@@ -20,6 +20,11 @@ const PROBE_BYTES = 8 * 1024;
 const MAX_ID_BYTES = 256;
 const JOURNAL_NAME = /^[a-f0-9]{64}\.jsonl$/u;
 
+/** The active journal of one session: a hash base name plus `.jsonl`. */
+export function isJournalName(name: string): boolean {
+  return JOURNAL_NAME.test(name);
+}
+
 export type ClaudeHost = NonNullable<HookJournalEvent['host']>;
 
 /** Display-safe facts about one journal; the path never leaves this module. */
@@ -38,7 +43,8 @@ export interface ClaudeJournalSummary {
   endOffset: number;
 }
 
-interface Candidate {
+/** One `lstat` of an active journal; shared with the collector. */
+export interface JournalCandidate {
   name: string;
   mtimeMs: number;
   size: number;
@@ -169,9 +175,9 @@ export class ClaudeJournalDiscovery {
       }
       throw error;
     }
-    const present = new Set(names.filter((name) => JOURNAL_NAME.test(name)));
+    const present = new Set(names.filter(isJournalName));
     this.wasTruncated = present.size > MAX_JOURNAL_ENTRIES;
-    const candidates: Candidate[] = [];
+    const candidates: JournalCandidate[] = [];
     let statted = 0;
     for (const name of present) {
       if (statted >= MAX_JOURNAL_ENTRIES) break;
@@ -208,7 +214,7 @@ export class ClaudeJournalDiscovery {
         summaries.push(cached.summary);
         continue;
       }
-      const summary = await this.summarize(candidate);
+      const summary = await summarizeJournal(this.directory, candidate);
       this.cache.set(candidate.name, {
         mtimeMs: candidate.mtimeMs,
         size: candidate.size,
@@ -255,36 +261,45 @@ export class ClaudeJournalDiscovery {
       return false;
     }
   }
+}
 
-  private async summarize(candidate: Candidate): Promise<ClaudeJournalSummary | undefined> {
-    if (candidate.size === 0) return undefined;
-    let probes: [Probe, Probe] | undefined;
-    try {
-      probes = await probeJournal(join(this.directory, candidate.name), candidate.size);
-    } catch {
-      return undefined;
-    }
-    if (probes === undefined) return undefined;
-    const [first, last] = probes;
-    const nativeSessionId = first.sessionId;
-    if (nativeSessionId === undefined) return undefined;
-    const baseName = candidate.name.slice(0, -'.jsonl'.length);
-    if (makeHookJournalBaseName('claude', nativeSessionId) !== baseName) return undefined;
-    if (last.sessionId !== nativeSessionId) return undefined;
-    const host = last.host ?? first.host;
-    const entrypoint = last.entrypoint ?? first.entrypoint;
-    const projectName = last.projectName ?? first.projectName;
-    return {
-      baseName,
-      nativeSessionId,
-      ...(projectName === undefined ? {} : { projectName }),
-      surface: surfaceForIdentity(host, entrypoint),
-      ...(host === undefined ? {} : { host }),
-      ended: last.eventName === 'SessionEnd',
-      updatedAt: Math.round(candidate.mtimeMs),
-      endOffset: candidate.size,
-    };
+/**
+ * Verify one journal and describe it. Only a file whose first record names
+ * the session hashed into its file name and whose last record belongs to the
+ * same session is ours to describe; anything else, including an empty or
+ * unreadable file, yields nothing. The path never leaves this module.
+ */
+export async function summarizeJournal(
+  directory: string,
+  candidate: JournalCandidate,
+): Promise<ClaudeJournalSummary | undefined> {
+  if (candidate.size === 0) return undefined;
+  let probes: [Probe, Probe] | undefined;
+  try {
+    probes = await probeJournal(join(directory, candidate.name), candidate.size);
+  } catch {
+    return undefined;
   }
+  if (probes === undefined) return undefined;
+  const [first, last] = probes;
+  const nativeSessionId = first.sessionId;
+  if (nativeSessionId === undefined) return undefined;
+  const baseName = candidate.name.slice(0, -'.jsonl'.length);
+  if (makeHookJournalBaseName('claude', nativeSessionId) !== baseName) return undefined;
+  if (last.sessionId !== nativeSessionId) return undefined;
+  const host = last.host ?? first.host;
+  const entrypoint = last.entrypoint ?? first.entrypoint;
+  const projectName = last.projectName ?? first.projectName;
+  return {
+    baseName,
+    nativeSessionId,
+    ...(projectName === undefined ? {} : { projectName }),
+    surface: surfaceForIdentity(host, entrypoint),
+    ...(host === undefined ? {} : { host }),
+    ended: last.eventName === 'SessionEnd',
+    updatedAt: Math.round(candidate.mtimeMs),
+    endOffset: candidate.size,
+  };
 }
 
 /** Newest first, capped at the shared discovery window, for one surface. */

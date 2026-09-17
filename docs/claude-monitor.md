@@ -22,9 +22,8 @@ rotates a journal (the active file is briefly absent or empty next to a `.1`
 archive) the previous summary is kept for at most two passes, so a rotation
 never looks like an ended session while a deleted journal with a stale archive
 is forgotten. A directory holding more journals than can be stat'ed reports
-incomplete coverage. Nothing deletes old journals yet; journal garbage
-collection for ended sessions, removing every suffix, is a required follow-up
-before release.
+incomplete coverage; the collection below keeps a long-lived install under
+that bound.
 
 Each inspected journal yields display-safe facts only: the session ID, the
 project folder name from the newest record, the surface, the recognised
@@ -50,6 +49,44 @@ Sources use the journal hash as their ID and cursor key, the project folder
 name as the title (a short session ID when none was recorded), the journal's
 modification time as `updatedAt`, and the active file size as the baseline
 cutoff. Titles never come from prompt content.
+
+## Collection
+
+One `ClaudeJournalCollector`, shared by both surface monitors, removes the
+journals of sessions that are over. Each monitor asks it to sweep at the end
+of every discovery pass; a sweep runs at most every five minutes
+(`JOURNAL_SWEEP_INTERVAL_MS`), overlapping requests share one sweep, and a
+sweep that fails never fails the pass. A sweep lists the same directory,
+`lstat`s at most 4,096 active journals, and considers only regular files whose
+modification time is more than seven days (`JOURNAL_RETENTION_MS`) old,
+oldest first. Whether such a journal ended is decided the way discovery
+decides it: the file is verified (first record hashes to the name, last
+record belongs to the same session) and its newest record must be
+`SessionEnd`. A journal that was killed without `SessionEnd`, that is empty
+beside an archive (a rotation that never completed), or that cannot be
+verified as this app's is never removed. At most 64 journals are read per
+sweep (`MAX_SWEEP_PROBES`); the verdict for an unchanged file is remembered,
+so a backlog of live-looking old journals is read once and then skipped, and
+at most 64 journal sets are removed per sweep (`MAX_SWEEP_REMOVALS`).
+
+Removing a journal removes every suffix: `.jsonl.3`, `.2`, `.1`, then the
+active `.jsonl`, in that order, so an interrupted sweep leaves an ended
+active file to finish next time rather than an orphaned archive nothing would
+judge. Every path of the set is checked before any is touched and again at
+the moment of removal, with `lstat`: a symlink, directory, or other non-file
+anywhere in the set leaves the whole set alone, and a journal directory that
+is itself a link is not swept, so nothing outside the app's directory is
+ever followed or removed. The active file must still have the modification
+time and size that were read; a session resumed into the same ID in between
+has grown its journal and is left for its next verdict. The helper's
+`<hash>.lock` files are never removed, which keeps the helper's guarantee
+that no stale-lock deletion race exists.
+
+A sweep keeps every journal the app still refers to, whatever its state: the
+current cohort of either surface, every base name with a persisted cursor,
+and the journal of every persisted Claude session
+(`retainedClaudeJournals`). A sweep reports counts only (journals read,
+removed, refused, failed); no name, path, or error text leaves the module.
 
 ## Replay
 
