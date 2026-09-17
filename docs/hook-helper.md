@@ -93,8 +93,13 @@ with the exact written shape in a matcher-less group), `missing`, `stale` (an
 owned entry is absent, duplicated, matcher-scoped, or differs in any field),
 `disabled` when `disableAllHooks` is set in the same file, or `unreadable`
 with one of the read codes above (`settings-changed` and `settings-unwritable`
-only arise from a write). The Connecting section of `docs/claude-monitor.md`
-describes how the Settings row drives installation, removal, and Repair.
+only arise from a write). It reads the user settings file only; the separate
+managed-settings check in `src/main/providers/claude/managed-settings.ts`
+reuses the same bounded reader for `managed-settings.json` and its drop-ins
+and reports whether a managed key blocks user hooks. The Connecting section
+of `docs/claude-monitor.md` describes how the Settings row drives
+installation, removal, and Repair, and how the two checks combine into one
+readiness answer.
 
 ## Input and privacy
 

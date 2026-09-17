@@ -94,7 +94,7 @@ interface OwnedHookCommand {
 type JsonObject = Record<string, unknown>;
 
 /** Identity of the file version a plan was computed from. */
-interface SettingsSnapshot {
+export interface SettingsSnapshot {
   target: string;
   ino: bigint;
   size: bigint;
@@ -104,7 +104,7 @@ interface SettingsSnapshot {
   mode: number;
 }
 
-interface SettingsRead {
+export interface SettingsRead {
   settings: JsonObject;
   /** Undefined when no file exists at the path. */
   snapshot: SettingsSnapshot | undefined;
@@ -332,11 +332,14 @@ async function currentSnapshot(path: string): Promise<SettingsSnapshot | undefin
 }
 
 /**
- * Read the file through one descriptor so the snapshot describes exactly the
- * bytes that were read, and read at most the bound plus one byte so an
- * oversized file is rejected without being consumed.
+ * Read a Claude settings file (the user file, or a managed file) through one
+ * descriptor so the snapshot describes exactly the bytes that were read, and
+ * read at most the bound plus one byte so an oversized file is rejected
+ * without being consumed. A missing file reads as an empty object with no
+ * snapshot; anything else that cannot be read or understood throws a
+ * `ClaudeHookSettingsError` with one of the read codes.
  */
-async function readSettingsFile(path: string): Promise<SettingsRead> {
+export async function readClaudeSettingsFile(path: string): Promise<SettingsRead> {
   const target = await resolveSettingsTarget(path);
   if (target === undefined) return { settings: {}, snapshot: undefined };
   let snapshot: SettingsSnapshot;
@@ -442,7 +445,7 @@ export async function installClaudeHooks(
 ): Promise<ClaudeHookChange> {
   const command = commandFor(options);
   const path = claudeSettingsPath(options.configDirectory);
-  const { settings, snapshot } = await readSettingsFile(path);
+  const { settings, snapshot } = await readClaudeSettingsFile(path);
   const next = planClaudeHookInstall(settings, command);
   if (snapshot !== undefined && isSameContent(next, settings)) return { changed: false };
   await writeSettingsFile(path, next, snapshot);
@@ -454,7 +457,7 @@ export async function removeClaudeHooks(
   options: Pick<ClaudeHookInstallerOptions, 'configDirectory'>,
 ): Promise<ClaudeHookChange> {
   const path = claudeSettingsPath(options.configDirectory);
-  const { settings, snapshot } = await readSettingsFile(path);
+  const { settings, snapshot } = await readClaudeSettingsFile(path);
   if (snapshot === undefined) return { changed: false };
   const next = planClaudeHookRemoval(settings);
   if (isSameContent(next, settings)) return { changed: false };
@@ -468,7 +471,7 @@ export async function inspectClaudeHooks(
 ): Promise<ClaudeHookVerification> {
   const command = commandFor(options);
   try {
-    const { settings } = await readSettingsFile(claudeSettingsPath(options.configDirectory));
+    const { settings } = await readClaudeSettingsFile(claudeSettingsPath(options.configDirectory));
     return verifyClaudeHooks(settings, command);
   } catch (error) {
     if (error instanceof ClaudeHookSettingsError && isReadCode(error.code)) {

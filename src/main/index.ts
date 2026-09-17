@@ -1,3 +1,5 @@
+import { join } from 'node:path';
+
 import { app, ipcMain, powerMonitor, screen, type IpcMainInvokeEvent } from 'electron';
 
 import { closeSettingsWindow, getSettingsWindow, showSettingsWindow } from './settings-window';
@@ -43,6 +45,11 @@ import {
   removeClaudeHooks,
 } from './providers/claude/hook-installer';
 import {
+  defaultClaudeManagedLocations,
+  inspectClaudeManagedHooks,
+  type ClaudeManagedLocations,
+} from './providers/claude/managed-settings';
+import {
   ClaudeHelperError,
   claudeActionFailureSentence,
   claudeIssueSentence,
@@ -83,6 +90,8 @@ interface ClaudeIntegration {
   helper: () => HookHelperPathResolution;
   /** Claude's configuration directory; undefined means the user's default. */
   configDirectory: string | undefined;
+  /** Where the organization's managed settings would be. */
+  managed: ClaudeManagedLocations;
   dataDirectory: string;
 }
 /** Per row, the last action failure with a known cause, shown until that row's next action. */
@@ -90,8 +99,10 @@ const providerActionIssues = new Map<SettingsConnectionKey, string>();
 
 /**
  * Where the Claude hooks point and where they are installed. A test run
- * supplies both explicitly; without them, seeded-journal tests run the
- * monitors with no readiness check and no settings-file writes.
+ * supplies both explicitly and reads managed settings from a `managed`
+ * folder inside its configuration directory, never from the system
+ * directory; without them, seeded-journal tests run the monitors with no
+ * readiness check and no settings-file writes.
  */
 function claudeIntegration(): ClaudeIntegration | undefined {
   const dataDirectory = app.getPath('userData');
@@ -99,7 +110,12 @@ function claudeIntegration(): ClaudeIntegration | undefined {
     const helperPath = process.env.AGENT_STATUS_TILES_TEST_HOOK_HELPER;
     const configDirectory = process.env.AGENT_STATUS_TILES_TEST_CLAUDE_CONFIG_DIR;
     if (!helperPath || !configDirectory) return undefined;
-    return { helper: () => ({ ok: true, path: helperPath }), configDirectory, dataDirectory };
+    return {
+      helper: () => ({ ok: true, path: helperPath }),
+      configDirectory,
+      managed: { directory: join(configDirectory, 'managed'), preferencesPaths: [] },
+      dataDirectory,
+    };
   }
   return {
     helper: () =>
@@ -110,6 +126,7 @@ function claudeIntegration(): ClaudeIntegration | undefined {
         arch: process.arch,
       }),
     configDirectory: undefined,
+    managed: defaultClaudeManagedLocations(),
     dataDirectory,
   };
 }
@@ -320,12 +337,15 @@ if (!hasSingleInstanceLock) {
               const helper = claude.helper();
               const fromHelper = helperReadiness(helper);
               if (fromHelper !== undefined || !helper.ok) return fromHelper!;
-              const verification = await inspectClaudeHooks({
-                configDirectory: claude.configDirectory,
-                helperPath: helper.path,
-                dataDirectory: claude.dataDirectory,
-              });
-              return readinessOf(helper, verification);
+              const [verification, managed] = await Promise.all([
+                inspectClaudeHooks({
+                  configDirectory: claude.configDirectory,
+                  helperPath: helper.path,
+                  dataDirectory: claude.dataDirectory,
+                }),
+                inspectClaudeManagedHooks(claude.managed),
+              ]);
+              return readinessOf(helper, verification, managed);
             })().finally(() => {
               readinessInFlight = undefined;
             });
