@@ -1,5 +1,6 @@
 import type { HookHelperPathResolution } from './helper-path';
 import { ClaudeHookSettingsError, type ClaudeHookVerification } from './hook-installer';
+import type { ClaudeManagedHooksVerification } from './managed-settings';
 
 /** Why a Claude surface cannot observe sessions; each maps to one Settings sentence. */
 export type ClaudeIssue =
@@ -8,6 +9,7 @@ export type ClaudeIssue =
   | 'helper-unusable'
   | 'hooks-missing'
   | 'hooks-disabled'
+  | 'hooks-blocked'
   | 'settings-unreadable';
 
 export type ClaudeReadiness = { status: 'ready' } | { status: 'issue'; issue: ClaudeIssue };
@@ -37,16 +39,22 @@ export function helperReadiness(helper: HookHelperPathResolution): ClaudeReadine
 }
 
 /**
- * Combine the bundled helper resolution and the settings-file verification
- * into one answer. A stale install counts as missing: the entries exist but
- * do not point at this app's helper, so callbacks never reach it.
+ * Combine the bundled helper resolution, the managed-settings check, and the
+ * settings-file verification into one answer. A stale install counts as
+ * missing: the entries exist but do not point at this app's helper, so
+ * callbacks never reach it. A managed restriction outranks the user file:
+ * however complete the install, Claude Code will not run it, and no Repair
+ * changes that. An unknown managed tier is treated as unrestricted, so the
+ * row never alarms on a policy it could not read.
  */
 export function readinessOf(
   helper: HookHelperPathResolution,
   verification: ClaudeHookVerification,
+  managed: ClaudeManagedHooksVerification = { status: 'unrestricted' },
 ): ClaudeReadiness {
   const fromHelper = helperReadiness(helper);
   if (fromHelper !== undefined) return fromHelper;
+  if (managed.status === 'restricted') return { status: 'issue', issue: 'hooks-blocked' };
   switch (verification.status) {
     case 'installed':
       return { status: 'ready' };
@@ -89,6 +97,8 @@ export function claudeIssueSentence(issue: ClaudeIssue, action: ClaudeAction = '
       return 'Claude Code hooks are not installed. Use Repair to install them.';
     case 'hooks-disabled':
       return 'Remove disableAllHooks from Claude Code settings; the connection resumes on its own.';
+    case 'hooks-blocked':
+      return "Your organization's managed Claude Code settings block this app's hooks. Ask an administrator to allow user hooks; the connection resumes on its own.";
     case 'settings-unreadable':
       return `The Claude Code settings file could not be read. Fix it, then ${step}.`;
   }

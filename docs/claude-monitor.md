@@ -201,18 +201,68 @@ sentence per row: a failed action's reason takes the place of the live health
 sentence until the next action.
 
 Each monitor verifies readiness when it starts: the bundled helper must
-resolve and the hooks must be installed with the current helper path and not
-silenced by `disableAllHooks`. A failed check keeps the surface in `error`
-health with the coordinator's retry and records one issue (`helper-missing`,
-`helper-translocated`, `helper-unusable`, `hooks-missing`, `hooks-disabled`,
-or `settings-unreadable`), each shown in Settings as one actionable sentence.
-The helper is resolved on every check and install, so a helper built or moved
-after launch is noticed without a restart, and one settings-file read serves
-both surfaces when they start together. A test
-run supplies the helper path and configuration directory explicitly; without
-them the monitors run seeded journals with no readiness check and never touch
-a settings file. In development the helper must exist under
-`build/hook-helper/<arch>/`, which requires a Rust toolchain.
+resolve, the organization's managed settings must not block hooks from the
+user settings file, and the hooks must be installed with the current helper
+path and not silenced by `disableAllHooks`. A failed check keeps the surface
+in `error` health with the coordinator's retry and records one issue
+(`helper-missing`, `helper-translocated`, `helper-unusable`, `hooks-missing`,
+`hooks-disabled`, `hooks-blocked`, or `settings-unreadable`), each shown in
+Settings as one actionable sentence. The helper is resolved on every check
+and install, so a helper built or moved after launch is noticed without a
+restart, and one settings-file read serves both surfaces when they start
+together. A test run supplies the helper path and configuration directory
+explicitly and reads managed settings from a `managed` folder inside that
+directory; without them the monitors run seeded journals with no readiness
+check and never touch a settings file. In development the helper must exist
+under `build/hook-helper/<arch>/`, which requires a Rust toolchain.
+
+### Hooks silenced by policy
+
+Claude Code reads `disableAllHooks` from every settings level and honours
+three managed keys that keep hooks in the user settings file from running:
+`disableAllHooks`, `allowManagedHooksOnly`, and `strictPluginOnlyCustomization`
+(`true` or an array naming `hooks`). The readiness check reads the file-based
+managed source, `/Library/Application Support/ClaudeCode/managed-settings.json`
+merged with the visible `*.json` drop-ins of `managed-settings.d/` in
+alphabetical order (a later single value replaces an earlier one, so a later
+`false` lifts a lock; lists combine; and an `allowManagedHooksOnly` that is
+present but not `false` counts as on, which is how Claude Code treats an
+invalid value), and reports
+`hooks-blocked` when the merged result blocks them. The sentence asks for an
+administrator and promises that the connection resumes on its own, which the
+coordinator's retry delivers once the policy is lifted. That read is bounded
+to the same 1 MiB per file as the user settings file and at most 64
+drop-ins, touches only Claude Code's own managed directory, and never
+journals or displays a path.
+
+The check never guesses. Claude Code applies only the highest-ranked managed
+source by default, so when an MDM configuration profile for the
+`com.anthropic.claudecode` domain exists under `/Library/Managed Preferences`
+the files may not apply at all, and the check reports nothing rather than a
+possible false alarm; the profile itself, server-managed settings fetched
+from claude.ai, and settings an embedding host passes are not read. Whether
+server-managed settings apply cannot be established locally (where Claude
+Code caches them is not documented, and this module never reads `~/.claude`),
+so the one residual false-alarm case is an organization that deploys hook
+restrictions in a managed file while its server-managed policy, which
+outranks the file, leaves hooks alone; both come from the same administrator
+and the sentence still names the right person. A managed file that cannot be
+read or parsed, or a drop-in directory that cannot be listed or holds more
+files than the bound, reports nothing: the app cannot tell what applies
+(Claude Code itself refuses to start on invalid managed JSON).
+
+Two silencers remain undetectable and are documented rather than reported: a
+`disableAllHooks` in a project's `.claude/settings.json` or
+`.claude/settings.local.json` silences the hooks for that project only, and a
+project `false` overrides a user-level `true`. The app never learns a
+project's path (the helper journals only a one-way hash and the folder name),
+so it cannot read those files, and a silenced project produces no journal at
+all, not even a `SessionStart`, so there is nothing to attach a note to. Per
+the plan's status rules, silence is never interpreted: a project with hooks
+disabled simply never appears, and the `Claude Code` row stays healthy
+because the shared hooks are in place for every other project. Settings copy
+carries no note about this, in keeping with the one-sentence, actionable-only
+contract of the Settings view.
 
 ## Not in this slice
 
