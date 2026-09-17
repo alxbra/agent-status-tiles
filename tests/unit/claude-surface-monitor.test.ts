@@ -1,4 +1,13 @@
-import { appendFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import {
+  access,
+  appendFile,
+  mkdir,
+  mkdtemp,
+  readdir,
+  rm,
+  utimes,
+  writeFile,
+} from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -10,6 +19,11 @@ import {
   MAX_CLAUDE_RECORDS_PER_READ,
   type ClaudeMonitorOptions,
 } from '../../src/main/providers/claude/surface-monitor';
+import {
+  ClaudeJournalCollector,
+  claudeRetainedSet,
+} from '../../src/main/providers/claude/journal-collector';
+import { ClaudeJournalDiscovery } from '../../src/main/providers/claude/journal-discovery';
 import { makeHookJournalBaseName } from '../../src/main/providers/hooks/hook-journal-reader';
 import {
   MAX_RUNTIME_EVENTS_PER_READ,
@@ -22,6 +36,7 @@ import {
 } from '../../src/main/sessions/persistence';
 import { reduceSessionState } from '../../src/main/sessions/reducer';
 import { createInitialSessionState } from '../../src/shared/session';
+import { RECENT_THREAD_DISCOVERY_WINDOW } from '../../src/shared/settings';
 
 const roots: string[] = [];
 
@@ -493,14 +508,11 @@ describe('claude surface monitor collection', () => {
       },
     });
     monitor.start();
-    expect(monitor.cohort).toEqual(new Set());
     expect((await monitor.discover()).sources).toHaveLength(1);
-    expect(monitor.cohort).toEqual(new Set([makeHookJournalBaseName('claude', 'desk')]));
     fail = true;
     expect((await monitor.discover()).sources).toHaveLength(1);
     expect(sweeps).toHaveLength(2);
     monitor.stop();
-    expect(monitor.cohort).toEqual(new Set());
 
     const throwing = new ClaudeDesktopMonitor({
       appDataPath: root,
@@ -512,5 +524,67 @@ describe('claude surface monitor collection', () => {
     });
     throwing.start();
     expect((await throwing.discover()).sources).toHaveLength(1);
+  });
+
+  it('collects through the coordinator only outside both cohorts of the shared listing', async () => {
+    const root = await appData();
+    const DAY = 24 * 60 * 60 * 1_000;
+    // One more silent CLI journal than the window holds: the oldest is out
+    // of the cohort and a month silent, so it is collectable; the others
+    // are just as old but still in the cohort and keep their tiles.
+    const total = RECENT_THREAD_DISCOVERY_WINDOW + 1;
+    for (let index = 0; index < total; index += 1) {
+      const id = `silent-${String(index).padStart(2, '0')}`;
+      await writeFile(
+        journalPath(root, id),
+        record(id, 'SessionStart', { host: 'terminal' }) + record(id, 'Stop', { host: 'terminal' }),
+      );
+      const stamp = new Date(Date.now() - 40 * DAY + index * DAY);
+      await utimes(journalPath(root, id), stamp, stamp);
+    }
+    const discovery = new ClaudeJournalDiscovery({ appDataPath: root });
+    // The runtime is created below; the app's own factory only runs once it exists.
+    const collector = new ClaudeJournalCollector({
+      appDataPath: root,
+      retained: claudeRetainedSet(() => runtime.getMonitoringState(), discovery),
+    });
+    const monitoring = createInitialMonitoringState();
+    monitoring.partitions['claude:desktop'].enabled = true;
+    monitoring.partitions['claude:cli'].enabled = true;
+    await saveSessionState(root, monitoring);
+    const runtime = createRuntimeCoordinator({
+      appDataPath: root,
+      monitors: [
+        new ClaudeDesktopMonitor({ appDataPath: root, discovery, collector }),
+        new ClaudeCliMonitor({ appDataPath: root, discovery, collector }),
+      ],
+      catalogPollIntervalMs: 20,
+      filePollIntervalMs: 10,
+    });
+    try {
+      await runtime.start();
+      for (const key of ['claude:desktop', 'claude:cli'] as const) {
+        await expect
+          .poll(() => runtime.getMonitoringState().partitions[key].baseline.status)
+          .toBe('ready');
+      }
+      await expect
+        .poll(() =>
+          access(journalPath(root, 'silent-00')).then(
+            () => true,
+            () => false,
+          ),
+        )
+        .toBe(false);
+      const remaining = (await readdir(join(root, 'journals', 'claude'))).filter((name) =>
+        name.endsWith('.jsonl'),
+      );
+      expect(remaining).toHaveLength(RECENT_THREAD_DISCOVERY_WINDOW);
+      expect(
+        Object.keys(runtime.getMonitoringState().partitions['claude:cli'].sessions),
+      ).toHaveLength(RECENT_THREAD_DISCOVERY_WINDOW);
+    } finally {
+      await runtime.stop();
+    }
   });
 });

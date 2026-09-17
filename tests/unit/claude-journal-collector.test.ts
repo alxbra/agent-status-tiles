@@ -19,6 +19,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import {
   ClaudeJournalCollector,
+  JOURNAL_ABANDONED_RETENTION_MS,
   JOURNAL_RETENTION_MS,
   JOURNAL_SWEEP_INTERVAL_MS,
   MAX_SWEEP_PROBES,
@@ -139,6 +140,79 @@ describe('claude journal collector', () => {
     expect(await exists(join(root, 'journals', 'claude', 'notes.txt'))).toBe(true);
   });
 
+  it('removes a verified journal that never ended once it has been silent past the longer window', async () => {
+    const root = await appData();
+    const ABANDONED = JOURNAL_ABANDONED_RETENTION_MS;
+    await seed(root, 'abandoned', { ended: false, ageMs: ABANDONED + 1, archives: 2 });
+    await seed(root, 'at-boundary', { ended: false, ageMs: ABANDONED });
+    await seed(root, 'still-waiting', { ended: false, ageMs: ABANDONED - 1 });
+    await seed(root, 'in-cohort', { ended: false, ageMs: ABANDONED + 1_000 });
+    // Silent for a month but not this app's journal: the name does not hash its session.
+    const forged = join(root, 'journals', 'claude', `${'f'.repeat(64)}.jsonl`);
+    await writeFile(forged, record('forged', 'SessionStart'));
+    await utimes(forged, new Date(NOW - ABANDONED - 1_000), new Date(NOW - ABANDONED - 1_000));
+    // An empty active file beside an archive cannot be verified either.
+    await seed(root, 'rotating', {
+      ended: false,
+      ageMs: ABANDONED + 1_000,
+      archives: 1,
+      content: '',
+    });
+
+    const sweep = await collector(root, {
+      retained: () => new Set([baseName('in-cohort')]),
+    }).sweep();
+    expect(sweep).toEqual({ probed: 5, removed: 1, refused: 0, failed: 0 });
+    for (const suffix of ['', '.1', '.2']) {
+      expect(await exists(journalPath(root, 'abandoned', suffix))).toBe(false);
+    }
+    expect(await exists(journalPath(root, 'at-boundary'))).toBe(true);
+    expect(await exists(journalPath(root, 'still-waiting'))).toBe(true);
+    expect(await exists(journalPath(root, 'in-cohort'))).toBe(true);
+    expect(await exists(forged)).toBe(true);
+    expect(await exists(journalPath(root, 'rotating'))).toBe(true);
+    expect(await exists(journalPath(root, 'rotating', '.1'))).toBe(true);
+  });
+
+  it('removes an abandoned journal from a verdict cached while it was younger, and guards it like an ended one', async () => {
+    const root = await appData();
+    const ABANDONED = JOURNAL_ABANDONED_RETENTION_MS;
+    // Judged at eight days: verified, not ended, kept. No re-read is needed
+    // once the same file has crossed the longer window.
+    await seed(root, 'aging', { ended: false, ageMs: OLD, archives: 1 });
+    let now = NOW;
+    const gc = collector(root, { now: () => now });
+    expect(await gc.sweep()).toEqual({ probed: 1, removed: 0, refused: 0, failed: 0 });
+    now += ABANDONED;
+    expect(await gc.sweep()).toEqual({ probed: 0, removed: 1, refused: 0, failed: 0 });
+    expect(await exists(journalPath(root, 'aging'))).toBe(false);
+    expect(await exists(journalPath(root, 'aging', '.1'))).toBe(false);
+
+    // A symlink in an abandoned set refuses it, and growth between the read
+    // and the removal keeps every suffix, exactly as for an ended journal.
+    await seed(root, 'linked', { ended: false, ageMs: ABANDONED + now - NOW + 1_000 });
+    await symlink(journalPath(root, 'aging'), journalPath(root, 'linked', '.3'));
+    await seed(root, 'woken', { ended: false, ageMs: ABANDONED + now - NOW + 1_000, archives: 1 });
+    let woke = false;
+    const racing = collector(root, {
+      now: () => now,
+      fs: {
+        lstat: async (path) => {
+          if (!woke && path.endsWith(`${baseName('woken')}.jsonl.1`)) {
+            woke = true;
+            await appendFile(journalPath(root, 'woken'), record('woken', 'UserPromptSubmit'));
+          }
+          return lstat(path);
+        },
+        unlink,
+      },
+    });
+    expect(await racing.sweep()).toEqual({ probed: 2, removed: 0, refused: 1, failed: 0 });
+    expect(await exists(journalPath(root, 'linked'))).toBe(true);
+    expect(await exists(journalPath(root, 'woken'))).toBe(true);
+    expect(await exists(journalPath(root, 'woken', '.1'))).toBe(true);
+  });
+
   it('treats the retention window as a strict age boundary', async () => {
     const root = await appData();
     await seed(root, 'at-boundary', { ended: true, ageMs: JOURNAL_RETENTION_MS });
@@ -152,9 +226,9 @@ describe('claude journal collector', () => {
     expect(await exists(journalPath(root, 'inside'))).toBe(true);
   });
 
-  it('keeps journals the monitors or the coordinator still refer to', async () => {
+  it('keeps journals the listing cohorts or the coordinator still refer to', async () => {
     const root = await appData();
-    await seed(root, 'in-cohort', { ended: true, ageMs: OLD });
+    await seed(root, 'in-cohort', { ended: false, ageMs: OLD });
     await seed(root, 'with-cursor', { ended: true, ageMs: OLD });
     await seed(root, 'with-session', { ended: true, ageMs: OLD });
     await seed(root, 'free', { ended: true, ageMs: OLD });
@@ -167,8 +241,23 @@ describe('claude journal collector', () => {
       'codex:elsewhere': {} as never,
     };
     const retained = retainedClaudeJournals(state, [
-      { cohort: new Set([baseName('in-cohort')]) },
-      { cohort: new Set() },
+      {
+        baseName: baseName('in-cohort'),
+        nativeSessionId: 'in-cohort',
+        surface: 'cli',
+        ended: false,
+        updatedAt: 1,
+        endOffset: 1,
+      },
+      // An ended journal is not in any cohort, so the listing does not keep it.
+      {
+        baseName: baseName('free'),
+        nativeSessionId: 'free',
+        surface: 'desktop',
+        ended: true,
+        updatedAt: 1,
+        endOffset: 1,
+      },
     ]);
     expect(retained).toEqual(
       new Set([baseName('in-cohort'), baseName('with-cursor'), baseName('with-session')]),

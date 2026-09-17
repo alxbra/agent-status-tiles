@@ -8,13 +8,22 @@ import {
   MAX_JOURNAL_ENTRIES,
   isJournalName,
   isMissingError,
+  selectCohort,
   statJournals,
   verifyJournal,
+  type ClaudeJournalDiscovery,
+  type ClaudeJournalSummary,
   type JournalCandidate,
 } from './journal-discovery';
 
 /** An ended journal untouched for longer than this is removed with its archives. */
 export const JOURNAL_RETENTION_MS = 7 * 24 * 60 * 60 * 1_000;
+/**
+ * A verified journal that never received `SessionEnd` (a closed terminal, a
+ * killed process, a crash) and has not changed at all for this long is
+ * removed too, once no cohort, cursor, or session refers to it any more.
+ */
+export const JOURNAL_ABANDONED_RETENTION_MS = 30 * 24 * 60 * 60 * 1_000;
 /** Every discovery pass requests a sweep; one runs at most this often. */
 export const JOURNAL_SWEEP_INTERVAL_MS = 5 * 60 * 1_000;
 /** Journals whose head and tail are read per sweep to learn whether they ended. */
@@ -26,14 +35,14 @@ const CLAUDE_SURFACE_KEYS = ['claude:desktop', 'claude:cli'] as const;
 
 /** Counts only; a sweep never reports a name or a path. */
 export interface ClaudeJournalSweep {
-  /** Journals read to learn whether their newest record is `SessionEnd`. */
+  /** Journals judged: read to learn whether they are ours and whether they ended. */
   probed: number;
-  /** Ended journals removed with every archive. */
+  /** Journal sets removed with every archive. */
   removed: number;
   /**
-   * Ended journals left alone because a path of their set was a symlink or
-   * not a regular file, or one for the whole sweep when the journal directory
-   * itself is not a real directory.
+   * Collectable journals left alone because a path of their set was a
+   * symlink or not a regular file, or one for the whole sweep when the
+   * journal directory itself is not a real directory.
    */
   refused: number;
   /**
@@ -61,6 +70,7 @@ export interface ClaudeJournalCollectorOptions {
   retained: () => ReadonlySet<string>;
   now?: () => number;
   retentionMs?: number;
+  abandonedRetentionMs?: number;
   sweepIntervalMs?: number;
   /** Per-sweep bounds; tests lower them. */
   maxProbes?: number;
@@ -72,6 +82,8 @@ export interface ClaudeJournalCollectorOptions {
 interface Verdict {
   mtimeMs: number;
   size: number;
+  /** The file is one of this app's journals; nothing unverified is ever removed. */
+  verified: boolean;
   ended: boolean;
   /** Its set held a symlink or non-file; not tried again until the file changes. */
   refused?: boolean;
@@ -82,17 +94,18 @@ type SetOutcome = 'removed' | 'refused' | 'failed' | 'changed';
 type PathState = 'present' | 'absent' | 'refused' | 'changed';
 
 /**
- * Journals the app still refers to: each monitor's current cohort, every
- * persisted cursor (keyed by the journal base name), and every persisted
- * Claude session (whose ID hashes to one).
+ * Journals the app still refers to: both surfaces' cohorts of the listing
+ * the sweep follows (so the guard does not depend on which monitor reached
+ * the listing first), every persisted cursor (keyed by the journal base
+ * name), and every persisted Claude session (whose ID hashes to one).
  */
 export function retainedClaudeJournals(
   state: MonitoringState,
-  monitors: Iterable<{ readonly cohort: ReadonlySet<string> }>,
+  summaries: readonly ClaudeJournalSummary[],
 ): Set<string> {
   const retained = new Set<string>();
-  for (const monitor of monitors) {
-    for (const baseName of monitor.cohort) retained.add(baseName);
+  for (const surface of ['desktop', 'cli'] as const) {
+    for (const journal of selectCohort(summaries, surface)) retained.add(journal.baseName);
   }
   for (const key of CLAUDE_SURFACE_KEYS) {
     const partition = state.partitions[key];
@@ -105,6 +118,22 @@ export function retainedClaudeJournals(
     }
   }
   return retained;
+}
+
+/**
+ * The app's retained-set callback over the live monitoring state and the
+ * shared discovery; it throws until the runtime exists, so a sweep requested
+ * before then is skipped rather than run unguarded.
+ */
+export function claudeRetainedSet(
+  getState: () => MonitoringState | null,
+  discovery: Pick<ClaudeJournalDiscovery, 'summaries'>,
+): () => ReadonlySet<string> {
+  return () => {
+    const state = getState();
+    if (state === null) throw new Error('runtime-not-ready');
+    return retainedClaudeJournals(state, discovery.summaries);
+  };
 }
 
 /**
@@ -128,19 +157,21 @@ export function journalWindow(present: ReadonlySet<string>, after: string | unde
 /**
  * Bounded garbage collection for the app's own Claude journal directory. A
  * sweep removes every suffix (`.jsonl.3`, `.2`, `.1`, then the active file)
- * of a verified journal whose newest record is `SessionEnd` and whose active
- * file is older than the retention window, and nothing else: a journal that
- * was killed without `SessionEnd`, that cannot be verified as this app's, or
- * that the coordinator still refers to stays. Symlinks and non-files are
- * never followed or removed; one in a journal set leaves the whole set alone.
- * Lock files stay, so the helper's no-stale-lock guarantee holds. Sweeps are
- * throttled, single-flight, bounded per pass, and report counts only.
+ * of a verified journal that either ended (`SessionEnd`) and is older than
+ * the retention window or never ended and has not changed for the longer
+ * abandoned window, and nothing else: a journal that cannot be verified as
+ * this app's or that a cohort, cursor, or session still refers to stays.
+ * Symlinks and non-files are never followed or removed; one in a journal
+ * set leaves the whole set alone. Lock files stay, so the helper's
+ * no-stale-lock guarantee holds. Sweeps are throttled, single-flight,
+ * bounded per pass, and report counts only.
  */
 export class ClaudeJournalCollector {
   private readonly directory: string;
   private readonly retained: () => ReadonlySet<string>;
   private readonly now: () => number;
   private readonly retentionMs: number;
+  private readonly abandonedRetentionMs: number;
   private readonly sweepIntervalMs: number;
   private readonly maxProbes: number;
   private readonly maxRemovals: number;
@@ -157,6 +188,7 @@ export class ClaudeJournalCollector {
     this.retained = options.retained;
     this.now = options.now ?? Date.now;
     this.retentionMs = options.retentionMs ?? JOURNAL_RETENTION_MS;
+    this.abandonedRetentionMs = options.abandonedRetentionMs ?? JOURNAL_ABANDONED_RETENTION_MS;
     this.sweepIntervalMs = options.sweepIntervalMs ?? JOURNAL_SWEEP_INTERVAL_MS;
     this.maxProbes = options.maxProbes ?? MAX_SWEEP_PROBES;
     this.maxRemovals = options.maxRemovals ?? MAX_SWEEP_REMOVALS;
@@ -176,7 +208,7 @@ export class ClaudeJournalCollector {
     }
     // A failed sweep waits for the next interval like a successful one.
     this.lastSweepAt = now;
-    this.inFlight = this.sweepOnce(now - this.retentionMs)
+    this.inFlight = this.sweepOnce(now)
       .catch((): ClaudeJournalSweep => ({ probed: 0, removed: 0, refused: 0, failed: 1 }))
       .finally(() => {
         this.inFlight = undefined;
@@ -184,8 +216,10 @@ export class ClaudeJournalCollector {
     return this.inFlight;
   }
 
-  private async sweepOnce(cutoffMs: number): Promise<ClaudeJournalSweep> {
+  private async sweepOnce(now: number): Promise<ClaudeJournalSweep> {
     const sweep: ClaudeJournalSweep = { probed: 0, removed: 0, refused: 0, failed: 0 };
+    const cutoffMs = now - this.retentionMs;
+    const abandonedCutoffMs = now - this.abandonedRetentionMs;
     let retained: ReadonlySet<string>;
     try {
       retained = this.retained();
@@ -220,7 +254,8 @@ export class ClaudeJournalCollector {
     );
     let attempts = 0;
     for (const candidate of candidates) {
-      if (retained.has(candidate.name.slice(0, -'.jsonl'.length))) continue;
+      const baseName = candidate.name.slice(0, -'.jsonl'.length);
+      if (retained.has(baseName)) continue;
       let verdict = this.verdicts.get(candidate.name);
       if (
         verdict === undefined ||
@@ -235,6 +270,7 @@ export class ClaudeJournalCollector {
           verdict = {
             mtimeMs: candidate.mtimeMs,
             size: candidate.size,
+            verified: summary !== undefined,
             ended: summary?.ended === true,
           };
         } catch {
@@ -244,8 +280,20 @@ export class ClaudeJournalCollector {
         }
         this.verdicts.set(candidate.name, verdict);
       }
-      if (!verdict.ended || verdict.refused === true) continue;
+      // Ended and past retention, or verified, silent, and past the longer
+      // abandoned retention; a wake-up is caught by the checks at removal.
+      const collectable =
+        verdict.verified && (verdict.ended || candidate.mtimeMs < abandonedCutoffMs);
+      if (!collectable || verdict.refused === true) continue;
       if (attempts >= this.maxRemovals) break;
+      // The listing moves on while a sweep runs; a journal that gained a
+      // cohort, cursor, or session in the meantime is no longer collectable.
+      try {
+        if (this.retained().has(baseName)) continue;
+      } catch {
+        sweep.failed += 1;
+        break;
+      }
       attempts += 1;
       const outcome = await this.removeSet(candidate);
       if (outcome === 'removed') {

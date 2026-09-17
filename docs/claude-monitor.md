@@ -24,7 +24,7 @@ archive) the previous summary is kept for at most two passes, so a rotation
 never looks like an ended session while a deleted journal with a stale archive
 is forgotten. A directory holding more journals than can be stat'ed reports
 incomplete coverage; the collection below keeps a long-lived install under
-that bound as long as its sessions end with `SessionEnd`.
+that bound.
 
 Each inspected journal yields display-safe facts only: the session ID, the
 project folder name from the newest record, the surface, the recognised
@@ -74,9 +74,24 @@ journal is reached), and considers only regular files whose modification time
 is more than seven days (`JOURNAL_RETENTION_MS`) old, oldest first. Whether
 such a journal ended is decided the way discovery decides it: the file is
 verified (first record hashes to the name, last record belongs to the same
-session) and its newest record must be `SessionEnd`. A journal that was
-killed without `SessionEnd`, that is empty beside an archive (a rotation that
-never completed), or that cannot be verified as this app's is never removed.
+session) and its newest record must be `SessionEnd`. A verified journal
+whose newest record is not `SessionEnd` (a closed terminal, a killed process,
+a crash) is removed only once it has not changed at all for more than thirty
+days (`JOURNAL_ABANDONED_RETENTION_MS`) and nothing refers to it any more.
+Hooks record activity, not liveness, so a session that merely sat at a prompt
+for a month looks the same as a killed one; the guard is the cohort, not the
+clock: a journal still in its surface's cohort (the discovery section's
+window over the inspected listing) keeps its tile and its files however old
+it is (a killed session keeps its last state until it ages out of the window,
+as the discovery section says), so a light install never collects a killed
+session, and beyond the window killed sessions are held for at most thirty
+days, apart from sets that cannot be verified or were refused. A session
+collected this way was already out of state; if it wakes up, the
+helper recreates its journal from the next hook record, discovery accepts a
+first record of any kind, and the session is rediscovered as new with its
+earlier history gone. A journal that is empty beside an archive (a rotation
+that never completed) or that cannot be verified as this app's is never
+removed at any age.
 At most 64 journals are read per sweep (`MAX_SWEEP_PROBES`); the verdict for
 an unchanged file is remembered, so a backlog of live-looking old journals is
 read once and then skipped, while a file that could not be read at all (an
@@ -103,30 +118,29 @@ and is left, archives included, for its next verdict. The app cannot take
 the helper's advisory lock, so one window remains: a hook that opens the
 active file for append between that final check and the `unlink` writes its
 record to the removed inode, and the session's journal restarts with the next
-hook's record. It needs a resume of a session that ended more than a week ago
-landing within those microseconds, and the restarted journal is discovered
-and replayed normally, so the consequence is one lost record of a session
-that was already forgotten. The helper's `<hash>.lock` files are never
+hook's record. It needs the first hook of a session that ended more than a
+week ago or was silent for a month landing within those microseconds, and
+the restarted journal is discovered and replayed normally, so the
+consequence is one lost record (possibly a turn start) of a session that
+was already forgotten. The helper's `<hash>.lock` files are never
 removed: the helper does not re-check the lock inode after locking, so an
 app-side unlink could let two hooks hold different lock files. A lock file
 is empty and is not a journal name, so it costs one directory entry and
 nothing in discovery; collecting stale lock files is a follow-up that starts
 in the helper.
 
-A sweep keeps every journal the app still refers to, whatever its state: the
-current cohort of either surface, every base name with a persisted cursor,
-and the journal of every persisted Claude session
-(`retainedClaudeJournals`). A sweep reports counts only: journals judged
+A sweep keeps every journal the app still refers to, whatever its state:
+both surfaces' cohorts of the listing the sweep follows (derived from the
+shared discovery, so the guard does not depend on which monitor reached the
+listing first), every base name with a persisted cursor, and the journal of
+every persisted Claude session (`retainedClaudeJournals`); the set is taken
+when the sweep starts and checked again right before each removal, since the
+listing moves on while a sweep runs. A sweep reports counts only: journals judged
 (read, or empty and so unverifiable), removed, refused (a set left alone for
 a symlink or non-file, or the whole sweep when the directory is not a real
 directory), and failed (I/O errors, or a retained set that could not be
 computed; retried on a later sweep, which is the next interval); no name,
 path, or error text leaves the module.
-
-Sessions that end without `SessionEnd` (a closed terminal, a killed process,
-a crash) are never collected by this contract and accumulate until the stat
-bound reports incomplete coverage; a second, longer retention for journals
-that have not changed at all is a follow-up, not part of this slice.
 
 ## Replay
 

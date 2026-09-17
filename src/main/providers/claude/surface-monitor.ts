@@ -35,8 +35,9 @@ export interface ClaudeMonitorOptions {
    */
   checkReadiness?: () => Promise<ClaudeReadiness>;
   /**
-   * Garbage collection of ended journals, shared by both surfaces and asked
-   * to sweep after every discovery; it throttles itself and never fails a pass.
+   * Garbage collection of ended and abandoned journals, shared by both
+   * surfaces and asked to sweep after every discovery; it throttles itself
+   * and never fails a pass.
    */
   collector?: Pick<ClaudeJournalCollector, 'sweep'>;
   /** Test injection. */
@@ -112,11 +113,6 @@ export class ClaudeSurfaceMonitor implements ProviderSurfaceMonitor {
     this.sessionNames = options.sessionNames;
   }
 
-  /** Base names of the journals in this surface's current cohort; the collector keeps them. */
-  get cohort(): ReadonlySet<string> {
-    return new Set(this.journals.keys());
-  }
-
   /** The reason the last start failed, for the Settings sentence; undefined once healthy. */
   get lastIssue(): ClaudeIssue | undefined {
     return this.issue;
@@ -168,7 +164,7 @@ export class ClaudeSurfaceMonitor implements ProviderSurfaceMonitor {
     }
     this.journals = journals;
     this.unavailableSourceIds.clear();
-    // The collector reads the cohort just set; a sweep never fails discovery.
+    // The collector follows the listing just consumed; a sweep never fails discovery.
     try {
       await this.collector?.sweep();
     } catch {

@@ -62,17 +62,10 @@ import {
   type CodexDesktopMonitorOptions,
 } from './providers/codex/desktop-monitor';
 import { CodexCliMonitor, type CodexCliMonitorOptions } from './providers/codex/cli-monitor';
-import {
-  ClaudeCliMonitor,
-  ClaudeDesktopMonitor,
-  type ClaudeSurfaceMonitor,
-} from './providers/claude/surface-monitor';
+import { ClaudeCliMonitor, ClaudeDesktopMonitor } from './providers/claude/surface-monitor';
 import { ClaudeJournalDiscovery } from './providers/claude/journal-discovery';
 import { ClaudeSessionNames } from './providers/claude/session-names';
-import {
-  ClaudeJournalCollector,
-  retainedClaudeJournals,
-} from './providers/claude/journal-collector';
+import { ClaudeJournalCollector, claudeRetainedSet } from './providers/claude/journal-collector';
 
 const hasSingleInstanceLock = app.requestSingleInstanceLock();
 const TEST_KEYBOARD_ENTRY_HOOK = Symbol.for('agent-status-tiles.test.keyboard-entry');
@@ -366,15 +359,14 @@ if (!hasSingleInstanceLock) {
       claude === undefined
         ? undefined
         : new ClaudeSessionNames({ configDirectory: claude.configDirectory });
-    // Ended journals are collected once both cohorts and the persisted
-    // cursors and sessions are known; the monitors exist before the sweep runs.
-    const claudeMonitors: ClaudeSurfaceMonitor[] = [];
+    // Journals are collected only outside both cohorts of the listing the
+    // sweep follows and outside the persisted cursors and sessions.
     const claudeCollector = new ClaudeJournalCollector({
       appDataPath: app.getPath('userData'),
-      retained: () => {
-        if (runtimeCoordinator === null) throw new Error('runtime-not-ready');
-        return retainedClaudeJournals(runtimeCoordinator.getMonitoringState(), claudeMonitors);
-      },
+      retained: claudeRetainedSet(
+        () => runtimeCoordinator?.getMonitoringState() ?? null,
+        claudeJournals,
+      ),
     });
     const claudeDesktopMonitor = new ClaudeDesktopMonitor({
       appDataPath: app.getPath('userData'),
@@ -390,7 +382,6 @@ if (!hasSingleInstanceLock) {
       ...(claudeSessionNames === undefined ? {} : { sessionNames: claudeSessionNames }),
       ...(checkClaudeReadiness === undefined ? {} : { checkReadiness: checkClaudeReadiness }),
     });
-    claudeMonitors.push(claudeDesktopMonitor, claudeCliMonitor);
     providerSetups =
       claude === undefined
         ? {}
