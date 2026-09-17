@@ -10,7 +10,10 @@ import type {
   RuntimeReadResult,
 } from '../../runtime/coordinator';
 import { MonitorPrerequisiteError } from '../../runtime/monitor-errors';
-import { resolveBundledCodexBinary } from './bundled-binary-resolver';
+import {
+  resolveBundledCodexBinary,
+  type CodexBinaryResolutionCode,
+} from './bundled-binary-resolver';
 import { CodexCatalogClient, type CodexCatalogRecord } from './catalog-client';
 import { qualifyCodexDesktopCatalog } from './catalog-qualification';
 import { CodexRolloutReader, cursorKeyForPath, hashPath } from './rollout-reader';
@@ -23,14 +26,12 @@ type Reader = Pick<
 >;
 
 /**
- * Resolver outcomes that mean Codex is simply not installed for this surface.
- * Desktop's `binary-missing` is different: the app bundle exists but its
- * layout is unexpected, which is an integration error rather than an absence.
+ * Resolver outcomes that mean Codex Desktop is simply not installed. Its
+ * `binary-missing` is different: the app bundle exists but its layout is
+ * unexpected, which is an integration error rather than an absence.
  */
-const DESKTOP_MISSING_INSTALLATION_CODES: ReadonlySet<string> = new Set(['bundle-not-found']);
-const CLI_MISSING_INSTALLATION_CODES: ReadonlySet<string> = new Set([
-  'path-unavailable',
-  'binary-missing',
+const DESKTOP_MISSING_INSTALLATION_CODES: ReadonlySet<CodexBinaryResolutionCode> = new Set([
+  'bundle-not-found',
 ]);
 
 export interface CodexMonitorOptions {
@@ -392,8 +393,6 @@ export class CodexSurfaceMonitor implements ProviderSurfaceMonitor {
     };
   }
 }
-
-export { CLI_MISSING_INSTALLATION_CODES };
 
 export class CodexDesktopMonitor extends CodexSurfaceMonitor {
   constructor(options: CodexDesktopMonitorOptions = {}) {

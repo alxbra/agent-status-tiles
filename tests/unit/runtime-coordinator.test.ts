@@ -631,7 +631,6 @@ describe('runtime coordinator', () => {
   it('keeps a surface quietly unavailable when its installation is missing', async () => {
     const dataPath = await appDataPath();
     const timers = new Map<number, { callback: () => void; delayMs: number }>();
-    const cleared: number[] = [];
     let nextTimer = 1;
     const healthChanges: string[] = [];
     let installed = false;
@@ -652,7 +651,6 @@ describe('runtime coordinator', () => {
         return id as unknown as ReturnType<typeof setTimeout>;
       },
       clearTimeout: (timer) => {
-        cleared.push(timer as unknown as number);
         timers.delete(timer as unknown as number);
       },
       onHealthChanged: (key, health) => healthChanges.push(`${key}:${health.status}`),
@@ -679,7 +677,7 @@ describe('runtime coordinator', () => {
     }
   });
 
-  it('cancels the prerequisite retry when the surface is disconnected or stopped', async () => {
+  it('cancels the prerequisite retry when the surface is disconnected', async () => {
     const dataPath = await appDataPath();
     const timers = new Map<number, number>();
     const cleared: number[] = [];
@@ -721,6 +719,8 @@ describe('runtime coordinator', () => {
 
   it('reports an error with backoff when a monitor fails to start for another reason', async () => {
     const dataPath = await appDataPath();
+    const timers = new Map<number, { callback: () => void; delayMs: number }>();
+    let nextTimer = 1;
     const broken = monitor('codex:cli', [], async () => ({
       events: [],
       cursors: {},
@@ -732,14 +732,35 @@ describe('runtime coordinator', () => {
     const runtime = createRuntimeCoordinator({
       appDataPath: dataPath,
       monitors: [broken],
-      setTimeout: () => setTimeout(() => undefined, 0),
+      setTimeout: (callback, delayMs) => {
+        const id = nextTimer++;
+        timers.set(id, { callback, delayMs });
+        return id as unknown as ReturnType<typeof setTimeout>;
+      },
+      clearTimeout: (timer) => {
+        timers.delete(timer as unknown as number);
+      },
     });
     try {
       await runtime.start();
       await runtime.connect('codex', 'cli');
-      const health = runtime.getHealth()['codex:cli'];
-      expect(health.status).toBe('error');
-      expect(health.retryInMs).toBe(DEFAULT_FILE_POLL_INTERVAL_MS);
+      expect(runtime.getHealth()['codex:cli']).toMatchObject({
+        status: 'error',
+        retryInMs: DEFAULT_FILE_POLL_INTERVAL_MS,
+      });
+      const retry = [...timers.values()].find(
+        (timer) => timer.delayMs === DEFAULT_FILE_POLL_INTERVAL_MS,
+      );
+      if (retry === undefined) throw new Error('Expected an error retry');
+      retry.callback();
+      // A repeated real failure doubles the delay, unlike a missing installation.
+      await vi.waitFor(() =>
+        expect(runtime.getHealth()['codex:cli']).toMatchObject({
+          status: 'error',
+          retryInMs: 2 * DEFAULT_FILE_POLL_INTERVAL_MS,
+        }),
+      );
+      expect(broken.start).toHaveBeenCalledTimes(2);
     } finally {
       await runtime.stop();
     }

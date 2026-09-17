@@ -17,7 +17,7 @@ export type ConnectionCoordinator = Pick<
  * One Settings row per provider. Connecting a row enables every surface behind
  * it; each surface still keeps its own partition, baseline, cursors, and health.
  */
-export const CONNECTION_TARGETS: Readonly<
+const CONNECTION_TARGETS: Readonly<
   Record<SettingsConnectionKey, readonly (readonly [Provider, Surface])[]>
 > = {
   codex: [
@@ -37,7 +37,7 @@ export function isConnectable(connection: SettingsConnectionKey): boolean {
   return CONNECTABLE_CONNECTIONS.includes(connection);
 }
 
-export function surfaceKeysFor(connection: SettingsConnectionKey): readonly SurfaceKey[] {
+function surfaceKeysFor(connection: SettingsConnectionKey): readonly SurfaceKey[] {
   return CONNECTION_TARGETS[connection].map(([provider, surface]) => surfaceKey(provider, surface));
 }
 

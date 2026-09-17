@@ -1391,9 +1391,10 @@ export function createRuntimeCoordinator(options: RuntimeCoordinatorOptions): Ru
       // later install is noticed without backoff churn or an error report.
       const isPrerequisiteMissing = error instanceof MonitorPrerequisiteError;
       const delay = isPrerequisiteMissing ? maxRetryIntervalMs : runtime.retryMs;
-      if (!isPrerequisiteMissing) {
-        runtime.retryMs = Math.min(maxRetryIntervalMs, Math.max(filePollIntervalMs, delay * 2));
-      }
+      // A later install is a fresh situation, so any earlier backoff is reset.
+      runtime.retryMs = isPrerequisiteMissing
+        ? filePollIntervalMs
+        : Math.min(maxRetryIntervalMs, Math.max(filePollIntervalMs, delay * 2));
       setHealth(runtime.key, isPrerequisiteMissing ? 'unavailable' : 'error', delay);
       publish();
       clearTimer(runtime);

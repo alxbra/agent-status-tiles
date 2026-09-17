@@ -25,6 +25,8 @@ export type SettingsProviderConnectionStatus =
 /** One Settings row per provider; each row connects that provider's Desktop and CLI surfaces. */
 export type SettingsConnectionKey = 'codex' | 'claude';
 
+export const SETTINGS_CONNECTION_KEYS = ['codex', 'claude'] as const;
+
 export const SETTINGS_CONNECTION_LABELS: Readonly<Record<SettingsConnectionKey, string>> = {
   codex: 'Codex',
   claude: 'Claude Code',
@@ -92,7 +94,7 @@ const CONNECTION_STATUSES = new Set<SettingsProviderConnectionStatus>([
   'disconnected',
   'unavailable',
 ]);
-const PROVIDER_KEYS = ['codex', 'claude'] as const;
+const PROVIDER_KEYS = SETTINGS_CONNECTION_KEYS;
 const STATE_KEYS = [
   'providers',
   'displays',

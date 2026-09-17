@@ -2,6 +2,7 @@ import { ChevronRight, MoreHorizontal } from 'lucide-react';
 import { useCallback, useRef, useState, type ReactElement } from 'react';
 
 import {
+  SETTINGS_CONNECTION_KEYS,
   SETTINGS_CONNECTION_LABELS,
   type SettingsDisplayOption,
   type SettingsConnectionKey,
@@ -33,9 +34,6 @@ import {
   SelectValue,
 } from '../components/ui/select';
 import { Switch } from '../components/ui/switch';
-
-const CONNECTION_LABEL = SETTINGS_CONNECTION_LABELS;
-const CONNECTION_KEYS: readonly SettingsConnectionKey[] = ['codex', 'claude'];
 
 export type ProviderConnectionStatus = SettingsProviderConnectionStatus;
 export type { SettingsDisplayOption, SettingsProviderState };
@@ -73,7 +71,7 @@ function ProviderAction({
   onConnect?: (connection: SettingsConnectionKey) => void | Promise<void>;
   onRequestDisconnect: (connection: SettingsConnectionKey) => void;
 }): ReactElement {
-  const label = CONNECTION_LABEL[connection];
+  const label = SETTINGS_CONNECTION_LABELS[connection];
   const isProviderPending = isPending(`provider:${connection}`);
   if (state.status === 'connected' || state.canDisconnect) {
     const statusLabel =
@@ -212,7 +210,7 @@ export function SettingsView({
       if (onConnect === undefined) return;
       runAction(
         `provider:${connection}`,
-        `Could not connect to ${CONNECTION_LABEL[connection]}. Try again.`,
+        `Could not connect to ${SETTINGS_CONNECTION_LABELS[connection]}. Try again.`,
         () => onConnect(connection),
       );
     },
@@ -224,7 +222,7 @@ export function SettingsView({
       if (onDisconnect === undefined) return;
       runAction(
         `provider:${connection}`,
-        `Could not disconnect ${CONNECTION_LABEL[connection]}. Try again.`,
+        `Could not disconnect ${SETTINGS_CONNECTION_LABELS[connection]}. Try again.`,
         () => onDisconnect(connection),
       );
     },
@@ -272,14 +270,14 @@ export function SettingsView({
 
         <div className="grid gap-7">
           <div aria-label="Providers" className="grid gap-4" role="group">
-            {CONNECTION_KEYS.map((connection) => (
+            {SETTINGS_CONNECTION_KEYS.map((connection) => (
               <div
                 key={connection}
-                aria-label={`${CONNECTION_LABEL[connection]} connection`}
+                aria-label={`${SETTINGS_CONNECTION_LABELS[connection]} connection`}
                 data-provider={connection}
                 role="group"
               >
-                <SettingRow label={CONNECTION_LABEL[connection]}>
+                <SettingRow label={SETTINGS_CONNECTION_LABELS[connection]}>
                   <ProviderAction
                     isPending={isPending}
                     canDisconnect={onDisconnect !== undefined}
@@ -379,11 +377,13 @@ export function SettingsView({
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>
-              Disconnect {disconnectTarget === undefined ? '' : CONNECTION_LABEL[disconnectTarget]}?
+              Disconnect{' '}
+              {disconnectTarget === undefined ? '' : SETTINGS_CONNECTION_LABELS[disconnectTarget]}?
             </AlertDialogTitle>
             <AlertDialogDescription>
               Disconnect removes this app&apos;s local status history but does not change{' '}
-              {disconnectTarget === undefined ? '' : CONNECTION_LABEL[disconnectTarget]} data.
+              {disconnectTarget === undefined ? '' : SETTINGS_CONNECTION_LABELS[disconnectTarget]}{' '}
+              data.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

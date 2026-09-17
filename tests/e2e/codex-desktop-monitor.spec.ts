@@ -309,6 +309,13 @@ process.stdin.on('data', chunk => {
             .status,
       )
       .toBe('ready');
+    // One Connect click enables both surfaces through IPC; the CLI surface
+    // has no executable here and stays quietly unavailable behind the row.
+    await expect
+      .poll(async () => (await loadSessionState(userDataDir)).monitoring.partitions['codex:cli'])
+      .toMatchObject({ enabled: true, sessions: {} });
+    await expect(desktop).toContainText('Connected');
+    await expect(settings.getByRole('alert')).toHaveCount(0);
     await expect
       .poll(() =>
         restartedOverlay.evaluate(
