@@ -11,6 +11,7 @@ import {
   selectCohort,
   statJournals,
   verifyJournal,
+  type ClaudeJournalDiscovery,
   type ClaudeJournalSummary,
   type JournalCandidate,
 } from './journal-discovery';
@@ -117,6 +118,22 @@ export function retainedClaudeJournals(
     }
   }
   return retained;
+}
+
+/**
+ * The app's retained-set callback over the live monitoring state and the
+ * shared discovery; it throws until the runtime exists, so a sweep requested
+ * before then is skipped rather than run unguarded.
+ */
+export function claudeRetainedSet(
+  getState: () => MonitoringState | null,
+  discovery: Pick<ClaudeJournalDiscovery, 'summaries'>,
+): () => ReadonlySet<string> {
+  return () => {
+    const state = getState();
+    if (state === null) throw new Error('runtime-not-ready');
+    return retainedClaudeJournals(state, discovery.summaries);
+  };
 }
 
 /**
@@ -237,7 +254,8 @@ export class ClaudeJournalCollector {
     );
     let attempts = 0;
     for (const candidate of candidates) {
-      if (retained.has(candidate.name.slice(0, -'.jsonl'.length))) continue;
+      const baseName = candidate.name.slice(0, -'.jsonl'.length);
+      if (retained.has(baseName)) continue;
       let verdict = this.verdicts.get(candidate.name);
       if (
         verdict === undefined ||
@@ -268,6 +286,14 @@ export class ClaudeJournalCollector {
         verdict.verified && (verdict.ended || candidate.mtimeMs < abandonedCutoffMs);
       if (!collectable || verdict.refused === true) continue;
       if (attempts >= this.maxRemovals) break;
+      // The listing moves on while a sweep runs; a journal that gained a
+      // cohort, cursor, or session in the meantime is no longer collectable.
+      try {
+        if (this.retained().has(baseName)) continue;
+      } catch {
+        sweep.failed += 1;
+        break;
+      }
       attempts += 1;
       const outcome = await this.removeSet(candidate);
       if (outcome === 'removed') {

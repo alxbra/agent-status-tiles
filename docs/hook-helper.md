@@ -117,7 +117,9 @@ For accepted events it retains only these bounded fields:
   Codex's canonical `tool_call_id` according to the explicit provider argument;
 - `timestamp` (canonical receipt time in Unix milliseconds);
 - `project_name` and a one-way SHA-256 `project_id` derived from a normalized
-  absolute cwd. The raw cwd is never journaled;
+  absolute cwd. The name is the last path component, except that a Claude
+  worktree (`<repo>/.claude/worktrees/<slug>`) is named after `<repo>`; the ID
+  always hashes the full normalized path. The raw cwd is never journaled;
 - validated `notification_type` values (`permission_prompt`, `idle_prompt`,
   `auth_success`, `elicitation_dialog`, `elicitation_complete`, or
   `elicitation_response`) for `Notification` events;

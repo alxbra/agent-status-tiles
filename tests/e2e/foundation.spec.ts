@@ -673,7 +673,7 @@ for (const testSessionCount of [1, 12]) {
       const extendedBox = await firstTile.boundingBox();
       if (extendedBox === null) throw new Error('Extended tab has no bounds');
       expect(extendedBox.x).toBeGreaterThanOrEqual(0);
-      // Short titles fit on the tab, so no tooltip portal is needed.
+      // Tabs never show a tooltip; the title stays in the accessible name.
       await expect(page.locator('[data-slot="tooltip-content"]')).toHaveCount(0);
 
       await firstTile.click({ button: 'right' });

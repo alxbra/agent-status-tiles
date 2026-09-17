@@ -64,10 +64,8 @@ import {
 import { CodexCliMonitor, type CodexCliMonitorOptions } from './providers/codex/cli-monitor';
 import { ClaudeCliMonitor, ClaudeDesktopMonitor } from './providers/claude/surface-monitor';
 import { ClaudeJournalDiscovery } from './providers/claude/journal-discovery';
-import {
-  ClaudeJournalCollector,
-  retainedClaudeJournals,
-} from './providers/claude/journal-collector';
+import { ClaudeSessionNames } from './providers/claude/session-names';
+import { ClaudeJournalCollector, claudeRetainedSet } from './providers/claude/journal-collector';
 
 const hasSingleInstanceLock = app.requestSingleInstanceLock();
 const TEST_KEYBOARD_ENTRY_HOOK = Symbol.for('agent-status-tiles.test.keyboard-entry');
@@ -355,28 +353,33 @@ if (!hasSingleInstanceLock) {
             });
             return readinessInFlight;
           };
+    // Test runs point at an explicit configuration directory; a seeded-journal
+    // test has none, so titles fall back to project names there.
+    const claudeSessionNames =
+      claude === undefined
+        ? undefined
+        : new ClaudeSessionNames({ configDirectory: claude.configDirectory });
     // Journals are collected only outside both cohorts of the listing the
     // sweep follows and outside the persisted cursors and sessions.
     const claudeCollector = new ClaudeJournalCollector({
       appDataPath: app.getPath('userData'),
-      retained: () => {
-        if (runtimeCoordinator === null) throw new Error('runtime-not-ready');
-        return retainedClaudeJournals(
-          runtimeCoordinator.getMonitoringState(),
-          claudeJournals.summaries,
-        );
-      },
+      retained: claudeRetainedSet(
+        () => runtimeCoordinator?.getMonitoringState() ?? null,
+        claudeJournals,
+      ),
     });
     const claudeDesktopMonitor = new ClaudeDesktopMonitor({
       appDataPath: app.getPath('userData'),
       discovery: claudeJournals,
       collector: claudeCollector,
+      ...(claudeSessionNames === undefined ? {} : { sessionNames: claudeSessionNames }),
       ...(checkClaudeReadiness === undefined ? {} : { checkReadiness: checkClaudeReadiness }),
     });
     const claudeCliMonitor = new ClaudeCliMonitor({
       appDataPath: app.getPath('userData'),
       discovery: claudeJournals,
       collector: claudeCollector,
+      ...(claudeSessionNames === undefined ? {} : { sessionNames: claudeSessionNames }),
       ...(checkClaudeReadiness === undefined ? {} : { checkReadiness: checkClaudeReadiness }),
     });
     providerSetups =

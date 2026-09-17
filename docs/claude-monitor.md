@@ -1,9 +1,10 @@
 # Claude monitor contract
 
 `src/main/providers/claude/` turns the helper's private journals into the
-shared session model. It has no knowledge of Claude's own files: it never
-reads `~/.claude`, transcripts, or the settings file, and no path leaves the
-module. One `ClaudeSurfaceMonitor` runs per surface (`claude:desktop`,
+shared session model. Discovery and replay read nothing under `~/.claude`
+except the per-process session registry described under Discovery (two
+fields, read only) and never transcripts; the readiness check described under
+Connecting reads the settings file separately. No path leaves the module. One `ClaudeSurfaceMonitor` runs per surface (`claude:desktop`,
 `claude:cli`) behind the shared `Claude Code` Settings row.
 
 ## Discovery
@@ -45,10 +46,20 @@ that aged off the page, an ended Claude session only returns if it is resumed
 into the same session ID. A session killed without `SessionEnd` keeps its last
 state until it ages out of the window, because silence is never interpreted.
 
-Sources use the journal hash as their ID and cursor key, the project folder
-name as the title (a short session ID when none was recorded), the journal's
+Sources use the journal hash as their ID and cursor key, the journal's
 modification time as `updatedAt`, and the active file size as the baseline
-cutoff. Titles never come from prompt content.
+cutoff. The title is Claude's own session name when one is known, else the
+project folder name (the repository name for a Claude worktree), else a short
+session ID. Claude Code keeps one small JSON file per running process under
+its configuration directory's `sessions` folder with the session ID and the
+name its Desktop sidebar shows, which Claude derives from the conversation or
+the user sets; a placeholder Claude generates from the folder name is marked
+`derived` and ignored. `ClaudeSessionNames` reads only those fields, bounded
+and validated, as best-effort display enrichment. This registry is observed
+rather than documented behaviour, so a missing or unreadable file simply
+means the folder name is used. The companion never derives a title from
+content itself; the conversation-derived name shown is the one the harness
+chose, as with Codex thread names, and the plan records that authorization.
 
 ## Collection
 
@@ -65,15 +76,17 @@ such a journal ended is decided the way discovery decides it: the file is
 verified (first record hashes to the name, last record belongs to the same
 session) and its newest record must be `SessionEnd`. A verified journal
 whose newest record is not `SessionEnd` (a closed terminal, a killed process,
-a crash) is removed only once it has not changed at all for thirty days
-(`JOURNAL_ABANDONED_RETENTION_MS`) and nothing refers to it any more. Hooks
-record activity, not liveness, so a session that merely sat at a prompt for
-a month looks the same as a killed one; the guard is the cohort, not the
-clock: a journal still among its surface's newest 25 keeps its tile and its
-files however old it is (a killed session keeps its last state until it ages
-out of the window, as the discovery section says), so a light install never
-collects a killed session and never holds more than the window of them. A
-session collected this way was already out of state; if it wakes up, the
+a crash) is removed only once it has not changed at all for more than thirty
+days (`JOURNAL_ABANDONED_RETENTION_MS`) and nothing refers to it any more.
+Hooks record activity, not liveness, so a session that merely sat at a prompt
+for a month looks the same as a killed one; the guard is the cohort, not the
+clock: a journal still in its surface's cohort (the discovery section's
+window over the inspected listing) keeps its tile and its files however old
+it is (a killed session keeps its last state until it ages out of the window,
+as the discovery section says), so a light install never collects a killed
+session, and beyond the window killed sessions are held for at most thirty
+days, apart from sets that cannot be verified or were refused. A session
+collected this way was already out of state; if it wakes up, the
 helper recreates its journal from the next hook record, discovery accepts a
 first record of any kind, and the session is rediscovered as new with its
 earlier history gone. A journal that is empty beside an archive (a rotation
@@ -120,7 +133,9 @@ A sweep keeps every journal the app still refers to, whatever its state:
 both surfaces' cohorts of the listing the sweep follows (derived from the
 shared discovery, so the guard does not depend on which monitor reached the
 listing first), every base name with a persisted cursor, and the journal of
-every persisted Claude session (`retainedClaudeJournals`). A sweep reports counts only: journals judged
+every persisted Claude session (`retainedClaudeJournals`); the set is taken
+when the sweep starts and checked again right before each removal, since the
+listing moves on while a sweep runs. A sweep reports counts only: journals judged
 (read, or empty and so unverifiable), removed, refused (a set left alone for
 a symlink or non-file, or the whole sweep when the directory is not a real
 directory), and failed (I/O errors, or a retained set that could not be
@@ -163,7 +178,14 @@ shared reducer, per session and in journal order. Claude hooks carry no turn
 identifier, so a turn is keyed by the receipt time of the `UserPromptSubmit`
 that started it and every later record of the session attaches to the newest
 turn; the persisted record's active turn and open requests seed the state at
-the start of each read.
+the start of each read. A session first seen mid-turn (hooks installed while
+it was already working, or a journal that begins after the prompt) has no
+start record, so for a session with no turn seen at all, persisted or in this
+read, its first record that proves work opens a turn at that moment; only
+tool, permission, question, elicitation, stop, and prompt-notification records
+count, never idle or sign-in notifications, so a session that is idle when the
+hooks arrive shows nothing new until its next prompt. Once any turn has been
+seen, a stray record after a completion or failure is plain activity.
 
 | Journal record | Lifecycle event |
 | --- | --- |
@@ -173,7 +195,8 @@ the start of each read.
 | `ElicitationResult`, `Notification` `elicitation_complete` / `elicitation_response` | `input-resolved` |
 | other `PreToolUse`, `PostToolUseFailure` | resolves everything open, then `activity` |
 | `Stop` with neither `stop_hook_active` nor `is_subagent` | `turn-completed` with a deterministic completion ID |
-| `Stop` from a subagent or while another stop hook continues the turn, or before any turn | `activity` |
+| `Stop` from a subagent or while another stop hook continues the turn | `activity` |
+| `Stop` or `StopFailure` with no open turn after a completed or failed turn | `activity` / nothing |
 | `StopFailure` | `turn-failed` |
 | `SessionStart`, `SessionEnd`, other notifications | nothing (`SessionEnd` acts through discovery) |
 
@@ -223,7 +246,7 @@ restart, and one settings-file read serves both surfaces when they start
 together. A test run supplies the helper path and configuration directory
 explicitly and reads managed settings from a `managed` folder inside that
 directory; without them the monitors run seeded journals with no readiness
-check and never touch a settings file. In development the helper must exist
+check, no session name registry, and never touch a settings file. In development the helper must exist
 under `build/hook-helper/<arch>/`, which requires a Rust toolchain.
 
 ### Hooks silenced by policy

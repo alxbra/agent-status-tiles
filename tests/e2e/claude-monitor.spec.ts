@@ -242,7 +242,7 @@ test('native Claude Desktop and CLI journals baseline idle, publish live status,
       record(desktopId, 'SessionEnd', { end_reason: 'other' }),
     );
     await expect
-      .poll(async () => (await sessions(restarted)).map((session) => session.title))
+      .poll(async () => (await sessions(restarted)).map((session) => session.title).sort())
       .toEqual(['cli-project', 'old-project']);
   } finally {
     await application?.close();

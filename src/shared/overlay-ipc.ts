@@ -18,7 +18,8 @@ export const OVERLAY_IPC_CHANNELS = {
 } as const;
 
 export const MAX_OVERLAY_SESSIONS = 256;
-// Twelve tile targets plus one tooltip and one context-menu portal.
+// Twelve tile targets plus one context-menu portal, with one spare kept for
+// compatibility with persisted hit-region tests (tabs show no tooltip).
 export const MAX_OVERLAY_HIT_REGIONS = 14;
 
 export interface OverlayState {

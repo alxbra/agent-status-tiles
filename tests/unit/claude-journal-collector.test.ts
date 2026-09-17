@@ -226,9 +226,9 @@ describe('claude journal collector', () => {
     expect(await exists(journalPath(root, 'inside'))).toBe(true);
   });
 
-  it('keeps journals the monitors or the coordinator still refer to', async () => {
+  it('keeps journals the listing cohorts or the coordinator still refer to', async () => {
     const root = await appData();
-    await seed(root, 'in-cohort', { ended: true, ageMs: OLD });
+    await seed(root, 'in-cohort', { ended: false, ageMs: OLD });
     await seed(root, 'with-cursor', { ended: true, ageMs: OLD });
     await seed(root, 'with-session', { ended: true, ageMs: OLD });
     await seed(root, 'free', { ended: true, ageMs: OLD });

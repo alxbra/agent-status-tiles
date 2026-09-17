@@ -13,6 +13,7 @@
 | 7 evidence | [#40](https://github.com/alxbra/agent-status-tiles/pull/40): merge record and this status; the live validation record is still pending | `1dc7ad8` |
 | 3.4 follow-up: managed hooks | [#41](https://github.com/alxbra/agent-status-tiles/pull/41) | `a4feaa8` |
 | journal collection | [#42](https://github.com/alxbra/agent-status-tiles/pull/42) | `8906f06` |
+| live-turn and title fixes | [#43](https://github.com/alxbra/agent-status-tiles/pull/43) | `c851eab` |
 
 Still open after these merges: the live verification matrix in section 5
 (real Claude Desktop and terminal sessions, hook coexistence, restart, uninstall,
@@ -126,8 +127,12 @@ against the current hooks documentation:
   live verification proves a pre-install session stays silent.
 - `disableAllHooks: true` at any settings level silently disables our hooks.
 - The undocumented registry `~/.claude/sessions/<pid>.json` (pid, entrypoint,
-  cwd, status, name) exists but is not used: it is undocumented, only covers
-  live processes, and its `name` may be prompt-derived. Recorded as rejected.
+  cwd, status, name) was rejected in this draft. The first live Connect
+  showed folder names are not distinguishing for worktree sessions, so PR #43
+  reversed that: the registry's `name` (conversation-derived or user-set;
+  Claude's folder-based placeholders are ignored) is read as bounded display
+  enrichment, authorized by the product owner on 2026-09-17 and recorded in
+  `MVP_PLAN.md` §2.3.
 
 ## 3. Design decisions
 

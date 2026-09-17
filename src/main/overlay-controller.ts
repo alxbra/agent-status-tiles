@@ -21,7 +21,7 @@ export type { OverlayHitRegion } from '../shared/overlay-ipc';
 
 /**
  * The transparent native window hosts the right-anchored tab dock plus room
- * for a fully extended tab, the stock tooltip, and the context menu.
+ * for a fully extended tab and the context menu (tabs show no tooltip).
  */
 export const OVERLAY_WINDOW_WIDTH = 360;
 export const OVERLAY_WINDOW_HEIGHT = 480;

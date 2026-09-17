@@ -11,7 +11,7 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
   ClaudeCliMonitor,
@@ -21,7 +21,7 @@ import {
 } from '../../src/main/providers/claude/surface-monitor';
 import {
   ClaudeJournalCollector,
-  retainedClaudeJournals,
+  claudeRetainedSet,
 } from '../../src/main/providers/claude/journal-collector';
 import { ClaudeJournalDiscovery } from '../../src/main/providers/claude/journal-discovery';
 import { makeHookJournalBaseName } from '../../src/main/providers/hooks/hook-journal-reader';
@@ -354,8 +354,9 @@ describe('claude surface monitor', () => {
     }
     expect(passes).toBeGreaterThan(1);
     expect(result.exhaustedSourceIds).toEqual([sources[0]!.id]);
-    // One activity before any turn; per turn a start, three events per pair, and a completion.
-    expect(total).toBe(1 + turns * (2 + pairsPerTurn * 3));
+    // The leading record infers a turn (start plus activity); per turn a start,
+    // three events per pair, and a completion.
+    expect(total).toBe(2 + turns * (2 + pairsPerTurn * 3));
     expect(state.sessions['claude:busy']!.status).toBe('unread');
   });
 
@@ -439,6 +440,55 @@ describe('claude surface monitor', () => {
     monitor.stop();
     expect(monitor.lastIssue).toBeUndefined();
   });
+
+  it("titles a source from Claude's own session name when one is known", async () => {
+    const monitor = new ClaudeDesktopMonitor({
+      appDataPath: '/unused',
+      discovery: {
+        list: async () => [
+          {
+            baseName: 'b1',
+            nativeSessionId: 'named',
+            projectName: 'worktree-slug',
+            surface: 'desktop',
+            ended: false,
+            updatedAt: 2,
+            endOffset: 1,
+          },
+          {
+            baseName: 'b2',
+            nativeSessionId: 'unnamed',
+            projectName: 'project',
+            surface: 'desktop',
+            ended: false,
+            updatedAt: 1,
+            endOffset: 1,
+          },
+        ],
+        truncated: false,
+      },
+      reader: { read: async () => ({ events: [], cursors: {}, diagnostics: [] }) },
+      sessionNames: { lookup: async () => new Map([['named', 'Add journal garbage collection']]) },
+    });
+    monitor.start();
+    expect((await monitor.discover()).sources.map((source) => source.title)).toEqual([
+      'Add journal garbage collection',
+      'project',
+    ]);
+  });
+
+  it('does not consult the session registry when the cohort is empty', async () => {
+    const lookup = vi.fn(async () => new Map<string, string>());
+    const monitor = new ClaudeCliMonitor({
+      appDataPath: '/unused',
+      discovery: { list: async () => [], truncated: false },
+      reader: { read: async () => ({ events: [], cursors: {}, diagnostics: [] }) },
+      sessionNames: { lookup },
+    });
+    monitor.start();
+    expect((await monitor.discover()).sources).toEqual([]);
+    expect(lookup).not.toHaveBeenCalled();
+  });
 });
 
 describe('claude surface monitor collection', () => {
@@ -493,10 +543,10 @@ describe('claude surface monitor collection', () => {
       await utimes(journalPath(root, id), stamp, stamp);
     }
     const discovery = new ClaudeJournalDiscovery({ appDataPath: root });
-    // The runtime is created below; the closure only runs once it exists.
+    // The runtime is created below; the app's own factory only runs once it exists.
     const collector = new ClaudeJournalCollector({
       appDataPath: root,
-      retained: () => retainedClaudeJournals(runtime.getMonitoringState(), discovery.summaries),
+      retained: claudeRetainedSet(() => runtime.getMonitoringState(), discovery),
     });
     const monitoring = createInitialMonitoringState();
     monitoring.partitions['claude:desktop'].enabled = true;
