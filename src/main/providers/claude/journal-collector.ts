@@ -8,8 +8,10 @@ import {
   MAX_JOURNAL_ENTRIES,
   isJournalName,
   isMissingError,
+  selectCohort,
   statJournals,
   verifyJournal,
+  type ClaudeJournalSummary,
   type JournalCandidate,
 } from './journal-discovery';
 
@@ -18,8 +20,7 @@ export const JOURNAL_RETENTION_MS = 7 * 24 * 60 * 60 * 1_000;
 /**
  * A verified journal that never received `SessionEnd` (a closed terminal, a
  * killed process, a crash) and has not changed at all for this long is
- * removed too; every hook appends, so a session alive for a month leaves a
- * trace, and the cohort, cursor, and session guards still apply.
+ * removed too, once no cohort, cursor, or session refers to it any more.
  */
 export const JOURNAL_ABANDONED_RETENTION_MS = 30 * 24 * 60 * 60 * 1_000;
 /** Every discovery pass requests a sweep; one runs at most this often. */
@@ -33,14 +34,14 @@ const CLAUDE_SURFACE_KEYS = ['claude:desktop', 'claude:cli'] as const;
 
 /** Counts only; a sweep never reports a name or a path. */
 export interface ClaudeJournalSweep {
-  /** Journals read to learn whether their newest record is `SessionEnd`. */
+  /** Journals judged: read to learn whether they are ours and whether they ended. */
   probed: number;
-  /** Ended journals removed with every archive. */
+  /** Journal sets removed with every archive. */
   removed: number;
   /**
-   * Ended journals left alone because a path of their set was a symlink or
-   * not a regular file, or one for the whole sweep when the journal directory
-   * itself is not a real directory.
+   * Collectable journals left alone because a path of their set was a
+   * symlink or not a regular file, or one for the whole sweep when the
+   * journal directory itself is not a real directory.
    */
   refused: number;
   /**
@@ -92,17 +93,18 @@ type SetOutcome = 'removed' | 'refused' | 'failed' | 'changed';
 type PathState = 'present' | 'absent' | 'refused' | 'changed';
 
 /**
- * Journals the app still refers to: each monitor's current cohort, every
- * persisted cursor (keyed by the journal base name), and every persisted
- * Claude session (whose ID hashes to one).
+ * Journals the app still refers to: both surfaces' cohorts of the listing
+ * the sweep follows (so the guard does not depend on which monitor reached
+ * the listing first), every persisted cursor (keyed by the journal base
+ * name), and every persisted Claude session (whose ID hashes to one).
  */
 export function retainedClaudeJournals(
   state: MonitoringState,
-  monitors: Iterable<{ readonly cohort: ReadonlySet<string> }>,
+  summaries: readonly ClaudeJournalSummary[],
 ): Set<string> {
   const retained = new Set<string>();
-  for (const monitor of monitors) {
-    for (const baseName of monitor.cohort) retained.add(baseName);
+  for (const surface of ['desktop', 'cli'] as const) {
+    for (const journal of selectCohort(summaries, surface)) retained.add(journal.baseName);
   }
   for (const key of CLAUDE_SURFACE_KEYS) {
     const partition = state.partitions[key];
@@ -138,13 +140,14 @@ export function journalWindow(present: ReadonlySet<string>, after: string | unde
 /**
  * Bounded garbage collection for the app's own Claude journal directory. A
  * sweep removes every suffix (`.jsonl.3`, `.2`, `.1`, then the active file)
- * of a verified journal whose newest record is `SessionEnd` and whose active
- * file is older than the retention window, and nothing else: a journal that
- * was killed without `SessionEnd`, that cannot be verified as this app's, or
- * that the coordinator still refers to stays. Symlinks and non-files are
- * never followed or removed; one in a journal set leaves the whole set alone.
- * Lock files stay, so the helper's no-stale-lock guarantee holds. Sweeps are
- * throttled, single-flight, bounded per pass, and report counts only.
+ * of a verified journal that either ended (`SessionEnd`) and is older than
+ * the retention window or never ended and has not changed for the longer
+ * abandoned window, and nothing else: a journal that cannot be verified as
+ * this app's or that a cohort, cursor, or session still refers to stays.
+ * Symlinks and non-files are never followed or removed; one in a journal
+ * set leaves the whole set alone. Lock files stay, so the helper's
+ * no-stale-lock guarantee holds. Sweeps are throttled, single-flight,
+ * bounded per pass, and report counts only.
  */
 export class ClaudeJournalCollector {
   private readonly directory: string;

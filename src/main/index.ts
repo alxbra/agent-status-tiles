@@ -62,11 +62,7 @@ import {
   type CodexDesktopMonitorOptions,
 } from './providers/codex/desktop-monitor';
 import { CodexCliMonitor, type CodexCliMonitorOptions } from './providers/codex/cli-monitor';
-import {
-  ClaudeCliMonitor,
-  ClaudeDesktopMonitor,
-  type ClaudeSurfaceMonitor,
-} from './providers/claude/surface-monitor';
+import { ClaudeCliMonitor, ClaudeDesktopMonitor } from './providers/claude/surface-monitor';
 import { ClaudeJournalDiscovery } from './providers/claude/journal-discovery';
 import {
   ClaudeJournalCollector,
@@ -359,14 +355,16 @@ if (!hasSingleInstanceLock) {
             });
             return readinessInFlight;
           };
-    // Ended journals are collected once both cohorts and the persisted
-    // cursors and sessions are known; the monitors exist before the sweep runs.
-    const claudeMonitors: ClaudeSurfaceMonitor[] = [];
+    // Journals are collected only outside both cohorts of the listing the
+    // sweep follows and outside the persisted cursors and sessions.
     const claudeCollector = new ClaudeJournalCollector({
       appDataPath: app.getPath('userData'),
       retained: () => {
         if (runtimeCoordinator === null) throw new Error('runtime-not-ready');
-        return retainedClaudeJournals(runtimeCoordinator.getMonitoringState(), claudeMonitors);
+        return retainedClaudeJournals(
+          runtimeCoordinator.getMonitoringState(),
+          claudeJournals.summaries,
+        );
       },
     });
     const claudeDesktopMonitor = new ClaudeDesktopMonitor({
@@ -381,7 +379,6 @@ if (!hasSingleInstanceLock) {
       collector: claudeCollector,
       ...(checkClaudeReadiness === undefined ? {} : { checkReadiness: checkClaudeReadiness }),
     });
-    claudeMonitors.push(claudeDesktopMonitor, claudeCliMonitor);
     providerSetups =
       claude === undefined
         ? {}

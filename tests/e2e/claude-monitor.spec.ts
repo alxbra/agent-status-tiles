@@ -143,8 +143,9 @@ test('native Claude Desktop and CLI journals baseline idle, publish live status,
         record(cliId, 'UserPromptSubmit'),
     );
     // Journal collection: an ended journal past retention goes with its
-    // archive, as does one that never ended but has been silent for a month;
-    // a set containing a symlink stays, and the link's target is never touched.
+    // archive; a set containing a symlink stays, and the link's target is
+    // never touched. A journal silent for a month but still in the CLI
+    // cohort is guarded whatever its age: it keeps its files and its tile.
     await seedOldJournal(userDataDir, endedId, { ended: true, ageMs: EIGHT_DAYS_MS });
     await seedOldJournal(userDataDir, abandonedId, { ended: false, ageMs: THIRTY_ONE_DAYS_MS });
     await seedOldJournal(userDataDir, linkedId, { ended: true, ageMs: EIGHT_DAYS_MS });
@@ -179,6 +180,7 @@ test('native Claude Desktop and CLI journals baseline idle, publish live status,
       .toEqual([
         { id: `claude:${desktopId}`, status: 'idle', surface: 'desktop', title: 'desktop-project' },
         { id: `claude:${cliId}`, status: 'working', surface: 'cli', title: 'cli-project' },
+        { id: `claude:${abandonedId}`, status: 'idle', surface: 'cli', title: 'old-project' },
       ]);
     const persisted = await loadSessionState(userDataDir);
     expect(persisted.monitoring.owners[`claude:${desktopId}`]).toBe('claude:desktop');
@@ -189,8 +191,8 @@ test('native Claude Desktop and CLI journals baseline idle, publish live status,
     // only that: the linked set, its target, and the live journals remain.
     await expect.poll(() => exists(journalPath(userDataDir, endedId))).toBe(false);
     expect(await exists(journalPath(userDataDir, endedId, '.1'))).toBe(false);
-    await expect.poll(() => exists(journalPath(userDataDir, abandonedId))).toBe(false);
-    expect(await exists(journalPath(userDataDir, abandonedId, '.1'))).toBe(false);
+    expect(await exists(journalPath(userDataDir, abandonedId))).toBe(true);
+    expect(await exists(journalPath(userDataDir, abandonedId, '.1'))).toBe(true);
     expect(await exists(journalPath(userDataDir, linkedId))).toBe(true);
     expect(await exists(journalPath(userDataDir, linkedId, '.1'))).toBe(true);
     expect(await exists(journalPath(userDataDir, linkedId, '.2'))).toBe(true);
@@ -205,6 +207,7 @@ test('native Claude Desktop and CLI journals baseline idle, publish live status,
       .toEqual({
         'desktop-project': 'working',
         'cli-project': 'working',
+        'old-project': 'idle',
       });
     await appendFile(
       journalPath(userDataDir, desktopId),
@@ -230,6 +233,7 @@ test('native Claude Desktop and CLI journals baseline idle, publish live status,
       .toEqual({
         'desktop-project': 'unread',
         'cli-project': 'error',
+        'old-project': 'idle',
       });
 
     // An ended session leaves the cohort on the next discovery.
@@ -239,7 +243,7 @@ test('native Claude Desktop and CLI journals baseline idle, publish live status,
     );
     await expect
       .poll(async () => (await sessions(restarted)).map((session) => session.title))
-      .toEqual(['cli-project']);
+      .toEqual(['cli-project', 'old-project']);
   } finally {
     await application?.close();
     await rm(root, { recursive: true, force: true });

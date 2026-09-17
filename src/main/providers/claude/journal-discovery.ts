@@ -172,6 +172,7 @@ export class ClaudeJournalDiscovery {
   private readonly cache = new Map<string, CacheEntry>();
   private inFlight: Promise<readonly ClaudeJournalSummary[]> | undefined;
   private wasTruncated = false;
+  private lastSummaries: readonly ClaudeJournalSummary[] = [];
 
   constructor(options: { appDataPath: string }) {
     this.directory = join(options.appDataPath, 'journals', 'claude');
@@ -180,6 +181,11 @@ export class ClaudeJournalDiscovery {
   /** True when the last listing had more journals than it could stat. */
   get truncated(): boolean {
     return this.wasTruncated;
+  }
+
+  /** The last listing; the collector derives both surfaces' cohorts from it. */
+  get summaries(): readonly ClaudeJournalSummary[] {
+    return this.lastSummaries;
   }
 
   /** Both surface monitors call this every pass; concurrent calls share one listing. */
@@ -200,6 +206,7 @@ export class ClaudeJournalDiscovery {
       if (isMissingError(error)) {
         this.cache.clear();
         this.wasTruncated = false;
+        this.lastSummaries = [];
         return [];
       }
       throw error;
@@ -255,6 +262,7 @@ export class ClaudeJournalDiscovery {
       (left, right) =>
         right.updatedAt - left.updatedAt || (left.baseName < right.baseName ? -1 : 1),
     );
+    this.lastSummaries = summaries;
     return summaries;
   }
 

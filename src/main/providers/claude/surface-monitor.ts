@@ -107,11 +107,6 @@ export class ClaudeSurfaceMonitor implements ProviderSurfaceMonitor {
     this.checkReadiness = options.checkReadiness;
   }
 
-  /** Base names of the journals in this surface's current cohort; the collector keeps them. */
-  get cohort(): ReadonlySet<string> {
-    return new Set(this.journals.keys());
-  }
-
   /** The reason the last start failed, for the Settings sentence; undefined once healthy. */
   get lastIssue(): ClaudeIssue | undefined {
     return this.issue;
@@ -157,7 +152,7 @@ export class ClaudeSurfaceMonitor implements ProviderSurfaceMonitor {
     }
     this.journals = journals;
     this.unavailableSourceIds.clear();
-    // The collector reads the cohort just set; a sweep never fails discovery.
+    // The collector follows the listing just consumed; a sweep never fails discovery.
     try {
       await this.collector?.sweep();
     } catch {
