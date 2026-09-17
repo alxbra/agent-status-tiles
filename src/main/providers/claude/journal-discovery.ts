@@ -20,6 +20,15 @@ const PROBE_BYTES = 8 * 1024;
 const MAX_ID_BYTES = 256;
 const JOURNAL_NAME = /^[a-f0-9]{64}\.jsonl$/u;
 
+/** The active journal of one session: a hash base name plus `.jsonl`. */
+export function isJournalName(name: string): boolean {
+  return JOURNAL_NAME.test(name);
+}
+
+export function isMissingError(error: unknown): boolean {
+  return (error as { code?: unknown }).code === 'ENOENT';
+}
+
 export type ClaudeHost = NonNullable<HookJournalEvent['host']>;
 
 /** Display-safe facts about one journal; the path never leaves this module. */
@@ -38,7 +47,8 @@ export interface ClaudeJournalSummary {
   endOffset: number;
 }
 
-interface Candidate {
+/** One `lstat` of an active journal; shared with the collector. */
+export interface JournalCandidate {
   name: string;
   mtimeMs: number;
   size: number;
@@ -117,6 +127,31 @@ async function probeJournal(path: string, size: number): Promise<[Probe, Probe] 
   }
 }
 
+/**
+ * `lstat` the named active journals, at most `MAX_JOURNAL_ENTRIES` of them in
+ * the given order, keeping regular files only; a name that cannot be
+ * stat'ed is skipped. Shared by discovery and the collector.
+ */
+export async function statJournals(
+  directory: string,
+  names: Iterable<string>,
+): Promise<JournalCandidate[]> {
+  const candidates: JournalCandidate[] = [];
+  let statted = 0;
+  for (const name of names) {
+    if (statted >= MAX_JOURNAL_ENTRIES) break;
+    statted += 1;
+    try {
+      const metadata = await lstat(join(directory, name));
+      if (!metadata.isFile()) continue;
+      candidates.push({ name, mtimeMs: metadata.mtimeMs, size: metadata.size });
+    } catch {
+      continue;
+    }
+  }
+  return candidates;
+}
+
 export function surfaceForIdentity(
   host: ClaudeHost | undefined,
   entrypoint: string | undefined,
@@ -162,28 +197,16 @@ export class ClaudeJournalDiscovery {
     try {
       names = await readdir(this.directory);
     } catch (error) {
-      if ((error as { code?: unknown }).code === 'ENOENT') {
+      if (isMissingError(error)) {
         this.cache.clear();
         this.wasTruncated = false;
         return [];
       }
       throw error;
     }
-    const present = new Set(names.filter((name) => JOURNAL_NAME.test(name)));
+    const present = new Set(names.filter(isJournalName));
     this.wasTruncated = present.size > MAX_JOURNAL_ENTRIES;
-    const candidates: Candidate[] = [];
-    let statted = 0;
-    for (const name of present) {
-      if (statted >= MAX_JOURNAL_ENTRIES) break;
-      statted += 1;
-      try {
-        const metadata = await lstat(join(this.directory, name));
-        if (!metadata.isFile()) continue;
-        candidates.push({ name, mtimeMs: metadata.mtimeMs, size: metadata.size });
-      } catch {
-        continue;
-      }
-    }
+    const candidates = await statJournals(this.directory, present);
     candidates.sort(
       (left, right) => right.mtimeMs - left.mtimeMs || (left.name < right.name ? -1 : 1),
     );
@@ -208,7 +231,7 @@ export class ClaudeJournalDiscovery {
         summaries.push(cached.summary);
         continue;
       }
-      const summary = await this.summarize(candidate);
+      const summary = await summarizeJournal(this.directory, candidate);
       this.cache.set(candidate.name, {
         mtimeMs: candidate.mtimeMs,
         size: candidate.size,
@@ -255,35 +278,53 @@ export class ClaudeJournalDiscovery {
       return false;
     }
   }
+}
 
-  private async summarize(candidate: Candidate): Promise<ClaudeJournalSummary | undefined> {
-    if (candidate.size === 0) return undefined;
-    let probes: [Probe, Probe] | undefined;
-    try {
-      probes = await probeJournal(join(this.directory, candidate.name), candidate.size);
-    } catch {
-      return undefined;
-    }
-    if (probes === undefined) return undefined;
-    const [first, last] = probes;
-    const nativeSessionId = first.sessionId;
-    if (nativeSessionId === undefined) return undefined;
-    const baseName = candidate.name.slice(0, -'.jsonl'.length);
-    if (makeHookJournalBaseName('claude', nativeSessionId) !== baseName) return undefined;
-    if (last.sessionId !== nativeSessionId) return undefined;
-    const host = last.host ?? first.host;
-    const entrypoint = last.entrypoint ?? first.entrypoint;
-    const projectName = last.projectName ?? first.projectName;
-    return {
-      baseName,
-      nativeSessionId,
-      ...(projectName === undefined ? {} : { projectName }),
-      surface: surfaceForIdentity(host, entrypoint),
-      ...(host === undefined ? {} : { host }),
-      ended: last.eventName === 'SessionEnd',
-      updatedAt: Math.round(candidate.mtimeMs),
-      endOffset: candidate.size,
-    };
+/**
+ * Verify one journal and describe it. Only a file whose first record names
+ * the session hashed into its file name and whose last record belongs to the
+ * same session is ours to describe; anything else, including an empty file,
+ * yields nothing. A file that cannot be read rejects, so a caller that
+ * remembers verdicts can tell "not ours" from "not readable right now". The
+ * path never leaves this module.
+ */
+export async function verifyJournal(
+  directory: string,
+  candidate: JournalCandidate,
+): Promise<ClaudeJournalSummary | undefined> {
+  if (candidate.size === 0) return undefined;
+  const probes = await probeJournal(join(directory, candidate.name), candidate.size);
+  if (probes === undefined) return undefined;
+  const [first, last] = probes;
+  const nativeSessionId = first.sessionId;
+  if (nativeSessionId === undefined) return undefined;
+  const baseName = candidate.name.slice(0, -'.jsonl'.length);
+  if (makeHookJournalBaseName('claude', nativeSessionId) !== baseName) return undefined;
+  if (last.sessionId !== nativeSessionId) return undefined;
+  const host = last.host ?? first.host;
+  const entrypoint = last.entrypoint ?? first.entrypoint;
+  const projectName = last.projectName ?? first.projectName;
+  return {
+    baseName,
+    nativeSessionId,
+    ...(projectName === undefined ? {} : { projectName }),
+    surface: surfaceForIdentity(host, entrypoint),
+    ...(host === undefined ? {} : { host }),
+    ended: last.eventName === 'SessionEnd',
+    updatedAt: Math.round(candidate.mtimeMs),
+    endOffset: candidate.size,
+  };
+}
+
+/** `verifyJournal` for discovery, where an unreadable file is simply not listed. */
+async function summarizeJournal(
+  directory: string,
+  candidate: JournalCandidate,
+): Promise<ClaudeJournalSummary | undefined> {
+  try {
+    return await verifyJournal(directory, candidate);
+  } catch {
+    return undefined;
   }
 }
 

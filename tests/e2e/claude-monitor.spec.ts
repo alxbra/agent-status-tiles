@@ -1,6 +1,15 @@
 import { expect, test } from '@playwright/test';
 import { _electron as electron, type ElectronApplication, type Page } from 'playwright';
-import { appendFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import {
+  access,
+  appendFile,
+  mkdir,
+  mkdtemp,
+  rm,
+  symlink,
+  utimes,
+  writeFile,
+} from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { makeHookJournalBaseName } from '../../src/main/providers/hooks/hook-journal-reader';
@@ -19,6 +28,9 @@ const projectRoot = process.cwd();
 const mainEntry = resolve(projectRoot, 'out/main/index.js');
 const desktopId = 'aaaaaaaa-1111-4111-8111-111111111111';
 const cliId = 'bbbbbbbb-2222-4222-8222-222222222222';
+const endedId = 'cccccccc-3333-4333-8333-333333333333';
+const linkedId = 'dddddddd-4444-4444-8444-444444444444';
+const EIGHT_DAYS_MS = 8 * 24 * 60 * 60 * 1_000;
 let clock = 1_789_000_000_000;
 
 /** A helper-shaped journal record; the helper never journals prompts or paths. */
@@ -41,13 +53,33 @@ function record(
   })}\n`;
 }
 
-function journalPath(userDataDir: string, sessionId: string): string {
+function journalPath(userDataDir: string, sessionId: string, suffix = ''): string {
   return join(
     userDataDir,
     'journals',
     'claude',
-    `${makeHookJournalBaseName('claude', sessionId)}.jsonl`,
+    `${makeHookJournalBaseName('claude', sessionId)}.jsonl${suffix}`,
   );
+}
+
+async function exists(path: string): Promise<boolean> {
+  return access(path).then(
+    () => true,
+    () => false,
+  );
+}
+
+/** An ended session whose journal and archive were last written eight days ago. */
+async function seedEndedJournal(userDataDir: string, sessionId: string): Promise<void> {
+  const stamp = new Date(Date.now() - EIGHT_DAYS_MS);
+  const records = (...names: string[]): string =>
+    names
+      .map((name) => record(sessionId, name, { host: 'terminal', project_name: 'old-project' }))
+      .join('');
+  await writeFile(journalPath(userDataDir, sessionId, '.1'), records('SessionStart', 'Stop'));
+  await utimes(journalPath(userDataDir, sessionId, '.1'), stamp, stamp);
+  await writeFile(journalPath(userDataDir, sessionId), records('Stop', 'SessionEnd'));
+  await utimes(journalPath(userDataDir, sessionId), stamp, stamp);
 }
 
 async function overlayWindow(application: ElectronApplication): Promise<Page> {
@@ -101,6 +133,14 @@ test('native Claude Desktop and CLI journals baseline idle, publish live status,
       record(cliId, 'SessionStart', { session_source: 'startup' }) +
         record(cliId, 'UserPromptSubmit'),
     );
+    // Journal collection: an ended journal past retention goes with its
+    // archive; one whose set contains a symlink stays, and the link's target
+    // is never touched.
+    await seedEndedJournal(userDataDir, endedId);
+    await seedEndedJournal(userDataDir, linkedId);
+    const outside = join(root, 'outside.jsonl');
+    await writeFile(outside, 'not a journal\n');
+    await symlink(outside, journalPath(userDataDir, linkedId, '.2'));
     const monitoring = createInitialMonitoringState();
     monitoring.partitions['claude:desktop'].enabled = true;
     monitoring.partitions['claude:cli'].enabled = true;
@@ -134,6 +174,17 @@ test('native Claude Desktop and CLI journals baseline idle, publish live status,
     expect(persisted.monitoring.owners[`claude:${desktopId}`]).toBe('claude:desktop');
     expect(persisted.monitoring.owners[`claude:${cliId}`]).toBe('claude:cli');
     expect(JSON.stringify(persisted.monitoring)).not.toContain(root);
+
+    // The first discovery pass swept the ended journal and its archive, and
+    // only that: the linked set, its target, and the live journals remain.
+    await expect.poll(() => exists(journalPath(userDataDir, endedId))).toBe(false);
+    expect(await exists(journalPath(userDataDir, endedId, '.1'))).toBe(false);
+    expect(await exists(journalPath(userDataDir, linkedId))).toBe(true);
+    expect(await exists(journalPath(userDataDir, linkedId, '.1'))).toBe(true);
+    expect(await exists(journalPath(userDataDir, linkedId, '.2'))).toBe(true);
+    expect(await exists(outside)).toBe(true);
+    expect(await exists(journalPath(userDataDir, desktopId))).toBe(true);
+    expect(await exists(journalPath(userDataDir, cliId))).toBe(true);
 
     // Live status arrives from appended records within the file poll.
     await appendFile(journalPath(userDataDir, desktopId), record(desktopId, 'UserPromptSubmit'));

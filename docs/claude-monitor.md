@@ -23,9 +23,8 @@ rotates a journal (the active file is briefly absent or empty next to a `.1`
 archive) the previous summary is kept for at most two passes, so a rotation
 never looks like an ended session while a deleted journal with a stale archive
 is forgotten. A directory holding more journals than can be stat'ed reports
-incomplete coverage. Nothing deletes old journals yet; journal garbage
-collection for ended sessions, removing every suffix, is a required follow-up
-before release.
+incomplete coverage; the collection below keeps a long-lived install under
+that bound as long as its sessions end with `SessionEnd`.
 
 Each inspected journal yields display-safe facts only: the session ID, the
 project folder name from the newest record, the surface, the recognised
@@ -61,6 +60,73 @@ rather than documented behaviour, so a missing or unreadable file simply
 means the folder name is used. The companion never derives a title from
 content itself; the conversation-derived name shown is the one the harness
 chose, as with Codex thread names, and the plan records that authorization.
+
+## Collection
+
+One `ClaudeJournalCollector`, shared by both surface monitors, removes the
+journals of sessions that are over. Each monitor asks it to sweep at the end
+of every discovery pass; a sweep runs at most every five minutes
+(`JOURNAL_SWEEP_INTERVAL_MS`), overlapping requests share one sweep, and a
+sweep that fails never fails the pass. A sweep lists the same directory,
+`lstat`s at most 4,096 active journals (a larger directory is walked in
+sorted windows that continue where the previous sweep stopped, so every
+journal is reached), and considers only regular files whose modification time
+is more than seven days (`JOURNAL_RETENTION_MS`) old, oldest first. Whether
+such a journal ended is decided the way discovery decides it: the file is
+verified (first record hashes to the name, last record belongs to the same
+session) and its newest record must be `SessionEnd`. A journal that was
+killed without `SessionEnd`, that is empty beside an archive (a rotation that
+never completed), or that cannot be verified as this app's is never removed.
+At most 64 journals are read per sweep (`MAX_SWEEP_PROBES`); the verdict for
+an unchanged file is remembered, so a backlog of live-looking old journals is
+read once and then skipped, while a file that could not be read at all (an
+I/O error rather than a failed verification) gets no verdict and is read
+again next sweep. At most 64 removals are attempted per sweep
+(`MAX_SWEEP_REMOVALS`); a journal judged on an earlier sweep does not count
+against the read budget, and a set that was refused is not attempted again
+until its active file changes, so a few unsafe sets can never exhaust the
+removal budget.
+
+Removing a journal removes every suffix: `.jsonl.3`, `.2`, `.1`, then the
+active `.jsonl`, in that order, so an interrupted sweep leaves an ended
+active file to finish next time rather than an orphaned archive nothing would
+judge. Every path of the set is checked before any is touched and again at
+the moment of removal, with `lstat`: a symlink, directory, or other non-file
+anywhere in the set leaves the whole set alone, and a journal directory that
+is itself a link is not swept, so nothing outside the app's directory is
+ever followed or removed (within the same trust domain as the helper, which
+also checks the directory and then acts on paths beneath it). The active file
+must still have the modification time and size that were read, and that is
+re-checked before each archive is removed as well as before the active file
+itself; a session resumed into the same ID in between has grown its journal
+and is left, archives included, for its next verdict. The app cannot take
+the helper's advisory lock, so one window remains: a hook that opens the
+active file for append between that final check and the `unlink` writes its
+record to the removed inode, and the session's journal restarts with the next
+hook's record. It needs a resume of a session that ended more than a week ago
+landing within those microseconds, and the restarted journal is discovered
+and replayed normally, so the consequence is one lost record of a session
+that was already forgotten. The helper's `<hash>.lock` files are never
+removed: the helper does not re-check the lock inode after locking, so an
+app-side unlink could let two hooks hold different lock files. A lock file
+is empty and is not a journal name, so it costs one directory entry and
+nothing in discovery; collecting stale lock files is a follow-up that starts
+in the helper.
+
+A sweep keeps every journal the app still refers to, whatever its state: the
+current cohort of either surface, every base name with a persisted cursor,
+and the journal of every persisted Claude session
+(`retainedClaudeJournals`). A sweep reports counts only: journals judged
+(read, or empty and so unverifiable), removed, refused (a set left alone for
+a symlink or non-file, or the whole sweep when the directory is not a real
+directory), and failed (I/O errors, or a retained set that could not be
+computed; retried on a later sweep, which is the next interval); no name,
+path, or error text leaves the module.
+
+Sessions that end without `SessionEnd` (a closed terminal, a killed process,
+a crash) are never collected by this contract and accumulate until the stat
+bound reports incomplete coverage; a second, longer retention for journals
+that have not changed at all is a follow-up, not part of this slice.
 
 ## Replay
 
@@ -154,18 +220,68 @@ sentence per row: a failed action's reason takes the place of the live health
 sentence until the next action.
 
 Each monitor verifies readiness when it starts: the bundled helper must
-resolve and the hooks must be installed with the current helper path and not
-silenced by `disableAllHooks`. A failed check keeps the surface in `error`
-health with the coordinator's retry and records one issue (`helper-missing`,
-`helper-translocated`, `helper-unusable`, `hooks-missing`, `hooks-disabled`,
-or `settings-unreadable`), each shown in Settings as one actionable sentence.
-The helper is resolved on every check and install, so a helper built or moved
-after launch is noticed without a restart, and one settings-file read serves
-both surfaces when they start together. A test
-run supplies the helper path and configuration directory explicitly; without
-them the monitors run seeded journals with no readiness check, no session
-name registry, and never touch a settings file. In development the helper must exist under
-`build/hook-helper/<arch>/`, which requires a Rust toolchain.
+resolve, the organization's managed settings must not block hooks from the
+user settings file, and the hooks must be installed with the current helper
+path and not silenced by `disableAllHooks`. A failed check keeps the surface
+in `error` health with the coordinator's retry and records one issue
+(`helper-missing`, `helper-translocated`, `helper-unusable`, `hooks-missing`,
+`hooks-disabled`, `hooks-blocked`, or `settings-unreadable`), each shown in
+Settings as one actionable sentence. The helper is resolved on every check
+and install, so a helper built or moved after launch is noticed without a
+restart, and one settings-file read serves both surfaces when they start
+together. A test run supplies the helper path and configuration directory
+explicitly and reads managed settings from a `managed` folder inside that
+directory; without them the monitors run seeded journals with no readiness
+check, no session name registry, and never touch a settings file. In development the helper must exist
+under `build/hook-helper/<arch>/`, which requires a Rust toolchain.
+
+### Hooks silenced by policy
+
+Claude Code reads `disableAllHooks` from every settings level and honours
+three managed keys that keep hooks in the user settings file from running:
+`disableAllHooks`, `allowManagedHooksOnly`, and `strictPluginOnlyCustomization`
+(`true` or an array naming `hooks`). The readiness check reads the file-based
+managed source, `/Library/Application Support/ClaudeCode/managed-settings.json`
+merged with the visible `*.json` drop-ins of `managed-settings.d/` in
+alphabetical order (a later single value replaces an earlier one, so a later
+`false` lifts a lock; lists combine; and an `allowManagedHooksOnly` that is
+present but not `false` counts as on, which is how Claude Code treats an
+invalid value), and reports
+`hooks-blocked` when the merged result blocks them. The sentence asks for an
+administrator and promises that the connection resumes on its own, which the
+coordinator's retry delivers once the policy is lifted. That read is bounded
+to the same 1 MiB per file as the user settings file and at most 64
+drop-ins, touches only Claude Code's own managed directory, and never
+journals or displays a path.
+
+The check never guesses. Claude Code applies only the highest-ranked managed
+source by default, so when an MDM configuration profile for the
+`com.anthropic.claudecode` domain exists under `/Library/Managed Preferences`
+the files may not apply at all, and the check reports nothing rather than a
+possible false alarm; the profile itself, server-managed settings fetched
+from claude.ai, and settings an embedding host passes are not read. Whether
+server-managed settings apply cannot be established locally (where Claude
+Code caches them is not documented, and this module never reads `~/.claude`),
+so the one residual false-alarm case is an organization that deploys hook
+restrictions in a managed file while its server-managed policy, which
+outranks the file, leaves hooks alone; both come from the same administrator
+and the sentence still names the right person. A managed file that cannot be
+read or parsed, or a drop-in directory that cannot be listed or holds more
+files than the bound, reports nothing: the app cannot tell what applies
+(Claude Code itself refuses to start on invalid managed JSON).
+
+Two silencers remain undetectable and are documented rather than reported: a
+`disableAllHooks` in a project's `.claude/settings.json` or
+`.claude/settings.local.json` silences the hooks for that project only, and a
+project `false` overrides a user-level `true`. The app never learns a
+project's path (the helper journals only a one-way hash and the folder name),
+so it cannot read those files, and a silenced project produces no journal at
+all, not even a `SessionStart`, so there is nothing to attach a note to. Per
+the plan's status rules, silence is never interpreted: a project with hooks
+disabled simply never appears, and the `Claude Code` row stays healthy
+because the shared hooks are in place for every other project. Settings copy
+carries no note about this, in keeping with the one-sentence, actionable-only
+contract of the Settings view.
 
 ## Not in this slice
 

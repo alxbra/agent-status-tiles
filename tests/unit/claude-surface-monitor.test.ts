@@ -475,3 +475,42 @@ describe('claude surface monitor', () => {
     expect(lookup).not.toHaveBeenCalled();
   });
 });
+
+describe('claude surface monitor collection', () => {
+  it('asks the collector to sweep after each discovery and survives a failing sweep', async () => {
+    const root = await appData();
+    await writeFile(journalPath(root, 'desk'), record('desk', 'SessionStart'));
+    const sweeps: number[] = [];
+    let fail = false;
+    const monitor = new ClaudeDesktopMonitor({
+      appDataPath: root,
+      collector: {
+        sweep: async () => {
+          sweeps.push(Date.now());
+          if (fail) throw new Error('disk');
+          return undefined;
+        },
+      },
+    });
+    monitor.start();
+    expect(monitor.cohort).toEqual(new Set());
+    expect((await monitor.discover()).sources).toHaveLength(1);
+    expect(monitor.cohort).toEqual(new Set([makeHookJournalBaseName('claude', 'desk')]));
+    fail = true;
+    expect((await monitor.discover()).sources).toHaveLength(1);
+    expect(sweeps).toHaveLength(2);
+    monitor.stop();
+    expect(monitor.cohort).toEqual(new Set());
+
+    const throwing = new ClaudeDesktopMonitor({
+      appDataPath: root,
+      collector: {
+        sweep: () => {
+          throw new Error('sync');
+        },
+      },
+    });
+    throwing.start();
+    expect((await throwing.discover()).sources).toHaveLength(1);
+  });
+});

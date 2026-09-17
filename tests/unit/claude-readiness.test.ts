@@ -31,11 +31,34 @@ describe('claude readiness', () => {
       status: 'issue',
       issue: 'settings-unreadable',
     });
+    // A managed restriction outranks the user file: no install or Repair changes it.
+    const restricted = { status: 'restricted' as const, setting: 'allowManagedHooksOnly' as const };
+    for (const verification of [
+      { status: 'installed' as const },
+      { status: 'missing' as const },
+      { status: 'unreadable' as const, code: 'settings-not-json' as const },
+    ]) {
+      expect(readinessOf(helper, verification, restricted)).toEqual({
+        status: 'issue',
+        issue: 'hooks-blocked',
+      });
+    }
+    // A managed tier that could not be read never alarms.
+    expect(readinessOf(helper, { status: 'installed' }, { status: 'unknown' })).toEqual({
+      status: 'ready',
+    });
+    expect(readinessOf(helper, { status: 'missing' }, { status: 'unrestricted' })).toEqual({
+      status: 'issue',
+      issue: 'hooks-missing',
+    });
     // A missing helper beats everything: hooks pointing nowhere cannot help.
     expect(readinessOf({ ok: false, code: 'helper-missing' }, { status: 'installed' })).toEqual({
       status: 'issue',
       issue: 'helper-missing',
     });
+    expect(
+      readinessOf({ ok: false, code: 'helper-missing' }, { status: 'installed' }, restricted),
+    ).toEqual({ status: 'issue', issue: 'helper-missing' });
     expect(
       readinessOf({ ok: false, code: 'helper-translocated' }, { status: 'installed' }),
     ).toEqual({ status: 'issue', issue: 'helper-translocated' });
@@ -84,14 +107,17 @@ describe('claude readiness', () => {
       'helper-unusable',
       'hooks-missing',
       'hooks-disabled',
+      'hooks-blocked',
       'settings-unreadable',
     ] as const) {
       const sentence = claudeIssueSentence(issue);
       expect(sentence).not.toMatch(/\//u);
       expect(sentence.length).toBeLessThan(160);
     }
-    // Every issue except a disabled install points at Repair; that one resumes by itself.
+    // A disabled or policy-blocked install never points at Repair; both resume by themselves.
     expect(claudeIssueSentence('hooks-disabled')).not.toMatch(/Repair/u);
+    expect(claudeIssueSentence('hooks-blocked')).not.toMatch(/Repair/u);
+    expect(claudeIssueSentence('hooks-blocked')).toMatch(/administrator/u);
     expect(claudeIssueSentence('hooks-missing')).toMatch(/Repair/u);
   });
 });
