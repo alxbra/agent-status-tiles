@@ -22,11 +22,15 @@ type Reader = Pick<
   'start' | 'stop' | 'inspectSessionMeta' | 'captureRolloutEndOffset' | 'read'
 >;
 
-/** Resolver outcomes that mean Codex is simply not installed for this surface. */
-const MISSING_INSTALLATION_CODES: ReadonlySet<string> = new Set([
-  'bundle-not-found',
-  'binary-missing',
+/**
+ * Resolver outcomes that mean Codex is simply not installed for this surface.
+ * Desktop's `binary-missing` is different: the app bundle exists but its
+ * layout is unexpected, which is an integration error rather than an absence.
+ */
+const DESKTOP_MISSING_INSTALLATION_CODES: ReadonlySet<string> = new Set(['bundle-not-found']);
+const CLI_MISSING_INSTALLATION_CODES: ReadonlySet<string> = new Set([
   'path-unavailable',
+  'binary-missing',
 ]);
 
 export interface CodexMonitorOptions {
@@ -92,6 +96,7 @@ export class CodexSurfaceMonitor implements ProviderSurfaceMonitor {
   private readonly reader: Reader;
   private readonly archivedReader: CodexRolloutReader;
   private readonly resolveBinary: () => Promise<BinaryResolution>;
+  private readonly missingInstallationCodes: ReadonlySet<string>;
   private catalog: Catalog | undefined;
   private files = new Map<string, DiscoveredFile>();
   /** Unreadable files are retried after the monitor restarts, not on every poll. */
@@ -104,6 +109,7 @@ export class CodexSurfaceMonitor implements ProviderSurfaceMonitor {
     private readonly surface: Extract<Surface, 'desktop' | 'cli'>,
     private readonly qualify: (records: readonly CodexCatalogRecord[]) => QualifiedCodexCatalog,
     defaultResolveBinary: () => Promise<BinaryResolution>,
+    missingInstallationCodes: ReadonlySet<string>,
   ) {
     this.key = `codex:${surface}`;
     this.sessionsRoot = options.sessionsRoot ?? join(homedir(), '.codex', 'sessions');
@@ -112,6 +118,7 @@ export class CodexSurfaceMonitor implements ProviderSurfaceMonitor {
     this.reader = options.reader ?? new CodexRolloutReader(this.sessionsRoot);
     this.archivedReader = new CodexRolloutReader(this.archivedSessionsRoot);
     this.resolveBinary = options.resolveBinary ?? defaultResolveBinary;
+    this.missingInstallationCodes = missingInstallationCodes;
   }
 
   async start(): Promise<void> {
@@ -123,7 +130,7 @@ export class CodexSurfaceMonitor implements ProviderSurfaceMonitor {
       const resolution = await this.resolveBinary();
       if (!resolution.ok) {
         const message = `codex-${this.surface}-${resolution.code}`;
-        throw MISSING_INSTALLATION_CODES.has(resolution.code)
+        throw this.missingInstallationCodes.has(resolution.code)
           ? new MonitorPrerequisiteError(message)
           : new Error(message);
       }
@@ -386,8 +393,16 @@ export class CodexSurfaceMonitor implements ProviderSurfaceMonitor {
   }
 }
 
+export { CLI_MISSING_INSTALLATION_CODES };
+
 export class CodexDesktopMonitor extends CodexSurfaceMonitor {
   constructor(options: CodexDesktopMonitorOptions = {}) {
-    super(options, 'desktop', qualifyCodexDesktopCatalog, resolveBundledCodexBinary);
+    super(
+      options,
+      'desktop',
+      qualifyCodexDesktopCatalog,
+      resolveBundledCodexBinary,
+      DESKTOP_MISSING_INSTALLATION_CODES,
+    );
   }
 }

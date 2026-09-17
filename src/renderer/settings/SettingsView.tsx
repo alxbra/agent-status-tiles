@@ -1,11 +1,12 @@
 import { ChevronRight, MoreHorizontal } from 'lucide-react';
 import { useCallback, useRef, useState, type ReactElement } from 'react';
 
-import type {
-  SettingsDisplayOption,
-  SettingsConnectionKey,
-  SettingsProviderConnectionStatus,
-  SettingsProviderState,
+import {
+  SETTINGS_CONNECTION_LABELS,
+  type SettingsDisplayOption,
+  type SettingsConnectionKey,
+  type SettingsProviderConnectionStatus,
+  type SettingsProviderState,
 } from '../../shared/settings';
 import {
   AlertDialog,
@@ -33,10 +34,7 @@ import {
 } from '../components/ui/select';
 import { Switch } from '../components/ui/switch';
 
-const CONNECTION_LABEL: Readonly<Record<SettingsConnectionKey, string>> = {
-  codex: 'Codex',
-  claude: 'Claude Code',
-};
+const CONNECTION_LABEL = SETTINGS_CONNECTION_LABELS;
 const CONNECTION_KEYS: readonly SettingsConnectionKey[] = ['codex', 'claude'];
 
 export type ProviderConnectionStatus = SettingsProviderConnectionStatus;
@@ -385,7 +383,7 @@ export function SettingsView({
             </AlertDialogTitle>
             <AlertDialogDescription>
               Disconnect removes this app&apos;s local status history but does not change{' '}
-              {disconnectTarget === 'claude' ? 'Claude Code' : 'Codex'} data.
+              {disconnectTarget === undefined ? '' : CONNECTION_LABEL[disconnectTarget]} data.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

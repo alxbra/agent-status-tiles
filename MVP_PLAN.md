@@ -504,8 +504,8 @@ The live catalog-to-reader qualifier, Desktop/CLI surface mapping, and provider
 wiring are being delivered in sequential live-monitoring slices. PR #22 adds
 strict Codex Desktop qualification, a signed bundled CLI resolver, fixed-EOF
 rollout replay, and native coordinator wiring. PR #23 adds the Desktop Settings
-Connect/Disconnect control. The current slice adds independent CLI monitoring
-and enables its separate Settings connection.
+Connect/Disconnect control. PR #24 adds independent CLI monitoring with its own
+Settings row, and PR #35 bundles both surfaces behind one `Codex` row.
 
 - [x] Implement the bounded incremental Codex rollout reader (merged PR #6).
 - [x] Implement the bounded read-only Codex app-server catalog client (merged PR #7; formal QA1 and QA2 complete).

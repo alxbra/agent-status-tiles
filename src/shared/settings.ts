@@ -25,6 +25,11 @@ export type SettingsProviderConnectionStatus =
 /** One Settings row per provider; each row connects that provider's Desktop and CLI surfaces. */
 export type SettingsConnectionKey = 'codex' | 'claude';
 
+export const SETTINGS_CONNECTION_LABELS: Readonly<Record<SettingsConnectionKey, string>> = {
+  codex: 'Codex',
+  claude: 'Claude Code',
+};
+
 export interface SettingsProviderState {
   status: SettingsProviderConnectionStatus;
   canConnect: boolean;

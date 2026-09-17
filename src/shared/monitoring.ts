@@ -1,7 +1,7 @@
 import type { FileCursor } from './cursor';
 import type { Provider, SessionRecord, Surface } from './session';
 
-/** The four independently connectable local monitoring surfaces. */
+/** The four local monitoring surfaces; Settings connects them per provider. */
 export type SurfaceKey = `${Provider}:${Surface}`;
 
 export const SURFACE_KEYS: readonly SurfaceKey[] = [
