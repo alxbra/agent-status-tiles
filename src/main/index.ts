@@ -23,14 +23,33 @@ import { createRuntimeCoordinator, type RuntimeCoordinator } from './runtime/coo
 import {
   CONNECTABLE_CONNECTIONS,
   completeProviderBundles,
-  connectProviderSurfaces,
+  connectProvider,
   connectionIssue,
   connectionState,
-  disconnectProviderSurfaces,
+  disconnectProvider,
   enabledSurfaceKeysFor,
   isConnectable,
   isFullyEnabled,
+  repairProvider,
+  type ProviderSetupMap,
 } from './settings-connections';
+import {
+  resolveHookHelperPath,
+  type HookHelperPathResolution,
+} from './providers/claude/helper-path';
+import {
+  inspectClaudeHooks,
+  installClaudeHooks,
+  removeClaudeHooks,
+} from './providers/claude/hook-installer';
+import {
+  ClaudeHelperError,
+  claudeActionFailureSentence,
+  claudeIssueSentence,
+  helperReadiness,
+  readinessOf,
+  type ClaudeReadiness,
+} from './providers/claude/readiness';
 import {
   CodexDesktopMonitor,
   type CodexDesktopMonitorOptions,
@@ -56,6 +75,44 @@ let monitoringCoverageWarning: string | undefined;
 let isQuitting = false;
 let runtimeInitialized = false;
 const pendingConnectionActions = new Set<SettingsConnectionKey>();
+/** Provider-specific install/remove/issue hooks around partition changes; set once the runtime exists. */
+let providerSetups: ProviderSetupMap = {};
+
+interface ClaudeIntegration {
+  /** Resolved on every use so a helper built or moved after launch is noticed. */
+  helper: () => HookHelperPathResolution;
+  /** Claude's configuration directory; undefined means the user's default. */
+  configDirectory: string | undefined;
+  dataDirectory: string;
+}
+/** Per row, the last action failure with a known cause, shown until that row's next action. */
+const providerActionIssues = new Map<SettingsConnectionKey, string>();
+
+/**
+ * Where the Claude hooks point and where they are installed. A test run
+ * supplies both explicitly; without them, seeded-journal tests run the
+ * monitors with no readiness check and no settings-file writes.
+ */
+function claudeIntegration(): ClaudeIntegration | undefined {
+  const dataDirectory = app.getPath('userData');
+  if (isTestRuntime()) {
+    const helperPath = process.env.AGENT_STATUS_TILES_TEST_HOOK_HELPER;
+    const configDirectory = process.env.AGENT_STATUS_TILES_TEST_CLAUDE_CONFIG_DIR;
+    if (!helperPath || !configDirectory) return undefined;
+    return { helper: () => ({ ok: true, path: helperPath }), configDirectory, dataDirectory };
+  }
+  return {
+    helper: () =>
+      resolveHookHelperPath({
+        isPackaged: app.isPackaged,
+        resourcesPath: process.resourcesPath,
+        appRoot: app.getAppPath(),
+        arch: process.arch,
+      }),
+    configDirectory: undefined,
+    dataDirectory,
+  };
+}
 
 function isTestRuntime(): boolean {
   return !app.isPackaged && process.env.NODE_ENV === 'test';
@@ -126,8 +183,12 @@ function getSettingsState(): SettingsState {
       ? { enabled: false }
       : evaluateLoginItemSettings(loginSettings, requestedLoginItemState);
   if (loginItemState.error === undefined) requestedLoginItemState = undefined;
-  const connectionIssues = CONNECTABLE_CONNECTIONS.map((connection) =>
-    connectionIssue(runtimeCoordinator, connection),
+  // One sentence per row: a failed action explains itself until the row's
+  // next action; otherwise the live health sentence, if any.
+  const connectionIssues = CONNECTABLE_CONNECTIONS.map(
+    (connection) =>
+      providerActionIssues.get(connection) ??
+      connectionIssue(runtimeCoordinator, connection, providerSetups[connection]),
   );
   const settingsError = [loginItemState.error, monitoringCoverageWarning, ...connectionIssues]
     .filter((message): message is string => message !== undefined)
@@ -248,19 +309,74 @@ if (!hasSingleInstanceLock) {
     const preserveFixtureOverlay = !app.isPackaged && overlayState.sessions.length > 0;
     // Both Claude surfaces share one listing of the journal directory.
     const claudeJournals = new ClaudeJournalDiscovery({ appDataPath: app.getPath('userData') });
+    const claude = claudeIntegration();
+    // Both surfaces start together; one settings-file read serves both.
+    let readinessInFlight: Promise<ClaudeReadiness> | undefined;
+    const checkClaudeReadiness =
+      claude === undefined
+        ? undefined
+        : (): Promise<ClaudeReadiness> => {
+            readinessInFlight ??= (async () => {
+              const helper = claude.helper();
+              const fromHelper = helperReadiness(helper);
+              if (fromHelper !== undefined || !helper.ok) return fromHelper!;
+              const verification = await inspectClaudeHooks({
+                configDirectory: claude.configDirectory,
+                helperPath: helper.path,
+                dataDirectory: claude.dataDirectory,
+              });
+              return readinessOf(helper, verification);
+            })().finally(() => {
+              readinessInFlight = undefined;
+            });
+            return readinessInFlight;
+          };
+    const claudeDesktopMonitor = new ClaudeDesktopMonitor({
+      appDataPath: app.getPath('userData'),
+      discovery: claudeJournals,
+      ...(checkClaudeReadiness === undefined ? {} : { checkReadiness: checkClaudeReadiness }),
+    });
+    const claudeCliMonitor = new ClaudeCliMonitor({
+      appDataPath: app.getPath('userData'),
+      discovery: claudeJournals,
+      ...(checkClaudeReadiness === undefined ? {} : { checkReadiness: checkClaudeReadiness }),
+    });
+    providerSetups =
+      claude === undefined
+        ? {}
+        : {
+            claude: {
+              install: async () => {
+                // A check in flight may predate this install; do not let a
+                // restarted surface inherit its answer.
+                readinessInFlight = undefined;
+                const helper = claude.helper();
+                if (!helper.ok) throw new ClaudeHelperError(helper);
+                await installClaudeHooks({
+                  configDirectory: claude.configDirectory,
+                  helperPath: helper.path,
+                  dataDirectory: claude.dataDirectory,
+                });
+              },
+              remove: async () => {
+                await removeClaudeHooks({ configDirectory: claude.configDirectory });
+              },
+              issue: () => {
+                const issue = claudeDesktopMonitor.lastIssue ?? claudeCliMonitor.lastIssue;
+                return issue === undefined ? undefined : claudeIssueSentence(issue);
+              },
+              failureSentence: claudeActionFailureSentence,
+            },
+          };
     runtimeCoordinator = createRuntimeCoordinator({
       appDataPath: app.getPath('userData'),
       recentThreadLimit: preferences.recentThreadLimit,
       monitors: [
         new CodexDesktopMonitor(desktopMonitorOptions()),
         new CodexCliMonitor(cliMonitorOptions()),
-        // Claude surfaces run only once their partitions are enabled; the
-        // Settings row stays unavailable until the hook installer is wired.
-        new ClaudeDesktopMonitor({
-          appDataPath: app.getPath('userData'),
-          discovery: claudeJournals,
-        }),
-        new ClaudeCliMonitor({ appDataPath: app.getPath('userData'), discovery: claudeJournals }),
+        // Claude surfaces run only once their partitions are enabled.
+        claudeDesktopMonitor,
+        claudeCliMonitor,
       ],
       onOverlayState: (state) => {
         if (preserveFixtureOverlay && state.sessions.length === 0) return;
@@ -351,14 +467,46 @@ if (!hasSingleInstanceLock) {
           throw new Error('Connection is already enabled');
         }
         pendingConnectionActions.add(connection);
+        providerActionIssues.delete(connection);
         try {
-          await connectProviderSurfaces(coordinator, connection);
-          const state = getSettingsState();
-          publishSettingsState(getSettingsWindow(), state);
-          return state;
+          await connectProvider(coordinator, connection, providerSetups[connection]);
+        } catch (error) {
+          // A failure with a known cause is reported as one sentence in the
+          // state; the row stays disconnected. Anything else is a retryable error.
+          const sentence = providerSetups[connection]?.failureSentence?.(error, 'connect');
+          if (sentence === undefined) throw error;
+          providerActionIssues.set(connection, sentence);
         } finally {
           pendingConnectionActions.delete(connection);
         }
+        const state = getSettingsState();
+        publishSettingsState(getSettingsWindow(), state);
+        return state;
+      },
+      repairSurface: async (connection) => {
+        if (!isConnectable(connection)) throw new Error('Connection is not available');
+        await runtimeStartPromise;
+        if (pendingConnectionActions.has(connection))
+          throw new Error('Connection action is pending');
+        const coordinator = runtimeCoordinator;
+        if (coordinator === null) throw new Error('Monitoring is unavailable');
+        if (enabledSurfaceKeysFor(coordinator, connection).length === 0) {
+          throw new Error('Connection is not enabled');
+        }
+        pendingConnectionActions.add(connection);
+        providerActionIssues.delete(connection);
+        try {
+          await repairProvider(coordinator, connection, providerSetups[connection]);
+        } catch (error) {
+          const sentence = providerSetups[connection]?.failureSentence?.(error, 'repair');
+          if (sentence === undefined) throw error;
+          providerActionIssues.set(connection, sentence);
+        } finally {
+          pendingConnectionActions.delete(connection);
+        }
+        const state = getSettingsState();
+        publishSettingsState(getSettingsWindow(), state);
+        return state;
       },
       disconnectSurface: async (connection) => {
         await runtimeStartPromise;
@@ -370,14 +518,21 @@ if (!hasSingleInstanceLock) {
           throw new Error('Connection is not enabled');
         }
         pendingConnectionActions.add(connection);
+        providerActionIssues.delete(connection);
         try {
-          await disconnectProviderSurfaces(coordinator, connection);
-          const state = getSettingsState();
-          publishSettingsState(getSettingsWindow(), state);
-          return state;
+          await disconnectProvider(coordinator, connection, providerSetups[connection]);
+        } catch (error) {
+          // The partitions are already off; a removal that failed for a known
+          // reason says what remains and what to do about it.
+          const sentence = providerSetups[connection]?.failureSentence?.(error, 'disconnect');
+          if (sentence === undefined) throw error;
+          providerActionIssues.set(connection, sentence);
         } finally {
           pendingConnectionActions.delete(connection);
         }
+        const state = getSettingsState();
+        publishSettingsState(getSettingsWindow(), state);
+        return state;
       },
     });
     const startedCoordinator = runtimeCoordinator;

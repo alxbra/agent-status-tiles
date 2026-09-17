@@ -89,6 +89,11 @@ export function App(): ReactElement {
         setError(undefined);
         setSettings(nextSettings);
       }}
+      onRepair={async (connection: SettingsConnectionKey) => {
+        const nextSettings = await window.agentStatusTiles.repairSurface(connection);
+        setError(undefined);
+        setSettings(nextSettings);
+      }}
       onDisplayChange={async (displayId) => {
         const nextSettings = await window.agentStatusTiles.setDisplayPreference(displayId);
         setError(undefined);

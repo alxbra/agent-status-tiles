@@ -10,6 +10,7 @@ export const IPC_CHANNELS = {
   settingsLaunchAtLoginChange: 'settings:launch-at-login-change',
   settingsSurfaceConnect: 'settings:surface-connect',
   settingsSurfaceDisconnect: 'settings:surface-disconnect',
+  settingsSurfaceRepair: 'settings:surface-repair',
 } as const;
 
 export {
@@ -52,5 +53,8 @@ export interface AgentStatusTilesApi {
   disconnectSurface(
     connection: import('./settings').SettingsConnectionKey,
     confirmed: true,
+  ): Promise<import('./settings').SettingsState>;
+  repairSurface(
+    connection: import('./settings').SettingsConnectionKey,
   ): Promise<import('./settings').SettingsState>;
 }

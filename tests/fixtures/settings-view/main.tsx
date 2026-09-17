@@ -26,7 +26,7 @@ type FixtureState = {
 const initialState: FixtureState = {
   providers: {
     codex: { status: 'disconnected', canConnect: true, canDisconnect: false },
-    claude: { status: 'disconnected', canConnect: false, canDisconnect: false },
+    claude: { status: 'disconnected', canConnect: true, canDisconnect: false },
   },
   selectedDisplayId: 'primary',
   launchAtLogin: false,
@@ -129,6 +129,10 @@ function SettingsFixture(): ReactElement {
               [provider]: { status: 'connected', canConnect: false, canDisconnect: true },
             },
           }));
+        }}
+        onRepair={(connection) => {
+          providerActionCalls.current[connection] += 1;
+          return update((current) => current);
         }}
         onDisconnect={(connection) => {
           providerActionCalls.current[connection] += 1;

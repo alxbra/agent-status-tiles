@@ -22,6 +22,7 @@ export interface SettingsIpcOptions {
   setLaunchAtLogin: (enabled: boolean) => SettingsState | Promise<SettingsState>;
   connectSurface: (connection: SettingsConnectionKey) => SettingsState | Promise<SettingsState>;
   disconnectSurface: (connection: SettingsConnectionKey) => SettingsState | Promise<SettingsState>;
+  repairSurface: (connection: SettingsConnectionKey) => SettingsState | Promise<SettingsState>;
 }
 
 function assertSettingsSender(
@@ -106,6 +107,14 @@ export function registerSettingsIpcHandlers(options: SettingsIpcOptions): () => 
     return assertState(await options.disconnectSurface(payload.connection));
   });
 
+  ipcMain.handle(IPC_CHANNELS.settingsSurfaceRepair, async (event, payload: unknown) => {
+    assertSender(event);
+    if (!isSettingsConnectionRequest(payload)) {
+      throw new Error('Repair request is invalid');
+    }
+    return assertState(await options.repairSurface(payload.connection));
+  });
+
   let isRegistered = true;
   return () => {
     if (!isRegistered) return;
@@ -118,6 +127,7 @@ export function registerSettingsIpcHandlers(options: SettingsIpcOptions): () => 
       IPC_CHANNELS.settingsLaunchAtLoginChange,
       IPC_CHANNELS.settingsSurfaceConnect,
       IPC_CHANNELS.settingsSurfaceDisconnect,
+      IPC_CHANNELS.settingsSurfaceRepair,
     ]) {
       ipcMain.removeHandler(channel);
     }

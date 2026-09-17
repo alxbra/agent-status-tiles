@@ -14,6 +14,27 @@ export type ConnectionCoordinator = Pick<
 >;
 
 /**
+ * Provider-specific setup that runs around the partition changes. Claude
+ * installs its hooks before its surfaces are enabled and removes them after
+ * they are disabled; Codex needs nothing beyond its monitors.
+ */
+export interface ProviderSetup {
+  /** Install or refresh the provider's integration; throws when it cannot. */
+  install?: () => Promise<void>;
+  /** Remove only this app's integration entries; throws when it cannot. */
+  remove?: () => Promise<void>;
+  /** A provider-specific issue sentence that beats the generic health sentence. */
+  issue?: () => string | undefined;
+  /** One sentence for an action that failed for a reason the provider recognises. */
+  failureSentence?: (
+    error: unknown,
+    action: 'connect' | 'repair' | 'disconnect',
+  ) => string | undefined;
+}
+
+export type ProviderSetupMap = Readonly<Partial<Record<SettingsConnectionKey, ProviderSetup>>>;
+
+/**
  * One Settings row per provider. Connecting a row enables every surface behind
  * it; each surface still keeps its own partition, baseline, cursors, and health.
  */
@@ -30,8 +51,8 @@ const CONNECTION_TARGETS: Readonly<
   ],
 };
 
-/** Rows that can be connected from Settings. Claude waits for its hook-install wiring. */
-export const CONNECTABLE_CONNECTIONS: readonly SettingsConnectionKey[] = ['codex'];
+/** Rows that can be connected from Settings. */
+export const CONNECTABLE_CONNECTIONS: readonly SettingsConnectionKey[] = ['codex', 'claude'];
 
 export function isConnectable(connection: SettingsConnectionKey): boolean {
   return CONNECTABLE_CONNECTIONS.includes(connection);
@@ -91,23 +112,28 @@ export function connectionState(
 export function connectionIssue(
   coordinator: ConnectionCoordinator | null,
   connection: SettingsConnectionKey,
+  setup?: ProviderSetup,
 ): string | undefined {
   if (coordinator === null) return undefined;
   const enabledKeys = enabledSurfaceKeysFor(coordinator, connection);
   if (enabledKeys.length === 0) return undefined;
   const statuses = enabledKeys.map((key) => coordinator.getHealth()[key].status);
   const label = SETTINGS_CONNECTION_LABELS[connection];
+  const hasError = statuses.includes('error');
+  const allMissing = statuses.every((status) => status === 'unavailable');
+  if (!hasError && !allMissing) return undefined;
+  // A provider that knows exactly why a surface errored says so instead of
+  // the generic sentence; a quietly missing installation is not its business.
+  const specific = hasError ? setup?.issue?.() : undefined;
+  if (specific !== undefined) return specific;
   // Partial catalog coverage is not a connection failure, and one surface that
   // is simply not installed is not an error while another surface monitors.
-  if (statuses.includes('error')) {
+  if (hasError) {
     return `${label} connection failed. Check the installation, then disconnect and reconnect.`;
   }
   // A missing installation is re-checked by the coordinator on its own, so
   // installing it is the only action the user needs to take.
-  if (statuses.every((status) => status === 'unavailable')) {
-    return `${label} was not found. Install it to connect.`;
-  }
-  return undefined;
+  return `${label} was not found. Install it to connect.`;
 }
 
 /**
@@ -159,6 +185,75 @@ export async function disconnectProviderSurfaces(
 }
 
 /**
+ * Install the provider's integration first, then enable its surfaces. When
+ * enabling fails after a successful install, the integration is removed
+ * again: a disconnected row has no Disconnect to clean it up with.
+ */
+export async function connectProvider(
+  coordinator: ConnectionCoordinator,
+  connection: SettingsConnectionKey,
+  setup?: ProviderSetup,
+): Promise<void> {
+  await setup?.install?.();
+  try {
+    await connectProviderSurfaces(coordinator, connection);
+  } catch (error) {
+    try {
+      await setup?.remove?.();
+    } catch (cleanupError) {
+      throw new AggregateError(
+        [error, cleanupError],
+        'Provider connection failed and its integration could not be removed',
+        { cause: cleanupError },
+      );
+    }
+    throw error;
+  }
+}
+
+/**
+ * Disable the provider's surfaces, then remove its integration entries. The
+ * removal runs even when a surface failed to disable, and the first failure
+ * is reported afterwards, so a half-disconnected row never keeps live hooks.
+ */
+export async function disconnectProvider(
+  coordinator: ConnectionCoordinator,
+  connection: SettingsConnectionKey,
+  setup?: ProviderSetup,
+): Promise<void> {
+  let firstFailure: { error: unknown } | undefined;
+  try {
+    await disconnectProviderSurfaces(coordinator, connection);
+  } catch (error) {
+    firstFailure = { error };
+  }
+  try {
+    await setup?.remove?.();
+  } catch (error) {
+    firstFailure ??= { error };
+  }
+  if (firstFailure !== undefined) throw firstFailure.error;
+}
+
+/**
+ * Refresh the integration and restart every enabled surface. A restart goes
+ * through the coordinator's connect, which re-baselines the surface so
+ * nothing historical turns unread.
+ */
+export async function repairProvider(
+  coordinator: ConnectionCoordinator,
+  connection: SettingsConnectionKey,
+  setup?: ProviderSetup,
+): Promise<void> {
+  await setup?.install?.();
+  for (const [provider, surface] of CONNECTION_TARGETS[connection]) {
+    if (!coordinator.getMonitoringState().partitions[surfaceKey(provider, surface)].enabled)
+      continue;
+    await coordinator.connect(provider, surface);
+  }
+}
+
+/**
  * A checkpoint written before surfaces were bundled may have only one Codex
  * surface enabled. That connection now means both surfaces, so enable the
  * rest through the normal pending baseline; a missing installation stays
@@ -168,6 +263,8 @@ export async function disconnectProviderSurfaces(
  * includes this step, so no user action can interleave with it.
  */
 export async function completeProviderBundles(coordinator: ConnectionCoordinator): Promise<void> {
+  // A partially enabled row was connected through its setup once, so the
+  // missing surface only needs its partition; no provider setup runs here.
   for (const connection of CONNECTABLE_CONNECTIONS) {
     const enabledCount = enabledSurfaceKeysFor(coordinator, connection).length;
     if (enabledCount === 0 || enabledCount === surfaceKeysFor(connection).length) continue;

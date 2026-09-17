@@ -113,9 +113,45 @@ resolves that prompt too: confirmed activity means the user acted, and a
 denied permission would otherwise leave the tile waiting forever; the prompt
 notification re-opens the wait if the dialog is still up.
 
+## Connecting
+
+The `Claude Code` Settings row bundles both surfaces. Connect confirms the
+change it is about to make, installs the owned hooks into the shared Claude
+settings file first (see the installation section of `docs/hook-helper.md`)
+and only then enables the two partitions; a failed install enables nothing,
+and a partition failure after a successful install removes the hooks again so
+a disconnected row never leaves hooks behind. Disconnect disables both
+partitions and then removes only the owned hooks, even when a partition
+failed to disable, and its confirmation says exactly that. Repair reinstalls
+the hooks and restarts the enabled surfaces through the coordinator's
+connect, which re-baselines them so nothing historical turns unread. A
+Connect, Repair, or Disconnect that fails for a known reason (the helper
+cannot be found or used, the settings file cannot be read or updated, or it
+changed underneath the write) leaves the row as it was (disconnected after
+Connect, connected after Repair, disconnected with the hooks still present
+after Disconnect) and shows that reason as one sentence, naming an action the
+row offers in that state, until the row's next action. Settings shows one
+sentence per row: a failed action's reason takes the place of the live health
+sentence until the next action.
+
+Each monitor verifies readiness when it starts: the bundled helper must
+resolve and the hooks must be installed with the current helper path and not
+silenced by `disableAllHooks`. A failed check keeps the surface in `error`
+health with the coordinator's retry and records one issue (`helper-missing`,
+`helper-translocated`, `helper-unusable`, `hooks-missing`, `hooks-disabled`,
+or `settings-unreadable`), each shown in Settings as one actionable sentence.
+The helper is resolved on every check and install, so a helper built or moved
+after launch is noticed without a restart, and one settings-file read serves
+both surfaces when they start together. A test
+run supplies the helper path and configuration directory explicitly; without
+them the monitors run seeded journals with no readiness check and never touch
+a settings file. In development the helper must exist under
+`build/hook-helper/<arch>/`, which requires a Rust toolchain.
+
 ## Not in this slice
 
-Connecting the `Claude Code` row (hook installation, health from the hook
-verification state, Repair), navigation, and the live Desktop and terminal
-validation matrix belong to later slices; until then the Claude partitions are
-enabled only by tests.
+Navigation and the live Desktop and terminal validation matrix belong to
+later slices. Claude Code reloads its settings file while running, so a
+session started before Connect should pick the hooks up without a restart;
+the live matrix confirms this before the restart hint from the plan is
+considered.

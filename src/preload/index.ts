@@ -75,6 +75,13 @@ const api: AgentStatusTilesApi = {
     }
     return invokeSettingsState(IPC_CHANNELS.settingsSurfaceDisconnect, request);
   },
+  repairSurface: (connection) => {
+    const request = { connection };
+    if (!isSettingsConnectionRequest(request)) {
+      return Promise.reject(new Error('Repair request is invalid'));
+    }
+    return invokeSettingsState(IPC_CHANNELS.settingsSurfaceRepair, request);
+  },
 };
 
 contextBridge.exposeInMainWorld('agentStatusTiles', api);

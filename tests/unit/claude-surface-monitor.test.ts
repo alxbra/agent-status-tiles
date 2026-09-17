@@ -8,6 +8,7 @@ import {
   ClaudeCliMonitor,
   ClaudeDesktopMonitor,
   MAX_CLAUDE_RECORDS_PER_READ,
+  type ClaudeMonitorOptions,
 } from '../../src/main/providers/claude/surface-monitor';
 import { makeHookJournalBaseName } from '../../src/main/providers/hooks/hook-journal-reader';
 import {
@@ -392,5 +393,35 @@ describe('claude surface monitor', () => {
     } finally {
       await runtime.stop();
     }
+  });
+
+  it('refuses to start until the helper and hooks are ready and remembers why', async () => {
+    let readiness: Awaited<ReturnType<NonNullable<ClaudeMonitorOptions['checkReadiness']>>> = {
+      status: 'issue',
+      issue: 'hooks-missing',
+    };
+    const monitor = new ClaudeCliMonitor({
+      appDataPath: '/unused',
+      discovery: { list: async () => [], truncated: false },
+      reader: { read: async () => ({ events: [], cursors: {}, diagnostics: [] }) },
+      checkReadiness: async () => readiness,
+    });
+    await expect(monitor.start()).rejects.toThrow('claude-cli-hooks-missing');
+    expect(monitor.lastIssue).toBe('hooks-missing');
+    await expect(monitor.discover()).rejects.toThrow('not-started');
+
+    readiness = { status: 'issue', issue: 'settings-unreadable' };
+    await expect(monitor.start()).rejects.toThrow('claude-cli-settings-unreadable');
+    expect(monitor.lastIssue).toBe('settings-unreadable');
+
+    readiness = { status: 'ready' };
+    await monitor.start();
+    expect(monitor.lastIssue).toBeUndefined();
+    expect((await monitor.discover()).sources).toEqual([]);
+
+    readiness = { status: 'issue', issue: 'hooks-disabled' };
+    await expect(monitor.start()).rejects.toThrow('hooks-disabled');
+    monitor.stop();
+    expect(monitor.lastIssue).toBeUndefined();
   });
 });

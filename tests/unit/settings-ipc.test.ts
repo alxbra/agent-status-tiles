@@ -67,6 +67,7 @@ describe('settings IPC', () => {
       setLaunchAtLogin: vi.fn(() => settingsState()),
       connectSurface: vi.fn(() => settingsState()),
       disconnectSurface: vi.fn(() => settingsState()),
+      repairSurface: vi.fn(() => settingsState()),
     };
     const cleanup = registerSettingsIpcHandlers(options);
     const mainFrame = window.webContents.mainFrame;
@@ -168,10 +169,26 @@ describe('settings IPC', () => {
     ).resolves.toEqual(settingsState());
     expect(options.connectSurface).toHaveBeenCalledWith('codex');
     expect(options.disconnectSurface).toHaveBeenCalledWith('codex');
+    await expect(
+      Promise.resolve().then(() =>
+        electronMocks.handlers.get(IPC_CHANNELS.settingsSurfaceRepair)!(validEvent, {
+          connection: 'claude',
+          confirmed: true,
+        }),
+      ),
+    ).rejects.toThrow('Repair request is invalid');
+    await expect(
+      Promise.resolve().then(() =>
+        electronMocks.handlers.get(IPC_CHANNELS.settingsSurfaceRepair)!(validEvent, {
+          connection: 'claude',
+        }),
+      ),
+    ).resolves.toEqual(settingsState());
+    expect(options.repairSurface).toHaveBeenCalledWith('claude');
 
     cleanup();
     cleanup();
-    expect(electronMocks.ipcMain.removeHandler).toHaveBeenCalledTimes(7);
+    expect(electronMocks.ipcMain.removeHandler).toHaveBeenCalledTimes(8);
   });
 
   it('publishes only validated state to the current Settings window', async () => {
