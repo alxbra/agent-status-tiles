@@ -14,8 +14,10 @@
 Still open after these merges: the live verification matrix in section 5
 (real Claude Desktop and terminal sessions, hook coexistence, restart, uninstall,
 no Node/Python dependence), journal garbage collection for ended sessions
-(`docs/claude-monitor.md`), navigation (section 3.7), and the deferred
-override. Development runs need `build/hook-helper/<arch>/hook-helper`, which
+(`docs/claude-monitor.md`), `disableAllHooks` detection beyond the user-level
+settings file (section 3.4), navigation (section 3.7), and the deferred
+override. Sections 1 and 4 below are the pre-merge baseline this plan was
+written against and are kept as written. Development runs need `build/hook-helper/<arch>/hook-helper`, which
 requires a Rust toolchain; packaged builds carry it.
 
 Draft for review. Scope: finish MVP Epic 5 (Claude Code Desktop and CLI),
@@ -57,7 +59,7 @@ Existing and reused as-is:
   a candidate with `realpath`, requires a regular file, and checks file and
   directory modes; the monitors take a `resolveBinary` injection point.
 
-Missing (this plan):
+Missing at the time of writing (the pre-merge baseline; see the status table above for what has since landed):
 
 1. Runtime resolution of the packaged helper path (nothing in `src/` finds
    `Contents/Resources/hook-helper/<arch>/hook-helper` today).
@@ -203,7 +205,11 @@ reducer's current-turn rule. `Notification{idle_prompt}` is ignored for state.
   event arrays and an empty `hooks` object.
 - Verification (used by health and Repair): helper exists and is executable,
   owned entries are present and point at the current helper path,
-  `disableAllHooks` is not true in the user file.
+  `disableAllHooks` is not true in the user-level file. Claude also honours
+  `disableAllHooks` from project, local, and managed settings, which this
+  check does not read; a project-level switch therefore silences the hooks
+  while the row reports healthy. Detecting it (or the hooks' silence) is a
+  follow-up.
 
 ### 3.5 One row per provider, both surfaces behind it
 
@@ -310,14 +316,15 @@ exceeds that), PR 5 about 200, PR 6 about 350.
 
 ## 5. Live verification matrix (Epic 5 gate)
 
-Run after PR 6 on this Mac, both surfaces, with private content never captured:
+Run after PR 5 on this Mac, both surfaces, with private content never captured
+(the Codex override checks at the end form a separate gate for the deferred
+PR 6):
 
 - Fresh Connect from a settings file with no `hooks` key and from one with an
   unrelated hook present; confirm only owned entries are added and the other
   hook survives Disconnect.
-- Codex row with the CLI binary absent (Desktop-only), with a valid override
-  pointing at a second install, and with an invalid override; confirm quiet
-  unavailability, the override being used, and the single error sentence.
+- Codex row with the CLI binary absent (Desktop-only); confirm quiet
+  unavailability.
 - Desktop session and Terminal, iTerm2 (if installed), Ghostty, and Warp
   sessions: prompt (working), permission prompt (waiting), question tool
   (waiting), approval (working), completion (unread), API failure (error),
@@ -333,3 +340,7 @@ Run after PR 6 on this Mac, both surfaces, with private content never captured:
   (Repair), and uninstall.
 - Confirm hooks never delay or alter agent work (async, silent helper) and the
   app runs without user-installed Node.js or Python.
+
+PR 6 gate (deferred): a valid override pointing at a second Codex install and
+an invalid override; confirm the override being used and the single error
+sentence.
