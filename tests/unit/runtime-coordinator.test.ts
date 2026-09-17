@@ -280,7 +280,7 @@ describe('runtime coordinator', () => {
     await runtime.stop();
   });
 
-  it('shows confirmed work during partial coverage and marks lost observations unavailable', async () => {
+  it('shows confirmed work during partial coverage and drops observations a later catalog omits', async () => {
     const dataPath = await appDataPath();
     const item = source('confirmed');
     let clock = 100;
@@ -337,10 +337,13 @@ describe('runtime coordinator', () => {
     expect(runtime.getOverlayState().sessions).toMatchObject([{ status: 'working' }]);
     clock = 111;
     scheduled.at(-1)?.();
-    await vi.waitFor(() =>
-      expect(runtime.getOverlayState().sessions).toMatchObject([{ status: 'unavailable' }]),
-    );
+    await vi.waitFor(() => expect(runtime.getOverlayState().sessions).toEqual([]));
+    expect(runtime.getMonitoringState().partitions['codex:desktop'].sessions).toEqual({});
     expect(runtime.getMonitoringState().partitions['codex:desktop'].baseline.status).toBe('ready');
+    expect(runtime.getHealth()['codex:desktop']).toMatchObject({
+      status: 'available',
+      coverageIncomplete: true,
+    });
     await runtime.stop();
   });
 
@@ -898,8 +901,8 @@ describe('runtime coordinator', () => {
     expect(read).not.toHaveBeenCalled();
     await runtime.stop();
   });
-  it('polls the catalog every five seconds by default while files poll continuously', async () => {
-    expect(DEFAULT_CATALOG_POLL_INTERVAL_MS).toBe(5_000);
+  it('polls the catalog every two seconds by default while files poll continuously', async () => {
+    expect(DEFAULT_CATALOG_POLL_INTERVAL_MS).toBe(2_000);
     expect(DEFAULT_FILE_POLL_INTERVAL_MS).toBe(250);
     const dataPath = await appDataPath();
     const item = source('steady');
@@ -1067,6 +1070,80 @@ describe('runtime coordinator', () => {
     expect(partition.cursors[item.id]).toBeUndefined();
     expect(runtime.getMonitoringState().globalOrder).toEqual([]);
     expect(runtime.getHealth()['codex:desktop'].status).toBe('available');
+    await runtime.stop();
+  });
+  it('drops an unread thread once a completed catalog no longer reports it', async () => {
+    const dataPath = await appDataPath();
+    const item = source('completed-then-gone');
+    const sessionId = makeSessionId('codex', item.nativeSessionId);
+    let clock = 100;
+    const scheduled: Array<() => void> = [];
+    let reads = 0;
+    const testMonitor = monitor('codex:desktop', [item], async (request) => {
+      reads += 1;
+      return {
+        // The second read (first live file poll) reports a completed turn.
+        events:
+          reads === 2
+            ? [
+                { type: 'turn-started' as const, sessionId, turnId: 'turn-1', timestamp: 120 },
+                {
+                  type: 'turn-completed' as const,
+                  sessionId,
+                  turnId: 'turn-1',
+                  completionId: 'completion-1',
+                  timestamp: 121,
+                },
+              ]
+            : [],
+        cursors: Object.fromEntries(
+          request.sources.map((entry) => [
+            entry.id,
+            { identity: 'fixture', offset: (entry.endOffset ?? 0) + reads },
+          ]),
+        ),
+        complete: true,
+      };
+    });
+    testMonitor.discover = vi
+      .fn()
+      .mockResolvedValueOnce({ complete: true, capturedAt: 100, sources: [item] })
+      .mockResolvedValue({ complete: true, capturedAt: 300, sources: [] });
+    const runtime = createRuntimeCoordinator({
+      appDataPath: dataPath,
+      monitors: [testMonitor],
+      now: () => clock,
+      filePollIntervalMs: 10,
+      catalogPollIntervalMs: 100,
+      setTimeout: (callback) => {
+        scheduled.push(callback);
+        return scheduled.length as unknown as ReturnType<typeof setTimeout>;
+      },
+      clearTimeout: () => undefined,
+    });
+
+    await runtime.start();
+    await runtime.connect('codex', 'desktop');
+    expect(runtime.getOverlayState().sessions).toMatchObject([{ id: sessionId, status: 'idle' }]);
+
+    // A file poll (no catalog) turns the thread unread.
+    clock = 120;
+    scheduled.at(-1)?.();
+    await vi.waitFor(() =>
+      expect(runtime.getOverlayState().sessions).toMatchObject([{ status: 'unread' }]),
+    );
+    expect(testMonitor.discover).toHaveBeenCalledTimes(1);
+
+    // The next catalog omits the thread; unread state does not keep it visible.
+    clock = 300;
+    scheduled.at(-1)?.();
+    await vi.waitFor(() => expect(runtime.getOverlayState().sessions).toEqual([]));
+    expect(testMonitor.discover).toHaveBeenCalledTimes(2);
+    expect(runtime.getMonitoringState().partitions['codex:desktop'].sessions).toEqual({});
+    expect(runtime.getMonitoringState().globalOrder).toEqual([]);
+    expect(
+      (await loadSessionState(dataPath)).monitoring.partitions['codex:desktop'].sessions,
+    ).toEqual({});
     await runtime.stop();
   });
 });

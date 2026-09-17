@@ -282,7 +282,7 @@ The renderer never receives arbitrary filesystem access, shell execution, hook p
 - Acknowledged completion → idle; it remains eligible for the recent-item limit.
 - New turn clears prior completion acknowledgement and prior terminal errors.
 - Archived sessions disappear.
-- Ended items disappear when their connected adapter no longer reports them; idle and acknowledged items may remain visible while eligible.
+- Items disappear, whatever their status, when a completed catalog listing no longer reports them: the newest live page is authoritative, and a thread reappears when it is updated again. Idle and acknowledged items remain visible while still reported and within the recent-item limit.
 - Ignore stale events from previous turns.
 - Parent completion must not be inferred from a subagent stopping.
 - Silence alone must not be interpreted as success, failure, or a stopped session.
@@ -295,10 +295,10 @@ A monitoring failure belongs to integration health. Do not mark every session as
 
 Adapt the existing project’s catalog client, incremental event reader, reducer, and navigation approach rather than introducing a second independent implementation.
 
-- Use local app-server queries for task metadata. Discovery reads one live `thread/list` page of the newest threads (`MAX_RECENT_THREAD_LIMIT` plus a margin, 25 records, sorted by `updated_at` descending) and treats that page as the complete cohort; it never lists archived threads and does not follow continuation cursors. The catalog is re-read every 5 s while the 250 ms file poll carries live status between listings.
+- Use local app-server queries for task metadata. Discovery reads one live `thread/list` page of the newest threads (`MAX_RECENT_THREAD_LIMIT` plus a margin, 25 records, sorted by `updated_at` descending) and treats that page as the complete cohort; it never lists archived threads and does not follow continuation cursors. The catalog is re-read every 2 s while the 250 ms file poll carries live status between listings.
 - Use observed local task events for work performed in another Codex process.
 - Use explicitly installed and trusted hooks to improve approval detection.
-- Include Desktop and CLI top-level threads, including user-created forks; exclude archived, ephemeral, and spawned child threads. Archived threads are never requested, so a thread archived while visible leaves the live page and is dropped by the coordinator's "no longer reported" path on the next discovery. Use the catalog thread `id` as identity and validate rollout events against the separate session ID.
+- Include Desktop and CLI top-level threads, including user-created forks; exclude archived, ephemeral, and spawned child threads. Archived threads are never requested, so a thread archived while visible leaves the live page and is dropped on the next discovery like any other unreported session. Use the catalog thread `id` as identity and validate rollout events against the separate session ID.
 - For a Codex Desktop catalog record with `vscode` source but no originator, require the validated rollout SessionMeta to confirm both `vscode` and `Codex Desktop` before showing it. Report missing or contradictory proof as incomplete coverage.
 - Replay at most the ten newest active Codex rollouts per surface while retaining older qualified task metadata. A task entering the replay cohort later must baseline its previously unread history before showing new activity. Quarantine an oversized rollout locally and report incomplete coverage without blocking other tasks.
 - Keep private/local file parsing isolated and covered by recorded, sanitized fixtures.

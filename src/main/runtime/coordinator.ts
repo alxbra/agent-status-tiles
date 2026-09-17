@@ -35,7 +35,7 @@ export const MAX_RUNTIME_SOURCES = 512;
 export const MAX_RUNTIME_SOURCE_ID_BYTES = 256;
 export const MAX_RUNTIME_TITLE_BYTES = 256;
 export const DEFAULT_FILE_POLL_INTERVAL_MS = 250;
-export const DEFAULT_CATALOG_POLL_INTERVAL_MS = 5_000;
+export const DEFAULT_CATALOG_POLL_INTERVAL_MS = 2_000;
 export const MAX_RETRY_INTERVAL_MS = 15_000;
 export const MAX_OVERLAY_RUNTIME_SESSIONS = 256;
 export const MAX_RETAINED_RUNTIME_SESSIONS = 1_024;
@@ -849,7 +849,7 @@ export function createRuntimeCoordinator(options: RuntimeCoordinatorOptions): Ru
     read: RuntimeReadResult,
     expectedGeneration: number,
     expectedSurfaceGeneration: number,
-    pruneIdle: boolean,
+    pruneUnobserved: boolean,
   ): Promise<void> => {
     await withCommitLock(async () => {
       if (
@@ -887,7 +887,11 @@ export function createRuntimeCoordinator(options: RuntimeCoordinatorOptions): Ru
         const id = makeSessionId(provider, source.nativeSessionId);
         (candidate.owners as Record<string, SurfaceKey>)[id] = key;
       }
-      if (pruneIdle) {
+      if (pruneUnobserved) {
+        // A completed catalog is the newest live page and is authoritative for
+        // the surface cohort. Anything it no longer reports, whatever its
+        // status, has left that page (archived, deleted, or aged out) and is
+        // dropped; it reappears when the thread is updated again.
         const observedIds = new Set(
           sources.map((source) => makeSessionId(provider, source.nativeSessionId)),
         );
@@ -895,8 +899,7 @@ export function createRuntimeCoordinator(options: RuntimeCoordinatorOptions): Ru
         const order: string[] = [];
         for (const id of nextState.order) {
           const record = own(nextState.sessions, id);
-          if (record === undefined) continue;
-          if (!observedIds.has(id) && record.status === 'idle') continue;
+          if (record === undefined || !observedIds.has(id)) continue;
           sessions[id] = record;
           order.push(id);
         }
@@ -919,10 +922,9 @@ export function createRuntimeCoordinator(options: RuntimeCoordinatorOptions): Ru
       }
       partition.sessions = { ...nextState.sessions };
       partition.order = [...nextState.order];
-      // A completed catalog is authoritative for the source cohort. Drop
-      // cursors for sources no longer discovered so churn cannot exhaust the
-      // bounded persisted cursor map.
-      partition.cursors = pruneIdle
+      // Drop cursors for sources no longer discovered so churn cannot exhaust
+      // the bounded persisted cursor map.
+      partition.cursors = pruneUnobserved
         ? { ...read.cursors }
         : { ...partition.cursors, ...read.cursors };
       const baseline = partition.baseline.status === 'pending';
