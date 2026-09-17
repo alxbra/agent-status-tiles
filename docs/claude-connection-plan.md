@@ -13,7 +13,7 @@
 | 7 evidence | [#40](https://github.com/alxbra/agent-status-tiles/pull/40): merge record and this status; the live validation record is still pending | `1dc7ad8` |
 | 3.4 follow-up: managed hooks | [#41](https://github.com/alxbra/agent-status-tiles/pull/41) | `a4feaa8` |
 | journal collection | [#42](https://github.com/alxbra/agent-status-tiles/pull/42) | `8906f06` |
-| journal collection: abandoned sessions | [#46](https://github.com/alxbra/agent-status-tiles/pull/46) | |
+| journal collection: abandoned sessions | [#46](https://github.com/alxbra/agent-status-tiles/pull/46) | `cb31ddd` |
 | live-turn and title fixes | [#43](https://github.com/alxbra/agent-status-tiles/pull/43) | `c851eab` |
 
 Still open after these merges: the live verification matrix in section 5
