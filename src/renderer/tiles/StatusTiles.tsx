@@ -21,7 +21,6 @@ import {
   layoutTabs,
   MAX_VISIBLE_TABS,
   normalizeStripWidth,
-  REACH_PADDING,
   reachWidthFor,
   resolveHover,
   TAB_MOTION_MS,
@@ -285,9 +284,7 @@ export function StatusTiles({
   const reachWidthRef = useRef(DOCK_HOVER_WIDTH);
   /** Once the pointer has extended a tab, the reach zone stays engaged until the pointer leaves it. */
   const reachEngagedRef = useRef(false);
-  const [reachEngaged, setReachEngagedState] = useState(false);
   const pendingExitRef = useRef<number | null>(null);
-  const [reachWidth, setReachWidth] = useState(DOCK_HOVER_WIDTH);
   const [scrollOffset, setScrollOffset] = useState(0);
   const [focusedIndex, setFocusedIndex] = useState<number | null>(null);
   const handledKeyboardEntryRevisionRef = useRef(0);
@@ -365,10 +362,7 @@ export function StatusTiles({
         [...root.querySelectorAll<HTMLElement>(TAB_SELECTOR)].map((tab) => tab.offsetWidth),
         effectiveWidth,
       );
-      if (reachWidthRef.current !== reachWidth) {
-        reachWidthRef.current = reachWidth;
-        setReachWidth(reachWidth);
-      }
+      reachWidthRef.current = reachWidth;
       root.dataset.reachWidth = String(reachWidth);
       const regions =
         renderedRegions.length === layout.hitRegions.length ? renderedRegions : layout.hitRegions;
@@ -503,7 +497,6 @@ export function StatusTiles({
 
   function setReachEngaged(engaged: boolean): void {
     reachEngagedRef.current = engaged;
-    setReachEngagedState(engaged);
   }
 
   function setHoveredSessionId(sessionId: string | null): void {
@@ -658,19 +651,6 @@ export function StatusTiles({
       onBlurCapture={handleBlur}
       onWheel={handleWheel}
     >
-      {/* DEBUG: visualizes the reach zone while it is engaged; remove before merge. */}
-      {reachEngaged ? (
-        <div
-          className="status-tiles__reach-zone"
-          style={{
-            left: `${Math.max(0, effectiveWidth - reachWidth)}px`,
-            top: `${Math.max(0, layout.top - REACH_PADDING)}px`,
-            width: `${Math.min(effectiveWidth, reachWidth)}px`,
-            height: `${Math.min(measuredHeight, layout.bottom + REACH_PADDING) - Math.max(0, layout.top - REACH_PADDING)}px`,
-          }}
-          aria-hidden="true"
-        />
-      ) : null}
       {layout.hasPrevious ? (
         <span
           className="status-tiles__indicator status-tiles__indicator--previous"
