@@ -240,10 +240,19 @@ process.stdin.on('data', chunk => {
         ),
       )
       .toContain('unread');
+    // Settings never opens by itself; keep activating until the runtime listens.
     await expect
-      .poll(() =>
-        application!.windows().some((window) => window.url().includes('/renderer/index.html')),
-      )
+      .poll(async () => {
+        const open = application!
+          .windows()
+          .some((window) => window.url().includes('/renderer/index.html'));
+        if (!open) {
+          await application!.evaluate(({ app }) => {
+            app.emit('activate');
+          });
+        }
+        return open;
+      })
       .toBe(true);
     const settings = application
       .windows()
@@ -421,10 +430,19 @@ test('enabled Desktop connection remains disconnectable when its reader is lost'
         AGENT_STATUS_TILES_TEST_CODEX_SESSIONS_ROOT: sessionsRoot,
       },
     });
+    // Settings never opens by itself; keep activating until the runtime listens.
     await expect
-      .poll(() =>
-        application!.windows().some((window) => window.url().includes('/renderer/index.html')),
-      )
+      .poll(async () => {
+        const open = application!
+          .windows()
+          .some((window) => window.url().includes('/renderer/index.html'));
+        if (!open) {
+          await application!.evaluate(({ app }) => {
+            app.emit('activate');
+          });
+        }
+        return open;
+      })
       .toBe(true);
     const settings = application
       .windows()

@@ -28,8 +28,3 @@ export function evaluateLoginItemSettings(
   }
   return { enabled };
 }
-
-/** Login-item launches stay menu-bar-only until the user explicitly opens Settings. */
-export function shouldOpenSettingsAtStartup(settings: LoginItemSettings): boolean {
-  return !settings.wasOpenedAtLogin;
-}
