@@ -28,8 +28,11 @@ fn invoke_provider(data_dir: &Path, provider: &str, payload: &str) {
     invoke_with_env(data_dir, provider, payload, &[]);
 }
 
-fn invoke_with_env(data_dir: &Path, provider: &str, payload: &str, env: &[(&str, &str)]) {
-    let mut child = Command::new(env!("CARGO_BIN_EXE_hook-helper"))
+/// Every helper process starts with the two host variables scrubbed so the
+/// developer's own session never leaks into a journal under test.
+fn helper_command(data_dir: &Path, provider: &str, env: &[(&str, &str)]) -> Command {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_hook-helper"));
+    command
         .args(["--provider", provider, "--data-dir"])
         .arg(data_dir)
         .env_remove("__CFBundleIdentifier")
@@ -37,9 +40,12 @@ fn invoke_with_env(data_dir: &Path, provider: &str, payload: &str, env: &[(&str,
         .envs(env.iter().copied())
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .unwrap();
+        .stderr(Stdio::piped());
+    command
+}
+
+fn invoke_with_env(data_dir: &Path, provider: &str, payload: &str, env: &[(&str, &str)]) {
+    let mut child = helper_command(data_dir, provider, env).spawn().unwrap();
     child
         .stdin
         .take()
@@ -77,14 +83,7 @@ fn wait_bounded(mut child: Child) -> Output {
 }
 
 fn spawn(data_dir: &Path, payload: &str) -> Child {
-    let mut child = Command::new(env!("CARGO_BIN_EXE_hook-helper"))
-        .args(["--provider", "claude", "--data-dir"])
-        .arg(data_dir)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .unwrap();
+    let mut child = helper_command(data_dir, "claude", &[]).spawn().unwrap();
     child
         .stdin
         .take()
@@ -211,6 +210,23 @@ fn native_helper_records_allowlisted_host_identity_and_session_lifecycle() {
     assert!(records[3].get("session_source").is_none());
     assert!(records[4].get("end_reason").is_none());
     assert!(!content.contains("PRIVATE_"));
+
+    // The entrypoint marker belongs to Claude Code; a Codex hook launched from
+    // inside a Claude session inherits it but must not record it.
+    invoke_with_env(
+        &data_dir,
+        "codex",
+        r#"{"hook_event_name":"Stop","session_id":"codex-1"}"#,
+        &[
+            ("__CFBundleIdentifier", "com.apple.Terminal"),
+            ("CLAUDE_CODE_ENTRYPOINT", "cli"),
+        ],
+    );
+    let codex_file = journal_files_for(&data_dir, "codex").pop().unwrap();
+    let codex_record: Value =
+        serde_json::from_str(fs::read_to_string(codex_file).unwrap().trim()).unwrap();
+    assert_eq!(codex_record["host"], "terminal");
+    assert!(codex_record.get("entrypoint").is_none());
     fs::remove_dir_all(data_dir).unwrap();
 }
 

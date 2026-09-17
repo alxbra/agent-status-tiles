@@ -163,10 +163,16 @@ fn reduce_event(provider: &str, value: &Value) -> Option<ReducedEvent> {
         });
     let stop_hook_active = object.get("stop_hook_active").and_then(Value::as_bool);
     let (host, entrypoint) = host_identity();
+    // The entrypoint marker belongs to Claude Code; a Codex hook launched from
+    // inside a Claude session would inherit it and must not record it.
+    let entrypoint = entrypoint.filter(|_| provider == "claude");
     // Subagent hooks reuse the parent session ID and add an agent ID. Only the
-    // fact that one is present is kept, never the ID itself.
-    let is_subagent = string_field(object, "agent_id", MAX_ID_BYTES)
-        .is_some()
+    // fact that one is present is kept, never the ID itself, and no bound is
+    // applied because a dropped marker would fail unsafe.
+    let is_subagent = object
+        .get("agent_id")
+        .and_then(Value::as_str)
+        .is_some_and(|id| !id.trim().is_empty())
         .then_some(true);
     let session_source = (event_name == "SessionStart")
         .then(|| string_field(object, "source", MAX_NAVIGATION_BYTES))

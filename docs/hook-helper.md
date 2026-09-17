@@ -66,11 +66,13 @@ For accepted events it retains only these bounded fields:
   mistaken for definitive completion while another hook continues the turn;
 - `host`, the launching application, taken from the process environment's
   `__CFBundleIdentifier` (macOS sets it for GUI-launched processes and hook
-  processes inherit it) and mapped to exactly `claude-desktop`, `terminal`,
-  `iterm2`, `ghostty`, or `warp`. Any other value, such as an IDE terminal or
-  an SSH session, produces no field;
-- `entrypoint`, Claude Code's `CLAUDE_CODE_ENTRYPOINT` when it is exactly
-  `claude-desktop` or `cli`; other entrypoints produce no field;
+  processes inherit it) and mapped, after trimming surrounding whitespace, to
+  exactly `claude-desktop`, `terminal`, `iterm2`, `ghostty`, or `warp`. Any
+  other value, such as an IDE terminal or an SSH session, produces no field;
+- `entrypoint`, Claude Code's `CLAUDE_CODE_ENTRYPOINT` when, after trimming,
+  it is exactly `claude-desktop` or `cli`. Only `--provider claude` records
+  carry it: a Codex hook launched from inside a Claude session inherits the
+  variable but must not record it. Other entrypoints produce no field;
 - `is_subagent: true` when the hook input carries a non-empty `agent_id`
   string. Subagent hooks reuse the parent session ID; the agent ID itself is
   discarded;
