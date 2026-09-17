@@ -10,7 +10,7 @@
 | 4 observation | [#38](https://github.com/alxbra/agent-status-tiles/pull/38) | `a7044a7` |
 | 5 connect | [#39](https://github.com/alxbra/agent-status-tiles/pull/39) | `a66f805` |
 | 6 binary override | deferred | |
-| 7 evidence | [#40](https://github.com/alxbra/agent-status-tiles/pull/40): merge record and this status; the live validation record is still pending | |
+| 7 evidence | [#40](https://github.com/alxbra/agent-status-tiles/pull/40): merge record and this status; the live validation record is still pending | `1dc7ad8` |
 | 3.4 follow-up: managed hooks | [#41](https://github.com/alxbra/agent-status-tiles/pull/41) | `a4feaa8` |
 
 Still open after these merges: the live verification matrix in section 5
