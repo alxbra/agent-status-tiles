@@ -418,5 +418,10 @@ describe('claude surface monitor', () => {
     await monitor.start();
     expect(monitor.lastIssue).toBeUndefined();
     expect((await monitor.discover()).sources).toEqual([]);
+
+    readiness = { status: 'issue', issue: 'hooks-disabled' };
+    await expect(monitor.start()).rejects.toThrow('hooks-disabled');
+    monitor.stop();
+    expect(monitor.lastIssue).toBeUndefined();
   });
 });

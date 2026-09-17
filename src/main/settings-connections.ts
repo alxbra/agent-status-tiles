@@ -117,9 +117,9 @@ export function connectionIssue(
   const hasError = statuses.includes('error');
   const allMissing = statuses.every((status) => status === 'unavailable');
   if (!hasError && !allMissing) return undefined;
-  // A provider that knows exactly what is wrong says so instead of the
-  // generic sentence.
-  const specific = setup?.issue?.();
+  // A provider that knows exactly why a surface errored says so instead of
+  // the generic sentence; a quietly missing installation is not its business.
+  const specific = hasError ? setup?.issue?.() : undefined;
   if (specific !== undefined) return specific;
   // Partial catalog coverage is not a connection failure, and one surface that
   // is simply not installed is not an error while another surface monitors.
@@ -179,14 +179,31 @@ export async function disconnectProviderSurfaces(
   if (firstFailure !== undefined) throw firstFailure.error;
 }
 
-/** Install the provider's integration first, then enable its surfaces; nothing is enabled on failure. */
+/**
+ * Install the provider's integration first, then enable its surfaces. When
+ * enabling fails after a successful install, the integration is removed
+ * again: a disconnected row has no Disconnect to clean it up with.
+ */
 export async function connectProvider(
   coordinator: ConnectionCoordinator,
   connection: SettingsConnectionKey,
   setup?: ProviderSetup,
 ): Promise<void> {
   await setup?.install?.();
-  await connectProviderSurfaces(coordinator, connection);
+  try {
+    await connectProviderSurfaces(coordinator, connection);
+  } catch (error) {
+    try {
+      await setup?.remove?.();
+    } catch (cleanupError) {
+      throw new AggregateError(
+        [error, cleanupError],
+        'Provider connection failed and its integration could not be removed',
+        { cause: cleanupError },
+      );
+    }
+    throw error;
+  }
 }
 
 /**
@@ -241,6 +258,8 @@ export async function repairProvider(
  * includes this step, so no user action can interleave with it.
  */
 export async function completeProviderBundles(coordinator: ConnectionCoordinator): Promise<void> {
+  // A partially enabled row was connected through its setup once, so the
+  // missing surface only needs its partition; no provider setup runs here.
   for (const connection of CONNECTABLE_CONNECTIONS) {
     const enabledCount = enabledSurfaceKeysFor(coordinator, connection).length;
     if (enabledCount === 0 || enabledCount === surfaceKeysFor(connection).length) continue;

@@ -115,21 +115,30 @@ notification re-opens the wait if the dialog is still up.
 
 ## Connecting
 
-The `Claude Code` Settings row bundles both surfaces. Connect installs the
-owned hooks into the shared Claude settings file first (see the installation
-section of `docs/hook-helper.md`) and only then enables the two partitions, so
-a failed install enables nothing. Disconnect disables both partitions and
-then removes only the owned hooks, even when a partition failed to disable,
-and the confirmation dialog says exactly that. Repair reinstalls the hooks and
-restarts the enabled surfaces through the coordinator's connect, which
-re-baselines them so nothing historical turns unread.
+The `Claude Code` Settings row bundles both surfaces. Connect confirms the
+change it is about to make, installs the owned hooks into the shared Claude
+settings file first (see the installation section of `docs/hook-helper.md`)
+and only then enables the two partitions; a failed install enables nothing,
+and a partition failure after a successful install removes the hooks again so
+a disconnected row never leaves hooks behind. Disconnect disables both
+partitions and then removes only the owned hooks, even when a partition
+failed to disable, and its confirmation says exactly that. Repair reinstalls
+the hooks and restarts the enabled surfaces through the coordinator's
+connect, which re-baselines them so nothing historical turns unread. A
+Connect or Repair that fails for a known reason (the helper cannot be found
+or used, the settings file cannot be read or updated, or it changed
+underneath the write) leaves the row disconnected and shows that reason as
+one sentence until the next action.
 
 Each monitor verifies readiness when it starts: the bundled helper must
 resolve and the hooks must be installed with the current helper path and not
 silenced by `disableAllHooks`. A failed check keeps the surface in `error`
-health with the coordinator's retry and records one of four issues
-(`helper-missing`, `hooks-missing`, `hooks-disabled`, `settings-unreadable`),
-each shown in Settings as one actionable sentence pointing at Repair. A test
+health with the coordinator's retry and records one issue (`helper-missing`,
+`helper-translocated`, `helper-unusable`, `hooks-missing`, `hooks-disabled`,
+or `settings-unreadable`), each shown in Settings as one actionable sentence.
+The helper is resolved on every check and install, so a helper built or moved
+after launch is noticed without a restart, and one settings-file read serves
+both surfaces when they start together. A test
 run supplies the helper path and configuration directory explicitly; without
 them the monitors run seeded journals with no readiness check and never touch
 a settings file. In development the helper must exist under

@@ -133,8 +133,31 @@ test('names Claude Code in a retained connection disconnect confirmation', async
   await page.getByRole('button', { name: 'Actions for Claude Code' }).click();
   await page.getByRole('menuitem', { name: 'Disconnect' }).click();
   await expect(page.getByRole('alertdialog')).toContainText(
-    "Disconnect removes this app's hooks from Claude Code settings and its local status history but does not change Claude Code data.",
+    "Disconnect removes this app's hooks from Claude Code settings and this app's local status history but does not change Claude Code data.",
   );
+});
+
+test('confirms the settings change before connecting Claude Code', async ({ page }) => {
+  await openFixture(page);
+  const claude = page.locator('[data-provider="claude"]');
+  await claude.getByRole('button', { name: 'Connect' }).click();
+  await expect(page.getByRole('alertdialog')).toContainText(
+    "Connect adds this app's hooks to Claude Code settings so sessions can report their status; it does not change Claude Code data.",
+  );
+  await page.getByRole('button', { name: 'Cancel' }).click();
+  await expect(claude.getByRole('button', { name: 'Connect' })).toBeEnabled();
+  expect(
+    await page.evaluate(() =>
+      (
+        window as Window & {
+          __settingsFixture?: { getProviderActionCalls: (connection: 'claude') => number };
+        }
+      ).__settingsFixture?.getProviderActionCalls('claude'),
+    ),
+  ).toBe(0);
+  await claude.getByRole('button', { name: 'Connect' }).click();
+  await page.getByRole('alertdialog').getByRole('button', { name: 'Connect' }).click();
+  await expect(claude).toContainText('Connected');
 });
 
 test('runs Repair from the action menu once per click and blocks it while pending', async ({

@@ -166,7 +166,7 @@ Advanced                            ›
 
 Connected rows replace `Connect` with a compact status and an appropriate action menu. Each provider row bundles that provider's Desktop and CLI surfaces: Connect enables both surfaces and Disconnect disables both, while the surfaces keep separate partitions, baselines, cursors, and health underneath. A row reads `Connected` while at least one of its surfaces is monitoring; a surface whose installation is absent stays quietly unavailable behind it, and a checkpoint from before bundling that enabled only one surface completes the bundle on the next launch through the normal pending baseline.
 
-Advanced contains path overrides, connection repair, hook removal, and diagnostics export.
+Advanced contains path overrides and diagnostics export. Connection repair is a `Repair` item in a connected row's action menu, and hook removal is part of Disconnect; both confirmation dialogs state the actual configuration change (Connect installs this app's hooks into Claude Code settings, Disconnect removes only them).
 
 Rules:
 

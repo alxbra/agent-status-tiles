@@ -118,6 +118,7 @@ export class ClaudeSurfaceMonitor implements ProviderSurfaceMonitor {
 
   stop(): void {
     this.started = false;
+    this.issue = undefined;
     this.journals.clear();
     this.unavailableSourceIds.clear();
   }

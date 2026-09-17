@@ -197,6 +197,7 @@ export function SettingsView({
   const [pendingActions, setPendingActions] = useState<ReadonlySet<SettingsAction>>(new Set());
   const [actionError, setActionError] = useState<string>();
   const [disconnectTarget, setDisconnectTarget] = useState<SettingsConnectionKey>();
+  const [connectTarget, setConnectTarget] = useState<SettingsConnectionKey>();
 
   const runAction = useCallback<SettingsActionRunner>((action, failureMessage, operation) => {
     if (pendingRef.current.has(action)) return;
@@ -307,7 +308,13 @@ export function SettingsView({
                   <ProviderAction
                     isPending={isPending}
                     canDisconnect={onDisconnect !== undefined}
-                    onConnect={onConnect === undefined ? undefined : connect}
+                    onConnect={
+                      onConnect === undefined
+                        ? undefined
+                        : connection === 'claude'
+                          ? setConnectTarget
+                          : connect
+                    }
                     onRepair={onRepair === undefined ? undefined : repair}
                     onRequestDisconnect={setDisconnectTarget}
                     connection={connection}
@@ -396,6 +403,42 @@ export function SettingsView({
       </main>
 
       <AlertDialog
+        open={connectTarget !== undefined}
+        onOpenChange={(open) => {
+          if (!open) setConnectTarget(undefined);
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              Connect {connectTarget === undefined ? '' : SETTINGS_CONNECTION_LABELS[connectTarget]}
+              ?
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              Connect adds this app&apos;s hooks to Claude Code settings so sessions can report
+              their status; it does not change Claude Code data.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel type="button">Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              disabled={
+                connectTarget === undefined ||
+                isPending(`provider:${connectTarget}`) ||
+                onConnect === undefined
+              }
+              onClick={() => {
+                if (connectTarget !== undefined) connect(connectTarget);
+              }}
+              type="button"
+            >
+              Connect
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog
         open={disconnectTarget !== undefined}
         onOpenChange={(open) => {
           if (!open) setDisconnectTarget(undefined);
@@ -409,7 +452,7 @@ export function SettingsView({
             </AlertDialogTitle>
             <AlertDialogDescription>
               {disconnectTarget === 'claude'
-                ? "Disconnect removes this app's hooks from Claude Code settings and its local status history but does not change Claude Code data."
+                ? "Disconnect removes this app's hooks from Claude Code settings and this app's local status history but does not change Claude Code data."
                 : `Disconnect removes this app's local status history but does not change ${disconnectTarget === undefined ? '' : SETTINGS_CONNECTION_LABELS[disconnectTarget]} data.`}
             </AlertDialogDescription>
           </AlertDialogHeader>

@@ -43,6 +43,8 @@ import {
   removeClaudeHooks,
 } from './providers/claude/hook-installer';
 import {
+  ClaudeHelperError,
+  claudeInstallFailureSentence,
   claudeIssueSentence,
   readinessOf,
   type ClaudeReadiness,
@@ -76,11 +78,14 @@ const pendingConnectionActions = new Set<SettingsConnectionKey>();
 let providerSetups: ProviderSetupMap = {};
 
 interface ClaudeIntegration {
-  helper: HookHelperPathResolution;
+  /** Resolved on every use so a helper built or moved after launch is noticed. */
+  helper: () => HookHelperPathResolution;
   /** Claude's configuration directory; undefined means the user's default. */
   configDirectory: string | undefined;
   dataDirectory: string;
 }
+/** The last Connect or Repair failure with a known cause, shown until the next action. */
+let providerActionIssue: string | undefined;
 
 /**
  * Where the Claude hooks point and where they are installed. A test run
@@ -93,15 +98,16 @@ function claudeIntegration(): ClaudeIntegration | undefined {
     const helperPath = process.env.AGENT_STATUS_TILES_TEST_HOOK_HELPER;
     const configDirectory = process.env.AGENT_STATUS_TILES_TEST_CLAUDE_CONFIG_DIR;
     if (!helperPath || !configDirectory) return undefined;
-    return { helper: { ok: true, path: helperPath }, configDirectory, dataDirectory };
+    return { helper: () => ({ ok: true, path: helperPath }), configDirectory, dataDirectory };
   }
   return {
-    helper: resolveHookHelperPath({
-      isPackaged: app.isPackaged,
-      resourcesPath: process.resourcesPath,
-      appRoot: app.getAppPath(),
-      arch: process.arch,
-    }),
+    helper: () =>
+      resolveHookHelperPath({
+        isPackaged: app.isPackaged,
+        resourcesPath: process.resourcesPath,
+        appRoot: app.getAppPath(),
+        arch: process.arch,
+      }),
     configDirectory: undefined,
     dataDirectory,
   };
@@ -179,7 +185,12 @@ function getSettingsState(): SettingsState {
   const connectionIssues = CONNECTABLE_CONNECTIONS.map((connection) =>
     connectionIssue(runtimeCoordinator, connection, providerSetups[connection]),
   );
-  const settingsError = [loginItemState.error, monitoringCoverageWarning, ...connectionIssues]
+  const settingsError = [
+    loginItemState.error,
+    monitoringCoverageWarning,
+    providerActionIssue,
+    ...connectionIssues,
+  ]
     .filter((message): message is string => message !== undefined)
     .join(' ');
   return {
@@ -299,17 +310,25 @@ if (!hasSingleInstanceLock) {
     // Both Claude surfaces share one listing of the journal directory.
     const claudeJournals = new ClaudeJournalDiscovery({ appDataPath: app.getPath('userData') });
     const claude = claudeIntegration();
+    // Both surfaces start together; one settings-file read serves both.
+    let readinessInFlight: Promise<ClaudeReadiness> | undefined;
     const checkClaudeReadiness =
       claude === undefined
         ? undefined
-        : async (): Promise<ClaudeReadiness> => {
-            if (!claude.helper.ok) return { status: 'issue', issue: 'helper-missing' };
-            const verification = await inspectClaudeHooks({
-              configDirectory: claude.configDirectory,
-              helperPath: claude.helper.path,
-              dataDirectory: claude.dataDirectory,
+        : (): Promise<ClaudeReadiness> => {
+            readinessInFlight ??= (async () => {
+              const helper = claude.helper();
+              if (!helper.ok) return readinessOf(helper, { status: 'missing' });
+              const verification = await inspectClaudeHooks({
+                configDirectory: claude.configDirectory,
+                helperPath: helper.path,
+                dataDirectory: claude.dataDirectory,
+              });
+              return readinessOf(helper, verification);
+            })().finally(() => {
+              readinessInFlight = undefined;
             });
-            return readinessOf(claude.helper, verification);
+            return readinessInFlight;
           };
     const claudeDesktopMonitor = new ClaudeDesktopMonitor({
       appDataPath: app.getPath('userData'),
@@ -327,10 +346,11 @@ if (!hasSingleInstanceLock) {
         : {
             claude: {
               install: async () => {
-                if (!claude.helper.ok) throw new Error(`claude-${claude.helper.code}`);
+                const helper = claude.helper();
+                if (!helper.ok) throw new ClaudeHelperError(helper);
                 await installClaudeHooks({
                   configDirectory: claude.configDirectory,
-                  helperPath: claude.helper.path,
+                  helperPath: helper.path,
                   dataDirectory: claude.dataDirectory,
                 });
               },
@@ -349,8 +369,7 @@ if (!hasSingleInstanceLock) {
       monitors: [
         new CodexDesktopMonitor(desktopMonitorOptions()),
         new CodexCliMonitor(cliMonitorOptions()),
-        // Claude surfaces run only once their partitions are enabled; the
-        // Settings row stays unavailable until the hook installer is wired.
+        // Claude surfaces run only once their partitions are enabled.
         claudeDesktopMonitor,
         claudeCliMonitor,
       ],
@@ -443,14 +462,21 @@ if (!hasSingleInstanceLock) {
           throw new Error('Connection is already enabled');
         }
         pendingConnectionActions.add(connection);
+        providerActionIssue = undefined;
         try {
           await connectProvider(coordinator, connection, providerSetups[connection]);
-          const state = getSettingsState();
-          publishSettingsState(getSettingsWindow(), state);
-          return state;
+        } catch (error) {
+          // A failure with a known cause is reported as one sentence in the
+          // state; the row stays disconnected. Anything else is a retryable error.
+          const sentence = claudeInstallFailureSentence(error);
+          if (sentence === undefined) throw error;
+          providerActionIssue = sentence;
         } finally {
           pendingConnectionActions.delete(connection);
         }
+        const state = getSettingsState();
+        publishSettingsState(getSettingsWindow(), state);
+        return state;
       },
       repairSurface: async (connection) => {
         if (!isConnectable(connection)) throw new Error('Connection is not available');
@@ -463,14 +489,19 @@ if (!hasSingleInstanceLock) {
           throw new Error('Connection is not enabled');
         }
         pendingConnectionActions.add(connection);
+        providerActionIssue = undefined;
         try {
           await repairProvider(coordinator, connection, providerSetups[connection]);
-          const state = getSettingsState();
-          publishSettingsState(getSettingsWindow(), state);
-          return state;
+        } catch (error) {
+          const sentence = claudeInstallFailureSentence(error);
+          if (sentence === undefined) throw error;
+          providerActionIssue = sentence;
         } finally {
           pendingConnectionActions.delete(connection);
         }
+        const state = getSettingsState();
+        publishSettingsState(getSettingsWindow(), state);
+        return state;
       },
       disconnectSurface: async (connection) => {
         await runtimeStartPromise;
@@ -482,6 +513,7 @@ if (!hasSingleInstanceLock) {
           throw new Error('Connection is not enabled');
         }
         pendingConnectionActions.add(connection);
+        providerActionIssue = undefined;
         try {
           await disconnectProvider(coordinator, connection, providerSetups[connection]);
           const state = getSettingsState();

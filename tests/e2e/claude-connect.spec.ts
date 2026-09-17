@@ -1,10 +1,11 @@
 import { expect, test } from '@playwright/test';
-import { _electron as electron, type ElectronApplication, type Page } from 'playwright';
+import { _electron as electron, type ElectronApplication } from 'playwright';
 import { chmod, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { loadSessionState } from '../../src/main/sessions/persistence';
 import { nativeElectronE2eEnabled } from './native-focus';
+import { settingsWindow } from './settings-window';
 
 test.beforeEach(() => {
   test.skip(!nativeElectronE2eEnabled(), 'Native Electron tests may take focus; opt in explicitly');
@@ -12,28 +13,6 @@ test.beforeEach(() => {
 
 const projectRoot = process.cwd();
 const mainEntry = resolve(projectRoot, 'out/main/index.js');
-
-async function settingsWindow(application: ElectronApplication): Promise<Page> {
-  // Settings never opens by itself; keep activating until the runtime listens.
-  await expect
-    .poll(async () => {
-      const open = application
-        .windows()
-        .some((window) => window.url().includes('/renderer/index.html'));
-      if (!open) {
-        await application.evaluate(({ app }) => {
-          app.emit('activate');
-        });
-      }
-      return open;
-    })
-    .toBe(true);
-  const settings = application
-    .windows()
-    .find((window) => window.url().includes('/renderer/index.html'));
-  if (settings === undefined) throw new Error('Expected native Settings window');
-  return settings;
-}
 
 test("connecting Claude Code installs owned hooks beside the user's own and disconnecting removes only them", async () => {
   test.skip(process.platform !== 'darwin', 'native overlay targets macOS');
@@ -68,6 +47,7 @@ test("connecting Claude Code installs owned hooks beside the user's own and disc
     const settings = await settingsWindow(application);
     const claude = settings.getByRole('group', { name: 'Claude Code connection' });
     await claude.getByRole('button', { name: 'Connect' }).click();
+    await settings.getByRole('alertdialog').getByRole('button', { name: 'Connect' }).click();
     await expect(claude).toContainText('Connected');
     await expect(settings.getByRole('alert')).toHaveCount(0);
 
@@ -93,12 +73,18 @@ test("connecting Claude Code installs owned hooks beside the user's own and disc
     expect(persisted.monitoring.partitions['claude:desktop'].enabled).toBe(true);
     expect(persisted.monitoring.partitions['claude:cli'].enabled).toBe(true);
 
-    // Repair keeps the row connected and the file identical.
+    // Repair restores a tampered owned entry byte for byte and keeps the row connected.
     const before = await readFile(settingsPath, 'utf8');
+    const tampered = JSON.parse(before) as {
+      hooks: Record<string, { hooks: { timeout?: number }[] }[]>;
+    };
+    tampered.hooks.Stop![1]!.hooks[0]!.timeout = 600;
+    await writeFile(settingsPath, `${JSON.stringify(tampered, null, 2)}\n`);
+    expect(await readFile(settingsPath, 'utf8')).not.toBe(before);
     await claude.getByRole('button', { name: 'Actions for Claude Code' }).click();
     await settings.getByRole('menuitem', { name: 'Repair' }).click();
-    await expect(claude).toContainText('Connected');
     await expect.poll(() => readFile(settingsPath, 'utf8')).toBe(before);
+    await expect(claude).toContainText('Connected');
 
     await claude.getByRole('button', { name: 'Actions for Claude Code' }).click();
     await settings.getByRole('menuitem', { name: 'Disconnect' }).click();
@@ -145,6 +131,7 @@ test('a connected Claude row reports missing hooks with one sentence and Repair 
     let settings = await settingsWindow(application);
     let claude = settings.getByRole('group', { name: 'Claude Code connection' });
     await claude.getByRole('button', { name: 'Connect' }).click();
+    await settings.getByRole('alertdialog').getByRole('button', { name: 'Connect' }).click();
     await expect(claude).toContainText('Connected');
     await application.close();
 

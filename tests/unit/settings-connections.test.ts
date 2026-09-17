@@ -202,6 +202,34 @@ describe('settings connections', () => {
     ).rejects.toThrow('settings-unwritable');
     expect(failing.connect).not.toHaveBeenCalled();
     expect(failing.enabled.size).toBe(0);
+
+    // A checkpoint failure after a successful install removes the hooks again,
+    // because a disconnected row offers no Disconnect to clean them up with.
+    const checkpoint = fakeCoordinator();
+    checkpoint.connect.mockImplementationOnce(async () => {
+      throw new Error('checkpoint failed');
+    });
+    const remove = vi.fn(async () => undefined);
+    await expect(
+      connectProvider(checkpoint, 'claude', { install: async () => undefined, remove }),
+    ).rejects.toThrow('checkpoint failed');
+    expect(remove).toHaveBeenCalledTimes(1);
+    expect(checkpoint.enabled.size).toBe(0);
+
+    const doubleFailure = fakeCoordinator();
+    doubleFailure.connect.mockImplementationOnce(async () => {
+      throw new Error('checkpoint failed');
+    });
+    await expect(
+      connectProvider(doubleFailure, 'claude', {
+        install: async () => undefined,
+        remove: async () => {
+          throw new Error('settings-unwritable');
+        },
+      }),
+    ).rejects.toMatchObject({
+      errors: [expect.any(Error), expect.any(Error)],
+    });
   });
 
   it('disconnects surfaces first and still removes the integration when one surface fails', async () => {
@@ -265,7 +293,15 @@ describe('settings connections', () => {
       'claude:desktop': 'available',
       'claude:cli': 'available',
     });
-    // A stale issue from an earlier failure never shows while the row is healthy.
+    // A stale issue from an earlier failure never shows while the row is healthy,
+    // and a quietly missing installation keeps the generic sentence.
     expect(connectionIssue(healthy, 'claude', setup)).toBeUndefined();
+    const missing = fakeCoordinator(['claude:desktop', 'claude:cli'], {
+      'claude:desktop': 'unavailable',
+      'claude:cli': 'unavailable',
+    });
+    expect(connectionIssue(missing, 'claude', setup)).toBe(
+      'Claude Code was not found. Install it to connect.',
+    );
   });
 });
