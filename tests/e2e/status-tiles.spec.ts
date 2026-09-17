@@ -280,6 +280,18 @@ test('keeps the dock open while moving between rows inside the reach zone', asyn
     .poll(() => visibleWidths(page))
     .toEqual([TAB_PEEK_IDLE, TAB_PEEK_IDLE, TAB_PEEK_IDLE]);
   await expect(page.locator('.status-tiles')).not.toHaveClass(/status-tiles--active/);
+
+  // Without a following move, a leave reported outside the zone folds the dock.
+  await hoverTab(page, tabs.nth(0));
+  await expect(tabs.nth(0)).toHaveAttribute('data-extended', 'true');
+  await page.evaluate(() => {
+    document.documentElement.dispatchEvent(
+      new PointerEvent('pointerleave', { clientX: -10, clientY: -10, bubbles: false }),
+    );
+  });
+  await expect
+    .poll(() => visibleWidths(page))
+    .toEqual([TAB_PEEK_IDLE, TAB_PEEK_IDLE, TAB_PEEK_IDLE]);
 });
 
 test('prefixes the thread name with the lab icon and suffixes the status mark', async ({

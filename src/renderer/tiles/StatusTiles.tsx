@@ -60,6 +60,13 @@ export interface StatusTilesProps {
 const TAB_SELECTOR = '.status-tiles__tile';
 /** Long enough to cover the slide plus the last staggered tab. */
 const HIT_REGION_SETTLE_MS = TAB_MOTION_MS + TAB_STAGGER_MS * MAX_VISIBLE_TABS + 80;
+/**
+ * Toggling native mouse passthrough makes macOS report a window leave even
+ * though the cursor is still over the dock. Forwarded pointer moves keep
+ * arriving while the cursor is inside the window, so a leave only counts once
+ * no move has followed it within this grace period.
+ */
+const EXIT_GRACE_MS = 250;
 
 function usePrefersReducedMotion(): boolean {
   const [prefersReducedMotion, setPrefersReducedMotion] = useState(() => {
@@ -278,6 +285,7 @@ export function StatusTiles({
   const reachWidthRef = useRef(DOCK_HOVER_WIDTH);
   /** Once the pointer has extended a tab, the reach zone stays engaged until the pointer leaves it. */
   const reachEngagedRef = useRef(false);
+  const pendingExitRef = useRef<number | null>(null);
   const [reachWidth, setReachWidth] = useState(DOCK_HOVER_WIDTH);
   const [scrollOffset, setScrollOffset] = useState(0);
   const [focusedIndex, setFocusedIndex] = useState<number | null>(null);
@@ -382,6 +390,7 @@ export function StatusTiles({
     const handlePointerMove = (event: globalThis.PointerEvent): void => {
       const root = rootRef.current;
       if (root === null) return;
+      cancelPendingExit();
       const bounds = root.getBoundingClientRect();
       const layout = layoutRef.current;
       const extended = reachEngagedRef.current;
@@ -417,8 +426,7 @@ export function StatusTiles({
       // cursor is still over the dock, so only a leave reported outside the
       // hover zone counts as the cursor actually going away.
       if (pointStillInsideDock(event.clientX, event.clientY)) return;
-      pointerInsideRef.current = false;
-      leavePointerFromRef();
+      schedulePendingExit();
     };
     const handlePointerUp = (event: globalThis.PointerEvent): void => {
       if (capturedPointerIdRef.current !== event.pointerId) return;
@@ -433,6 +441,7 @@ export function StatusTiles({
     window.addEventListener('pointerup', handlePointerUp);
     document.documentElement.addEventListener('pointerleave', handlePointerExit);
     return () => {
+      cancelPendingExit();
       window.removeEventListener('pointermove', handlePointerMove);
       window.removeEventListener('pointerup', handlePointerUp);
       document.documentElement.removeEventListener('pointerleave', handlePointerExit);
@@ -473,6 +482,22 @@ export function StatusTiles({
         reachWidth: reachWidthRef.current,
       },
     ).inside;
+  }
+
+  function cancelPendingExit(): void {
+    if (pendingExitRef.current === null) return;
+    window.clearTimeout(pendingExitRef.current);
+    pendingExitRef.current = null;
+  }
+
+  function schedulePendingExit(): void {
+    if (pendingExitRef.current !== null || !pointerInsideRef.current) return;
+    pendingExitRef.current = window.setTimeout(() => {
+      pendingExitRef.current = null;
+      if (!pointerInsideRef.current) return;
+      pointerInsideRef.current = false;
+      leavePointerFromRef();
+    }, EXIT_GRACE_MS);
   }
 
   function setHoveredSessionId(sessionId: string | null): void {
@@ -518,20 +543,16 @@ export function StatusTiles({
     setHoveredSessionId(session.id);
   }
 
-  function handleTabPointerLeave(
-    event: PointerEvent<HTMLButtonElement>,
-    session: SessionSnapshot,
-  ): void {
+  function handleTabPointerLeave(event: PointerEvent<HTMLButtonElement>): void {
     const next = event.relatedTarget;
     const overTab = next instanceof Element && next.closest(TAB_SELECTOR) !== null;
     if (overTab) return;
     // Still inside the reach zone (including the spurious leave that native
     // passthrough toggling emits): the following pointer move picks the row.
     if (pointStillInsideDock(event.clientX, event.clientY)) return;
-    if (hoveredSessionIdRef.current === session.id) setHoveredSessionId(null);
-    // The cursor left the window or jumped far away; fold everything back.
-    pointerInsideRef.current = false;
-    leavePointerFromRef();
+    // The cursor left the window or jumped far away, unless a forwarded move
+    // proves otherwise within the grace period.
+    schedulePendingExit();
   }
 
   function handleOpen(session: SessionSnapshot): void {
@@ -681,7 +702,7 @@ export function StatusTiles({
               capturedPointerIdRef.current = null;
             }}
             onPointerEnter={() => handleTabPointerEnter(session)}
-            onPointerLeave={(event) => handleTabPointerLeave(event, session)}
+            onPointerLeave={handleTabPointerLeave}
             onClick={() => handleOpen(session)}
             onKeyDown={(event) => {
               if (event.key === 'Enter' || event.key === ' ') {
