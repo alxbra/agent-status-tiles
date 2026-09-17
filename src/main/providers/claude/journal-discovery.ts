@@ -25,6 +25,10 @@ export function isJournalName(name: string): boolean {
   return JOURNAL_NAME.test(name);
 }
 
+export function isMissingError(error: unknown): boolean {
+  return (error as { code?: unknown }).code === 'ENOENT';
+}
+
 export type ClaudeHost = NonNullable<HookJournalEvent['host']>;
 
 /** Display-safe facts about one journal; the path never leaves this module. */
@@ -193,7 +197,7 @@ export class ClaudeJournalDiscovery {
     try {
       names = await readdir(this.directory);
     } catch (error) {
-      if ((error as { code?: unknown }).code === 'ENOENT') {
+      if (isMissingError(error)) {
         this.cache.clear();
         this.wasTruncated = false;
         return [];

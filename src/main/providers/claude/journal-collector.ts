@@ -1,11 +1,13 @@
+import type { Stats } from 'node:fs';
 import { lstat, readdir, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import type { MonitoringState } from '../../../shared/monitoring';
-import { makeHookJournalBaseName } from '../hooks/hook-journal-reader';
+import { JOURNAL_SUFFIXES, makeHookJournalBaseName } from '../hooks/hook-journal-reader';
 import {
   MAX_JOURNAL_ENTRIES,
   isJournalName,
+  isMissingError,
   statJournals,
   verifyJournal,
   type JournalCandidate,
@@ -19,8 +21,6 @@ export const JOURNAL_SWEEP_INTERVAL_MS = 5 * 60 * 1_000;
 export const MAX_SWEEP_PROBES = 64;
 /** Journal sets removed per sweep; a backlog drains oldest first across sweeps. */
 export const MAX_SWEEP_REMOVALS = 64;
-/** The helper keeps `.1` through `.3` beside the active file. */
-const MAX_ARCHIVES = 3;
 const CLAUDE_SESSION_PREFIX = 'claude:';
 const CLAUDE_SURFACE_KEYS = ['claude:desktop', 'claude:cli'] as const;
 
@@ -36,8 +36,18 @@ export interface ClaudeJournalSweep {
    * itself is not a real directory.
    */
   refused: number;
-  /** Reads, removals, or listings that failed on an I/O error; retried on a later sweep. */
+  /**
+   * Reads, removals, or listings that failed on an I/O error, or a sweep
+   * skipped because the retained set could not be computed; retried on a
+   * later sweep.
+   */
   failed: number;
+}
+
+/** The filesystem calls a sweep makes; a test seam for the race between reading and removing. */
+export interface ClaudeJournalCollectorFs {
+  lstat: (path: string) => Promise<Stats>;
+  unlink: (path: string) => Promise<void>;
 }
 
 export interface ClaudeJournalCollectorOptions {
@@ -55,20 +65,21 @@ export interface ClaudeJournalCollectorOptions {
   /** Per-sweep bounds; tests lower them. */
   maxProbes?: number;
   maxRemovals?: number;
+  fs?: ClaudeJournalCollectorFs;
 }
 
+/** What one read of an unchanged journal decided. */
 interface Verdict {
   mtimeMs: number;
   size: number;
   ended: boolean;
+  /** Its set held a symlink or non-file; not tried again until the file changes. */
+  refused?: boolean;
 }
 
-type Removal = 'removed' | 'refused' | 'failed' | 'changed';
+/** The outcome of one attempt on a journal set. */
+type SetOutcome = 'removed' | 'refused' | 'failed' | 'changed';
 type PathState = 'present' | 'absent' | 'refused' | 'changed';
-
-function isMissing(error: unknown): boolean {
-  return (error as { code?: unknown }).code === 'ENOENT';
-}
 
 /**
  * Journals the app still refers to: each monitor's current cohort, every
@@ -133,6 +144,7 @@ export class ClaudeJournalCollector {
   private readonly sweepIntervalMs: number;
   private readonly maxProbes: number;
   private readonly maxRemovals: number;
+  private readonly fs: ClaudeJournalCollectorFs;
   /** Verdicts for journals already read, so an unchanged file is not re-read every sweep. */
   private readonly verdicts = new Map<string, Verdict>();
   /** Where the last window of an oversized directory stopped. */
@@ -148,6 +160,7 @@ export class ClaudeJournalCollector {
     this.sweepIntervalMs = options.sweepIntervalMs ?? JOURNAL_SWEEP_INTERVAL_MS;
     this.maxProbes = options.maxProbes ?? MAX_SWEEP_PROBES;
     this.maxRemovals = options.maxRemovals ?? MAX_SWEEP_REMOVALS;
+    this.fs = options.fs ?? { lstat, unlink };
   }
 
   /**
@@ -182,17 +195,21 @@ export class ClaudeJournalCollector {
     let names: string[];
     try {
       // The directory itself must be a real directory, never a link elsewhere.
-      if (!(await lstat(this.directory)).isDirectory()) return { ...sweep, refused: 1 };
+      if (!(await this.fs.lstat(this.directory)).isDirectory()) return { ...sweep, refused: 1 };
       names = await readdir(this.directory);
     } catch (error) {
-      return isMissing(error) ? sweep : { ...sweep, failed: 1 };
+      return isMissingError(error) ? sweep : { ...sweep, failed: 1 };
     }
     const present = new Set(names.filter(isJournalName));
-    for (const name of this.verdicts.keys()) {
-      if (!present.has(name)) this.verdicts.delete(name);
-    }
+    const oversized = present.size > MAX_JOURNAL_ENTRIES;
     const window = journalWindow(present, this.windowAfter);
-    this.windowAfter = present.size > MAX_JOURNAL_ENTRIES ? window[window.length - 1] : undefined;
+    this.windowAfter = oversized ? window[window.length - 1] : undefined;
+    // Verdicts are kept for the journals this sweep can see, so the map
+    // never outgrows one stat window whatever the directory holds.
+    const visible = oversized ? new Set(window) : present;
+    for (const name of this.verdicts.keys()) {
+      if (!visible.has(name)) this.verdicts.delete(name);
+    }
     const candidates = (await statJournals(this.directory, window)).filter(
       (candidate) => candidate.mtimeMs < cutoffMs,
     );
@@ -201,6 +218,7 @@ export class ClaudeJournalCollector {
     candidates.sort(
       (left, right) => left.mtimeMs - right.mtimeMs || (left.name < right.name ? -1 : 1),
     );
+    let attempts = 0;
     for (const candidate of candidates) {
       if (retained.has(candidate.name.slice(0, -'.jsonl'.length))) continue;
       let verdict = this.verdicts.get(candidate.name);
@@ -226,15 +244,18 @@ export class ClaudeJournalCollector {
         }
         this.verdicts.set(candidate.name, verdict);
       }
-      if (!verdict.ended) continue;
-      if (sweep.removed + sweep.refused + sweep.failed >= this.maxRemovals) break;
-      const removal = await this.removeSet(candidate);
-      if (removal === 'removed') {
+      if (!verdict.ended || verdict.refused === true) continue;
+      if (attempts >= this.maxRemovals) break;
+      attempts += 1;
+      const outcome = await this.removeSet(candidate);
+      if (outcome === 'removed') {
         this.verdicts.delete(candidate.name);
         sweep.removed += 1;
-      } else if (removal === 'refused') {
+      } else if (outcome === 'refused') {
+        // Nothing here changes on its own; try again when the file does.
+        this.verdicts.set(candidate.name, { ...verdict, refused: true });
         sweep.refused += 1;
-      } else if (removal === 'failed') {
+      } else if (outcome === 'failed') {
         sweep.failed += 1;
       }
       // A journal that changed since it was read is a session that woke up;
@@ -245,29 +266,27 @@ export class ClaudeJournalCollector {
 
   /** Every path of one journal set, oldest archive first and the active file last. */
   private setPaths(candidate: JournalCandidate): string[] {
-    const active = join(this.directory, candidate.name);
-    const paths: string[] = [];
-    for (let index = MAX_ARCHIVES; index >= 1; index -= 1) paths.push(`${active}.${index}`);
-    paths.push(active);
-    return paths;
+    const baseName = candidate.name.slice(0, -'.jsonl'.length);
+    return JOURNAL_SUFFIXES.map((suffix) => join(this.directory, `${baseName}${suffix}`));
   }
 
   /**
    * Remove the archives first and the active file last, so an interrupted
    * removal leaves an ended active file to finish on a later sweep rather
    * than an orphaned archive nothing would ever judge. Every path is checked
-   * before any is touched, and the active file must be exactly the file that
-   * was read: a newer modification time or size means the session woke up.
+   * before any is touched, and the active file must still be exactly the file
+   * that was read before each removal: a newer modification time or size
+   * means the session woke up, and its archives are then kept too.
    */
-  private async removeSet(candidate: JournalCandidate): Promise<Removal> {
+  private async removeSet(candidate: JournalCandidate): Promise<SetOutcome> {
     const paths = this.setPaths(candidate);
     const active = paths[paths.length - 1]!;
     const check = async (path: string): Promise<PathState> => {
       let metadata;
       try {
-        metadata = await lstat(path);
+        metadata = await this.fs.lstat(path);
       } catch (error) {
-        if (isMissing(error)) return 'absent';
+        if (isMissingError(error)) return 'absent';
         throw error;
       }
       if (!metadata.isFile()) return 'refused';
@@ -284,9 +303,13 @@ export class ClaudeJournalCollector {
       for (const path of paths) {
         // Re-check at the moment of removal. `unlink` never follows a link,
         // so even a link swapped in after the check removes only itself.
+        if (path !== active) {
+          const activeState = await check(active);
+          if (activeState === 'refused' || activeState === 'changed') return activeState;
+        }
         const state = await check(path);
         if (state === 'refused' || state === 'changed') return state;
-        if (state === 'present') await unlink(path);
+        if (state === 'present') await this.fs.unlink(path);
       }
       return 'removed';
     } catch {

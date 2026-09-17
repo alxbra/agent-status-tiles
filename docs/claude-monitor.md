@@ -70,9 +70,11 @@ At most 64 journals are read per sweep (`MAX_SWEEP_PROBES`); the verdict for
 an unchanged file is remembered, so a backlog of live-looking old journals is
 read once and then skipped, while a file that could not be read at all (an
 I/O error rather than a failed verification) gets no verdict and is read
-again next sweep. At most 64 journal sets are removed per sweep
+again next sweep. At most 64 removals are attempted per sweep
 (`MAX_SWEEP_REMOVALS`); a journal judged on an earlier sweep does not count
-against the read budget.
+against the read budget, and a set that was refused is not attempted again
+until its active file changes, so a few unsafe sets can never exhaust the
+removal budget.
 
 Removing a journal removes every suffix: `.jsonl.3`, `.2`, `.1`, then the
 active `.jsonl`, in that order, so an interrupted sweep leaves an ended
@@ -81,9 +83,12 @@ judge. Every path of the set is checked before any is touched and again at
 the moment of removal, with `lstat`: a symlink, directory, or other non-file
 anywhere in the set leaves the whole set alone, and a journal directory that
 is itself a link is not swept, so nothing outside the app's directory is
-ever followed or removed. The active file must still have the modification
-time and size that were read; a session resumed into the same ID in between
-has grown its journal and is left for its next verdict. The app cannot take
+ever followed or removed (within the same trust domain as the helper, which
+also checks the directory and then acts on paths beneath it). The active file
+must still have the modification time and size that were read, and that is
+re-checked before each archive is removed as well as before the active file
+itself; a session resumed into the same ID in between has grown its journal
+and is left, archives included, for its next verdict. The app cannot take
 the helper's advisory lock, so one window remains: a hook that opens the
 active file for append between that final check and the `unlink` writes its
 record to the removed inode, and the session's journal restarts with the next
@@ -100,10 +105,12 @@ in the helper.
 A sweep keeps every journal the app still refers to, whatever its state: the
 current cohort of either surface, every base name with a persisted cursor,
 and the journal of every persisted Claude session
-(`retainedClaudeJournals`). A sweep reports counts only: journals read,
-removed, refused (a set left alone for a symlink or non-file, or the whole
-sweep when the directory is not a real directory), and failed (I/O errors,
-retried later); no name, path, or error text leaves the module.
+(`retainedClaudeJournals`). A sweep reports counts only: journals judged
+(read, or empty and so unverifiable), removed, refused (a set left alone for
+a symlink or non-file, or the whole sweep when the directory is not a real
+directory), and failed (I/O errors, or a retained set that could not be
+computed; retried on a later sweep, which is the next interval); no name,
+path, or error text leaves the module.
 
 Sessions that end without `SessionEnd` (a closed terminal, a killed process,
 a crash) are never collected by this contract and accumulate until the stat

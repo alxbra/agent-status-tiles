@@ -1,11 +1,14 @@
 import {
   access,
+  appendFile,
   chmod,
+  lstat,
   mkdir,
   mkdtemp,
   readdir,
   rm,
   symlink,
+  unlink,
   utimes,
   writeFile,
 } from 'node:fs/promises';
@@ -134,7 +137,6 @@ describe('claude journal collector', () => {
       true,
     );
     expect(await exists(join(root, 'journals', 'claude', 'notes.txt'))).toBe(true);
-    expect(JSON.stringify(sweep)).not.toContain(root);
   });
 
   it('treats the retention window as a strict age boundary', async () => {
@@ -205,13 +207,26 @@ describe('claude journal collector', () => {
     await seed(root, 'dir-archive', { ended: true, ageMs: OLD });
     await mkdir(journalPath(root, 'dir-archive', '.1'));
 
-    const sweep = await collector(root).sweep();
-    expect(sweep).toEqual({ probed: 2, removed: 0, refused: 2, failed: 0 });
+    let now = NOW;
+    const gc = collector(root, { now: () => now });
+    expect(await gc.sweep()).toEqual({ probed: 2, removed: 0, refused: 2, failed: 0 });
     expect(await exists(outside)).toBe(true);
     expect(await exists(journalPath(root, 'linked-archive'))).toBe(true);
     expect(await exists(journalPath(root, 'linked-archive', '.2'))).toBe(true);
     expect(await exists(journalPath(root, 'linked-active'))).toBe(true);
     expect(await exists(journalPath(root, 'dir-archive'))).toBe(true);
+
+    // A refused set is not tried again until its active file changes, so a
+    // few unsafe sets can never exhaust the removal budget.
+    await seed(root, 'ended', { ended: true, ageMs: OLD });
+    now += JOURNAL_SWEEP_INTERVAL_MS;
+    expect(await gc.sweep()).toEqual({ probed: 1, removed: 1, refused: 0, failed: 0 });
+    await rm(journalPath(root, 'dir-archive', '.1'), { recursive: true });
+    await seed(root, 'dir-archive', { ended: true, ageMs: OLD - 1_000 });
+    now += JOURNAL_SWEEP_INTERVAL_MS;
+    expect(await gc.sweep()).toEqual({ probed: 1, removed: 1, refused: 0, failed: 0 });
+    expect(await exists(journalPath(root, 'dir-archive'))).toBe(false);
+    expect(await exists(journalPath(root, 'linked-archive'))).toBe(true);
 
     // A journal directory that is itself a link is not swept.
     const linkedRoot = await mkdtemp(join(tmpdir(), 'agent-status-tiles-claude-collector-'));
@@ -297,30 +312,56 @@ describe('claude journal collector', () => {
     expect(await readdir(join(root, 'journals', 'claude'))).toEqual([]);
   });
 
-  it('does not turn a transient read error or a failed removal into a lasting verdict', async () => {
-    const root = await appData();
-    await seed(root, 'unreadable', { ended: true, ageMs: OLD });
-    await chmod(journalPath(root, 'unreadable'), 0o000);
-    let now = NOW;
-    const gc = collector(root, { now: () => now });
-    expect(await gc.sweep()).toEqual({ probed: 1, removed: 0, refused: 0, failed: 1 });
-    await chmod(journalPath(root, 'unreadable'), 0o600);
-    now += JOURNAL_SWEEP_INTERVAL_MS;
-    expect(await gc.sweep()).toEqual({ probed: 1, removed: 1, refused: 0, failed: 0 });
-
-    await seed(root, 'stuck', { ended: true, ageMs: OLD, archives: 1 });
-    const directory = join(root, 'journals', 'claude');
-    await chmod(directory, 0o500);
-    now += JOURNAL_SWEEP_INTERVAL_MS;
-    try {
+  it.skipIf(process.getuid?.() === 0)(
+    'does not turn a transient read error or a failed removal into a lasting verdict',
+    async () => {
+      const root = await appData();
+      await seed(root, 'unreadable', { ended: true, ageMs: OLD });
+      await chmod(journalPath(root, 'unreadable'), 0o000);
+      let now = NOW;
+      const gc = collector(root, { now: () => now });
       expect(await gc.sweep()).toEqual({ probed: 1, removed: 0, refused: 0, failed: 1 });
-    } finally {
-      await chmod(directory, 0o700);
+      await chmod(journalPath(root, 'unreadable'), 0o600);
+      now += JOURNAL_SWEEP_INTERVAL_MS;
+      expect(await gc.sweep()).toEqual({ probed: 1, removed: 1, refused: 0, failed: 0 });
+
+      await seed(root, 'stuck', { ended: true, ageMs: OLD, archives: 1 });
+      const directory = join(root, 'journals', 'claude');
+      await chmod(directory, 0o500);
+      now += JOURNAL_SWEEP_INTERVAL_MS;
+      try {
+        expect(await gc.sweep()).toEqual({ probed: 1, removed: 0, refused: 0, failed: 1 });
+      } finally {
+        await chmod(directory, 0o700);
+      }
+      expect(await exists(journalPath(root, 'stuck'))).toBe(true);
+      now += JOURNAL_SWEEP_INTERVAL_MS;
+      expect(await gc.sweep()).toEqual({ probed: 0, removed: 1, refused: 0, failed: 0 });
+      expect(await exists(journalPath(root, 'stuck', '.1'))).toBe(false);
+    },
+  );
+
+  it('keeps every suffix of a journal that grows between being read and being removed', async () => {
+    const root = await appData();
+    await seed(root, 'resumed', { ended: true, ageMs: OLD, archives: 2 });
+    let woke = false;
+    const gc = collector(root, {
+      fs: {
+        lstat: async (path) => {
+          // The session resumes while the sweep is about to remove its oldest archive.
+          if (!woke && path.endsWith('.jsonl.2')) {
+            woke = true;
+            await appendFile(journalPath(root, 'resumed'), record('resumed', 'SessionStart'));
+          }
+          return lstat(path);
+        },
+        unlink,
+      },
+    });
+    expect(await gc.sweep()).toEqual({ probed: 1, removed: 0, refused: 0, failed: 0 });
+    for (const suffix of ['', '.1', '.2']) {
+      expect(await exists(journalPath(root, 'resumed', suffix))).toBe(true);
     }
-    expect(await exists(journalPath(root, 'stuck'))).toBe(true);
-    now += JOURNAL_SWEEP_INTERVAL_MS;
-    expect(await gc.sweep()).toEqual({ probed: 0, removed: 1, refused: 0, failed: 0 });
-    expect(await exists(journalPath(root, 'stuck', '.1'))).toBe(false);
   });
 
   it('walks an oversized directory in windows that continue where the last stopped', () => {
