@@ -11,7 +11,7 @@ import {
 import { connectedDisplays, displayOptionsWithPreference, serializeDisplayId } from './display';
 import { DesktopPreferencesStore } from './desktop-preferences';
 import { publishSettingsState, registerSettingsIpcHandlers } from './settings-ipc';
-import { evaluateLoginItemSettings, shouldOpenSettingsAtStartup } from './login-item';
+import { evaluateLoginItemSettings } from './login-item';
 import { createStartupOverlayState, isKeyboardEntryTestHookEnabled } from './test-session-source';
 import packageJson from '../../package.json';
 import { IPC_CHANNELS, type SettingsConnectionKey, type SettingsState } from '../shared/ipc';
@@ -262,7 +262,6 @@ if (!hasSingleInstanceLock) {
       app.dock?.hide();
     }
 
-    const startupLoginSettings = app.getLoginItemSettings();
     desktopPreferences = new DesktopPreferencesStore(app.getPath('userData'));
     const preferences = desktopPreferences.get();
     overlayState = { ...overlayState, reducedMotion: preferences.reduceMotion };
@@ -432,8 +431,5 @@ if (!hasSingleInstanceLock) {
       removeRuntimeLifecycleListeners = null;
       desktopPreferences = null;
     });
-    if (shouldOpenSettingsAtStartup(startupLoginSettings)) {
-      openSettingsWindow();
-    }
   });
 }

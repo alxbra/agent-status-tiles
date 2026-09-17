@@ -92,6 +92,7 @@ Reveal is a single horizontal slide driven by one transform transition:
 
 - Pointer within **48 px** of the right edge, beside the stack: every tab slides out to **34 px**, exactly the lab icon plus its gutter. The title starts at the fold, so no text peeks.
 - Pointer over one tab, or keyboard focus on it: that tab slides fully out; the others stay at the icon depth.
+- While a tab is extended by the pointer, a reach zone stretching left as far as the widest visible tab and 24 px above and below the stack keeps the dock open, and the pointer's row (each row owns half of its gaps; the margins belong to the edge tabs) selects which tab is extended, so one tab stays extended until the zone is left. Leaving the reach zone folds everything. The reach zone only affects hover; clicks land on tab surfaces, and the zone is never published as a native hit region.
 - Slide duration **140 ms** with an ease-out curve and an **8 ms** per-tab stagger on dock hover; the hovered or focused tab never waits.
 - The right edge stays anchored throughout; fully extended tabs must remain inside the overlay window.
 

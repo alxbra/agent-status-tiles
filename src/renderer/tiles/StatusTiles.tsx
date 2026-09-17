@@ -18,14 +18,14 @@ import {
   DEFAULT_STRIP_HEIGHT,
   DEFAULT_STRIP_WIDTH,
   DOCK_HOVER_WIDTH,
-  DOCK_PADDING,
   layoutTabs,
   MAX_VISIBLE_TABS,
   normalizeStripWidth,
+  reachWidthFor,
+  resolveHover,
   TAB_MOTION_MS,
   TAB_STAGGER_MS,
   tabHitRegion,
-  type TabLayout,
   type TabSlot,
   type TileHitRegion,
 } from './geometry';
@@ -59,6 +59,13 @@ export interface StatusTilesProps {
 const TAB_SELECTOR = '.status-tiles__tile';
 /** Long enough to cover the slide plus the last staggered tab. */
 const HIT_REGION_SETTLE_MS = TAB_MOTION_MS + TAB_STAGGER_MS * MAX_VISIBLE_TABS + 80;
+/**
+ * Toggling native mouse passthrough makes macOS report a window leave even
+ * though the cursor is still over the dock. Forwarded pointer moves keep
+ * arriving while the cursor is inside the window, so a leave only counts once
+ * no move has followed it within this grace period.
+ */
+const EXIT_GRACE_MS = 250;
 
 function usePrefersReducedMotion(): boolean {
   const [prefersReducedMotion, setPrefersReducedMotion] = useState(() => {
@@ -155,23 +162,6 @@ function tabUnderPoint(root: HTMLElement, clientX: number, clientY: number): str
   const tab = element?.closest<HTMLElement>(TAB_SELECTOR) ?? null;
   if (tab === null || !root.contains(tab)) return null;
   return tab.dataset.sessionId ?? null;
-}
-
-function pointInDockZone(
-  rootBounds: DOMRect,
-  layout: TabLayout,
-  clientX: number,
-  clientY: number,
-): boolean {
-  if (layout.slots.length === 0) return false;
-  const localX = clientX - rootBounds.left;
-  const localY = clientY - rootBounds.top;
-  return (
-    localX >= rootBounds.width - DOCK_HOVER_WIDTH &&
-    localX <= rootBounds.width &&
-    localY >= layout.top - DOCK_PADDING &&
-    localY <= layout.bottom + DOCK_PADDING
-  );
 }
 
 interface StatusTabProps {
@@ -288,7 +278,13 @@ export function StatusTiles({
   const [measuredHeight, setMeasuredHeight] = useState(height ?? DEFAULT_STRIP_HEIGHT);
   const [measuredWidth, setMeasuredWidth] = useState(width ?? DEFAULT_STRIP_WIDTH);
   const [dockActive, setDockActive] = useState(false);
-  const [hoveredSessionId, setHoveredSessionId] = useState<string | null>(null);
+  const [hoveredSessionId, setHoveredSessionIdState] = useState<string | null>(null);
+  /** Mirrors the hovered tab synchronously for pointer handlers that fire back to back. */
+  const hoveredSessionIdRef = useRef<string | null>(null);
+  const reachWidthRef = useRef(DOCK_HOVER_WIDTH);
+  /** Once the pointer has extended a tab, the reach zone stays engaged until the pointer leaves it. */
+  const reachEngagedRef = useRef(false);
+  const pendingExitRef = useRef<number | null>(null);
   const [scrollOffset, setScrollOffset] = useState(0);
   const [focusedIndex, setFocusedIndex] = useState<number | null>(null);
   const handledKeyboardEntryRevisionRef = useRef(0);
@@ -362,6 +358,12 @@ export function StatusTiles({
     const startedAt = performance.now();
     const publish = (): void => {
       const renderedRegions = readRenderedHitRegions(root, effectiveWidth);
+      const reachWidth = reachWidthFor(
+        [...root.querySelectorAll<HTMLElement>(TAB_SELECTOR)].map((tab) => tab.offsetWidth),
+        effectiveWidth,
+      );
+      reachWidthRef.current = reachWidth;
+      root.dataset.reachWidth = String(reachWidth);
       const regions =
         renderedRegions.length === layout.hitRegions.length ? renderedRegions : layout.hitRegions;
       const regionsKey = JSON.stringify(regions);
@@ -383,16 +385,29 @@ export function StatusTiles({
     const handlePointerMove = (event: globalThis.PointerEvent): void => {
       const root = rootRef.current;
       if (root === null) return;
+      cancelPendingExit();
       const bounds = root.getBoundingClientRect();
-      const hovered = tabUnderPoint(root, event.clientX, event.clientY);
-      const inside =
-        hovered !== null ||
-        pointInDockZone(bounds, layoutRef.current, event.clientX, event.clientY);
+      const layout = layoutRef.current;
+      const extended = reachEngagedRef.current;
+      const resolution = resolveHover(
+        layout,
+        { x: event.clientX - bounds.left, y: event.clientY - bounds.top },
+        { stripWidth: bounds.width, extended, reachWidth: reachWidthRef.current },
+      );
+      // Before a tab is extended only the tab element itself extends it; once
+      // extended, the pointer's row inside the reach zone selects the tab.
+      const hovered = extended
+        ? resolution.hoveredIndex === null
+          ? null
+          : (layout.slots[resolution.hoveredIndex]?.sessionId ?? null)
+        : tabUnderPoint(root, event.clientX, event.clientY);
+      const inside = hovered !== null || resolution.inside;
       if (inside) {
         if (!pointerInsideRef.current) {
           pointerInsideRef.current = true;
           beginInteractionFromRef();
         }
+        if (hovered !== null) setReachEngaged(true);
         setDockActive(true);
         setHoveredSessionId(hovered);
       } else if (pointerInsideRef.current) {
@@ -400,10 +415,13 @@ export function StatusTiles({
         leavePointerFromRef();
       }
     };
-    const handlePointerExit = (): void => {
+    const handlePointerExit = (event: globalThis.PointerEvent): void => {
       if (!pointerInsideRef.current) return;
-      pointerInsideRef.current = false;
-      leavePointerFromRef();
+      // Toggling native mouse passthrough emits a window leave while the
+      // cursor is still over the dock, so only a leave reported outside the
+      // hover zone counts as the cursor actually going away.
+      if (pointStillInsideDock(event.clientX, event.clientY)) return;
+      schedulePendingExit();
     };
     const handlePointerUp = (event: globalThis.PointerEvent): void => {
       if (capturedPointerIdRef.current !== event.pointerId) return;
@@ -418,6 +436,7 @@ export function StatusTiles({
     window.addEventListener('pointerup', handlePointerUp);
     document.documentElement.addEventListener('pointerleave', handlePointerExit);
     return () => {
+      cancelPendingExit();
       window.removeEventListener('pointermove', handlePointerMove);
       window.removeEventListener('pointerup', handlePointerUp);
       document.documentElement.removeEventListener('pointerleave', handlePointerExit);
@@ -444,6 +463,47 @@ export function StatusTiles({
     setFocusedIndex(0);
   }, [keyboardEntryRevision, layout.slots]);
 
+  /** Whether a viewport point keeps the dock revealed in its current mode. */
+  function pointStillInsideDock(clientX: number, clientY: number): boolean {
+    const root = rootRef.current;
+    if (root === null) return false;
+    const bounds = root.getBoundingClientRect();
+    return resolveHover(
+      layoutRef.current,
+      { x: clientX - bounds.left, y: clientY - bounds.top },
+      {
+        stripWidth: bounds.width,
+        extended: reachEngagedRef.current,
+        reachWidth: reachWidthRef.current,
+      },
+    ).inside;
+  }
+
+  function cancelPendingExit(): void {
+    if (pendingExitRef.current === null) return;
+    window.clearTimeout(pendingExitRef.current);
+    pendingExitRef.current = null;
+  }
+
+  function schedulePendingExit(): void {
+    if (pendingExitRef.current !== null || !pointerInsideRef.current) return;
+    pendingExitRef.current = window.setTimeout(() => {
+      pendingExitRef.current = null;
+      if (!pointerInsideRef.current) return;
+      pointerInsideRef.current = false;
+      leavePointerFromRef();
+    }, EXIT_GRACE_MS);
+  }
+
+  function setReachEngaged(engaged: boolean): void {
+    reachEngagedRef.current = engaged;
+  }
+
+  function setHoveredSessionId(sessionId: string | null): void {
+    hoveredSessionIdRef.current = sessionId;
+    setHoveredSessionIdState(sessionId);
+  }
+
   function beginInteractionFromRef(): void {
     if (interactingRef.current) return;
     interactingRef.current = true;
@@ -452,6 +512,7 @@ export function StatusTiles({
   }
 
   function leavePointerFromRef(): void {
+    setReachEngaged(false);
     setDockActive(false);
     setHoveredSessionId(null);
     if (focusWithinRef.current) return;
@@ -475,34 +536,22 @@ export function StatusTiles({
    * overlay appears under a resting cursor, so enter/leave also drive hover. */
   function handleTabPointerEnter(session: SessionSnapshot): void {
     pointerInsideRef.current = true;
+    setReachEngaged(true);
     beginInteractionFromRef();
     setDockActive(true);
     setHoveredSessionId(session.id);
   }
 
-  function handleTabPointerLeave(
-    event: PointerEvent<HTMLButtonElement>,
-    session: SessionSnapshot,
-  ): void {
-    setHoveredSessionId((previous) => (previous === session.id ? null : previous));
-    const root = rootRef.current;
+  function handleTabPointerLeave(event: PointerEvent<HTMLButtonElement>): void {
     const next = event.relatedTarget;
-    const stillInside =
-      root !== null &&
-      next instanceof Node &&
-      root.contains(next) &&
-      pointInDockZone(
-        root.getBoundingClientRect(),
-        layoutRef.current,
-        event.clientX,
-        event.clientY,
-      );
-    if (stillInside) return;
     const overTab = next instanceof Element && next.closest(TAB_SELECTOR) !== null;
     if (overTab) return;
-    // The cursor left the window or jumped far away; fold everything back.
-    pointerInsideRef.current = false;
-    leavePointerFromRef();
+    // Still inside the reach zone (including the spurious leave that native
+    // passthrough toggling emits): the following pointer move picks the row.
+    if (pointStillInsideDock(event.clientX, event.clientY)) return;
+    // The cursor left the window or jumped far away, unless a forwarded move
+    // proves otherwise within the grace period.
+    schedulePendingExit();
   }
 
   function handleOpen(session: SessionSnapshot): void {
@@ -639,7 +688,7 @@ export function StatusTiles({
               capturedPointerIdRef.current = null;
             }}
             onPointerEnter={() => handleTabPointerEnter(session)}
-            onPointerLeave={(event) => handleTabPointerLeave(event, session)}
+            onPointerLeave={handleTabPointerLeave}
             onClick={() => handleOpen(session)}
             onKeyDown={(event) => {
               if (event.key === 'Enter' || event.key === ' ') {

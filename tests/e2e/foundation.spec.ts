@@ -127,15 +127,29 @@ async function overlayWindow(application: ElectronApplication): Promise<Page> {
   throw new Error('Timed out waiting for the overlay window to load');
 }
 
+function findSettingsWindow(application: ElectronApplication): Page | undefined {
+  return application.windows().find((window) => window.url().includes('/renderer/index.html'));
+}
+
+/**
+ * Settings never opens by itself at launch; open it through a user activation.
+ * The activation is re-sent while waiting because the app registers its
+ * listener only once its runtime is ready.
+ */
 async function settingsWindow(application: ElectronApplication): Promise<Page> {
   const deadline = Date.now() + 10_000;
+  let lastActivation = 0;
 
   while (Date.now() < deadline) {
-    const existingSettingsWindow = application
-      .windows()
-      .find((window) => window.url().includes('/renderer/index.html'));
+    const existingSettingsWindow = findSettingsWindow(application);
     if (existingSettingsWindow) {
       return existingSettingsWindow;
+    }
+    if (Date.now() - lastActivation >= 250) {
+      lastActivation = Date.now();
+      await application.evaluate(({ app }) => {
+        app.emit('activate');
+      });
     }
 
     await new Promise((resolve) => setTimeout(resolve, 50));
@@ -742,6 +756,28 @@ test('keeps an actionable native context menu reachable', async () => {
     await expect(dismissItem).toBeEnabled();
     await dismissItem.click();
     await expect(dismissItem).toBeHidden();
+  } finally {
+    await closeApplication(application);
+    await rm(userDataDir, { recursive: true, force: true });
+  }
+});
+
+test('does not open Settings by itself at launch', async () => {
+  test.skip(process.platform !== 'darwin', 'the desktop shell targets macOS');
+  const userDataDir = await mkdtemp(join(tmpdir(), 'agent-status-tiles-quiet-launch-e2e-'));
+  let application: ElectronApplication | undefined;
+
+  try {
+    application = await launch(userDataDir, 1);
+    const overlay = await overlayWindow(application);
+    await expect(overlay.locator('.status-tiles__tile')).toHaveCount(1);
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    expect(findSettingsWindow(application)).toBeUndefined();
+
+    await application.evaluate(({ app }) => {
+      app.emit('activate');
+    });
+    await expect(settingsWindow(application)).resolves.toHaveTitle('Settings');
   } finally {
     await closeApplication(application);
     await rm(userDataDir, { recursive: true, force: true });

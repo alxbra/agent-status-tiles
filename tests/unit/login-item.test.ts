@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { LoginItemSettings } from 'electron';
 
-import { evaluateLoginItemSettings, shouldOpenSettingsAtStartup } from '../../src/main/login-item';
+import { evaluateLoginItemSettings } from '../../src/main/login-item';
 
 function loginSettings(overrides: Partial<LoginItemSettings> = {}): LoginItemSettings {
   return {
@@ -15,11 +15,6 @@ function loginSettings(overrides: Partial<LoginItemSettings> = {}): LoginItemSet
 }
 
 describe('login-item lifecycle', () => {
-  it('suppresses the initial Settings window for a login-item launch', () => {
-    expect(shouldOpenSettingsAtStartup(loginSettings())).toBe(true);
-    expect(shouldOpenSettingsAtStartup(loginSettings({ wasOpenedAtLogin: true }))).toBe(false);
-  });
-
   it('only reports launch at login as enabled when macOS confirms it', () => {
     expect(
       evaluateLoginItemSettings(loginSettings({ openAtLogin: true, status: 'enabled' })),

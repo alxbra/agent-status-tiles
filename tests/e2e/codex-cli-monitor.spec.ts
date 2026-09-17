@@ -172,6 +172,20 @@ process.stdin.on('data', chunk => {
         ),
       )
       .toEqual(['desktop-project']);
+    // Settings never opens by itself; keep activating until the runtime listens.
+    await expect
+      .poll(async () => {
+        const open = application!
+          .windows()
+          .some((window) => window.url().includes('/renderer/index.html'));
+        if (!open) {
+          await application!.evaluate(({ app }) => {
+            app.emit('activate');
+          });
+        }
+        return open;
+      })
+      .toBe(true);
     const settings = application
       .windows()
       .find((window) => window.url().includes('/renderer/index.html'));
@@ -285,10 +299,19 @@ test('enabled CLI remains disconnectable after losing its executable', async () 
         AGENT_STATUS_TILES_TEST_CODEX_SESSIONS_ROOT: sessionsRoot,
       },
     });
+    // Settings never opens by itself; keep activating until the runtime listens.
     await expect
-      .poll(() =>
-        application!.windows().some((window) => window.url().includes('/renderer/index.html')),
-      )
+      .poll(async () => {
+        const open = application!
+          .windows()
+          .some((window) => window.url().includes('/renderer/index.html'));
+        if (!open) {
+          await application!.evaluate(({ app }) => {
+            app.emit('activate');
+          });
+        }
+        return open;
+      })
       .toBe(true);
     const settings = application
       .windows()

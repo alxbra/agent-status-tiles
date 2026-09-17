@@ -219,6 +219,81 @@ test('extends only the hovered tab and publishes its full width as the hit targe
     .toEqual([await fullWidth(first), TAB_PEEK_DOCK, TAB_PEEK_DOCK]);
 });
 
+test('keeps the dock open while moving between rows inside the reach zone', async ({ page }) => {
+  await openFixture(page, 3);
+  const tabs = page.locator('.status-tiles__tile');
+  const boxes = await Promise.all([0, 1, 2].map((index) => tabs.nth(index).boundingBox()));
+  if (boxes.some((box) => box === null)) throw new Error('Tabs have no bounds');
+  const rows = boxes.map((box) => box!.y + box!.height / 2);
+  const widths = await Promise.all([0, 1, 2].map((index) => fullWidth(tabs.nth(index))));
+  // The reach depth is the widest tab's layout width (integer offsetWidth).
+  const reach = Number(await page.locator('.status-tiles').getAttribute('data-reach-width'));
+  expect(Math.abs(reach - Math.max(...widths))).toBeLessThanOrEqual(1);
+
+  // Before anything is extended the gutter left of the edge strip is inert.
+  await page.mouse.move(VIEWPORT.width - 150, rows[1]!);
+  await expect(page.locator('.status-tiles')).not.toHaveClass(/status-tiles--active/);
+
+  await hoverTab(page, tabs.nth(0));
+  await expect(tabs.nth(0)).toHaveAttribute('data-extended', 'true');
+
+  // Sliding straight down through the gutter hands the row to the next tab.
+  await page.mouse.move(VIEWPORT.width - 150, rows[0]! + 8);
+  await page.mouse.move(VIEWPORT.width - 150, rows[1]!);
+  await expect(tabs.nth(1)).toHaveAttribute('data-extended', 'true');
+  await expect(tabs.nth(0)).toHaveAttribute('data-extended', 'false');
+  await expect.poll(() => visibleWidths(page)).toEqual([TAB_PEEK_DOCK, widths[1], TAB_PEEK_DOCK]);
+
+  // Toggling native passthrough reports a window leave while the cursor is
+  // still inside the zone; that must not fold the dock.
+  await page.evaluate(
+    ([x, y]) => {
+      document.documentElement.dispatchEvent(
+        new PointerEvent('pointerleave', { clientX: x, clientY: y, bubbles: false }),
+      );
+    },
+    [VIEWPORT.width - 150, rows[1]!] as const,
+  );
+  await page.waitForTimeout(100);
+  await expect(tabs.nth(1)).toHaveAttribute('data-extended', 'true');
+
+  // The margins above and below the stack belong to the edge tabs, so the
+  // stack never retracts while the pointer stays inside the zone.
+  await page.mouse.move(VIEWPORT.width - 150, boxes[0]!.y - 20);
+  await expect(tabs.nth(0)).toHaveAttribute('data-extended', 'true');
+  await expect(page.locator('.status-tiles')).toHaveClass(/status-tiles--active/);
+  await page.mouse.move(VIEWPORT.width - 150, boxes[2]!.y + boxes[2]!.height + 20);
+  await expect(tabs.nth(2)).toHaveAttribute('data-extended', 'true');
+  await expect(page.locator('.status-tiles')).toHaveClass(/status-tiles--active/);
+  await page.mouse.move(VIEWPORT.width - 150, rows[1]!);
+  await expect(tabs.nth(1)).toHaveAttribute('data-extended', 'true');
+
+  // The gap between rows belongs to the nearest tab instead of folding.
+  await page.mouse.move(VIEWPORT.width - 150, boxes[2]!.y - 1);
+  await expect(tabs.nth(2)).toHaveAttribute('data-extended', 'true');
+
+  // Anywhere up to the widest tab keeps the dock; one pixel further folds it.
+  await page.mouse.move(VIEWPORT.width - reach + 1, rows[2]!);
+  await expect(tabs.nth(2)).toHaveAttribute('data-extended', 'true');
+  await page.mouse.move(VIEWPORT.width - reach - 2, rows[2]!);
+  await expect
+    .poll(() => visibleWidths(page))
+    .toEqual([TAB_PEEK_IDLE, TAB_PEEK_IDLE, TAB_PEEK_IDLE]);
+  await expect(page.locator('.status-tiles')).not.toHaveClass(/status-tiles--active/);
+
+  // Without a following move, a leave reported outside the zone folds the dock.
+  await hoverTab(page, tabs.nth(0));
+  await expect(tabs.nth(0)).toHaveAttribute('data-extended', 'true');
+  await page.evaluate(() => {
+    document.documentElement.dispatchEvent(
+      new PointerEvent('pointerleave', { clientX: -10, clientY: -10, bubbles: false }),
+    );
+  });
+  await expect
+    .poll(() => visibleWidths(page))
+    .toEqual([TAB_PEEK_IDLE, TAB_PEEK_IDLE, TAB_PEEK_IDLE]);
+});
+
 test('prefixes the thread name with the lab icon and suffixes the status mark', async ({
   page,
 }) => {
