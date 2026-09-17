@@ -346,11 +346,7 @@ if (!hasSingleInstanceLock) {
       appDataPath: app.getPath('userData'),
       retained: () => {
         if (runtimeCoordinator === null) throw new Error('runtime-not-ready');
-        const retained = retainedClaudeJournals(runtimeCoordinator.getMonitoringState());
-        for (const monitor of claudeMonitors) {
-          for (const baseName of monitor.cohort) retained.add(baseName);
-        }
-        return retained;
+        return retainedClaudeJournals(runtimeCoordinator.getMonitoringState(), claudeMonitors);
       },
     });
     const claudeDesktopMonitor = new ClaudeDesktopMonitor({

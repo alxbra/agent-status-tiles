@@ -158,7 +158,11 @@ export class ClaudeSurfaceMonitor implements ProviderSurfaceMonitor {
     this.journals = journals;
     this.unavailableSourceIds.clear();
     // The collector reads the cohort just set; a sweep never fails discovery.
-    await this.collector?.sweep().catch(() => undefined);
+    try {
+      await this.collector?.sweep();
+    } catch {
+      // Collection is best effort; the pass reports the cohort regardless.
+    }
     return {
       complete: true,
       capturedAt: Date.now(),

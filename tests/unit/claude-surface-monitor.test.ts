@@ -451,5 +451,16 @@ describe('claude surface monitor collection', () => {
     expect(sweeps).toHaveLength(2);
     monitor.stop();
     expect(monitor.cohort).toEqual(new Set());
+
+    const throwing = new ClaudeDesktopMonitor({
+      appDataPath: root,
+      collector: {
+        sweep: () => {
+          throw new Error('sync');
+        },
+      },
+    });
+    throwing.start();
+    expect((await throwing.discover()).sources).toHaveLength(1);
   });
 });

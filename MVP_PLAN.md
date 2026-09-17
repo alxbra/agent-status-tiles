@@ -539,8 +539,11 @@ normalizer, and the `claude:desktop` / `claude:cli` monitors registered with
 the coordinator (`docs/claude-monitor.md`), verified against synthetic journals
 by unit tests and a native Electron E2E (PR #38); PR #39 connects the
 `Claude Code` row (hook installation, readiness health, Repair, hook removal
-on disconnect). Live Desktop and terminal validation, journal garbage
-collection for ended sessions, and navigation remain pending.
+on disconnect); PR #42 adds bounded journal garbage collection (the
+collection section of `docs/claude-monitor.md`): ended journals older than
+seven days are removed with every archive at most every five minutes, never a
+journal a cohort, cursor, or session still refers to, never through a symlink.
+Live Desktop and terminal validation and navigation remain pending.
 
 - [x] Build the native hook-helper executable (merged PR #2).
 - [x] Package the native helper as unsigned arm64/x64 application resources (merged PR #9; signing and notarization remain pending).

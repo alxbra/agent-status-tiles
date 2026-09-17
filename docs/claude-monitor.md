@@ -23,7 +23,7 @@ archive) the previous summary is kept for at most two passes, so a rotation
 never looks like an ended session while a deleted journal with a stale archive
 is forgotten. A directory holding more journals than can be stat'ed reports
 incomplete coverage; the collection below keeps a long-lived install under
-that bound.
+that bound as long as its sessions end with `SessionEnd`.
 
 Each inspected journal yields display-safe facts only: the session ID, the
 project folder name from the newest record, the surface, the recognised
@@ -57,17 +57,22 @@ journals of sessions that are over. Each monitor asks it to sweep at the end
 of every discovery pass; a sweep runs at most every five minutes
 (`JOURNAL_SWEEP_INTERVAL_MS`), overlapping requests share one sweep, and a
 sweep that fails never fails the pass. A sweep lists the same directory,
-`lstat`s at most 4,096 active journals, and considers only regular files whose
-modification time is more than seven days (`JOURNAL_RETENTION_MS`) old,
-oldest first. Whether such a journal ended is decided the way discovery
-decides it: the file is verified (first record hashes to the name, last
-record belongs to the same session) and its newest record must be
-`SessionEnd`. A journal that was killed without `SessionEnd`, that is empty
-beside an archive (a rotation that never completed), or that cannot be
-verified as this app's is never removed. At most 64 journals are read per
-sweep (`MAX_SWEEP_PROBES`); the verdict for an unchanged file is remembered,
-so a backlog of live-looking old journals is read once and then skipped, and
-at most 64 journal sets are removed per sweep (`MAX_SWEEP_REMOVALS`).
+`lstat`s at most 4,096 active journals (a larger directory is walked in
+sorted windows that continue where the previous sweep stopped, so every
+journal is reached), and considers only regular files whose modification time
+is more than seven days (`JOURNAL_RETENTION_MS`) old, oldest first. Whether
+such a journal ended is decided the way discovery decides it: the file is
+verified (first record hashes to the name, last record belongs to the same
+session) and its newest record must be `SessionEnd`. A journal that was
+killed without `SessionEnd`, that is empty beside an archive (a rotation that
+never completed), or that cannot be verified as this app's is never removed.
+At most 64 journals are read per sweep (`MAX_SWEEP_PROBES`); the verdict for
+an unchanged file is remembered, so a backlog of live-looking old journals is
+read once and then skipped, while a file that could not be read at all (an
+I/O error rather than a failed verification) gets no verdict and is read
+again next sweep. At most 64 journal sets are removed per sweep
+(`MAX_SWEEP_REMOVALS`); a journal judged on an earlier sweep does not count
+against the read budget.
 
 Removing a journal removes every suffix: `.jsonl.3`, `.2`, `.1`, then the
 active `.jsonl`, in that order, so an interrupted sweep leaves an ended
@@ -78,15 +83,32 @@ anywhere in the set leaves the whole set alone, and a journal directory that
 is itself a link is not swept, so nothing outside the app's directory is
 ever followed or removed. The active file must still have the modification
 time and size that were read; a session resumed into the same ID in between
-has grown its journal and is left for its next verdict. The helper's
-`<hash>.lock` files are never removed, which keeps the helper's guarantee
-that no stale-lock deletion race exists.
+has grown its journal and is left for its next verdict. The app cannot take
+the helper's advisory lock, so one window remains: a hook that opens the
+active file for append between that final check and the `unlink` writes its
+record to the removed inode, and the session's journal restarts with the next
+hook's record. It needs a resume of a session that ended more than a week ago
+landing within those microseconds, and the restarted journal is discovered
+and replayed normally, so the consequence is one lost record of a session
+that was already forgotten. The helper's `<hash>.lock` files are never
+removed: the helper does not re-check the lock inode after locking, so an
+app-side unlink could let two hooks hold different lock files. A lock file
+is empty and is not a journal name, so it costs one directory entry and
+nothing in discovery; collecting stale lock files is a follow-up that starts
+in the helper.
 
 A sweep keeps every journal the app still refers to, whatever its state: the
 current cohort of either surface, every base name with a persisted cursor,
 and the journal of every persisted Claude session
-(`retainedClaudeJournals`). A sweep reports counts only (journals read,
-removed, refused, failed); no name, path, or error text leaves the module.
+(`retainedClaudeJournals`). A sweep reports counts only: journals read,
+removed, refused (a set left alone for a symlink or non-file, or the whole
+sweep when the directory is not a real directory), and failed (I/O errors,
+retried later); no name, path, or error text leaves the module.
+
+Sessions that end without `SessionEnd` (a closed terminal, a killed process,
+a crash) are never collected by this contract and accumulate until the stat
+bound reports incomplete coverage; a second, longer retention for journals
+that have not changed at all is a follow-up, not part of this slice.
 
 ## Replay
 

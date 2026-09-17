@@ -14,10 +14,11 @@
 
 Still open after these merges: the live verification matrix in section 5
 (real Claude Desktop and terminal sessions, hook coexistence, restart, uninstall,
-no Node/Python dependence), journal garbage collection for ended sessions
-(`docs/claude-monitor.md`), `disableAllHooks` detection beyond the user-level
+no Node/Python dependence), `disableAllHooks` detection beyond the user-level
 settings file (section 3.4), navigation (section 3.7), and the deferred
-override. Development runs need `build/hook-helper/<arch>/hook-helper`, which
+override. Journal garbage collection for ended sessions is delivered by
+[#42](https://github.com/alxbra/agent-status-tiles/pull/42) (the collection
+section of `docs/claude-monitor.md`). Development runs need `build/hook-helper/<arch>/hook-helper`, which
 requires a Rust toolchain; packaged builds carry it.
 
 Sections 1 to 5 below are the plan as approved on 2026-09-17, kept as approved

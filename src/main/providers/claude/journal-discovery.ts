@@ -123,6 +123,31 @@ async function probeJournal(path: string, size: number): Promise<[Probe, Probe] 
   }
 }
 
+/**
+ * `lstat` the named active journals, at most `MAX_JOURNAL_ENTRIES` of them in
+ * the given order, keeping regular files only; a name that cannot be
+ * stat'ed is skipped. Shared by discovery and the collector.
+ */
+export async function statJournals(
+  directory: string,
+  names: Iterable<string>,
+): Promise<JournalCandidate[]> {
+  const candidates: JournalCandidate[] = [];
+  let statted = 0;
+  for (const name of names) {
+    if (statted >= MAX_JOURNAL_ENTRIES) break;
+    statted += 1;
+    try {
+      const metadata = await lstat(join(directory, name));
+      if (!metadata.isFile()) continue;
+      candidates.push({ name, mtimeMs: metadata.mtimeMs, size: metadata.size });
+    } catch {
+      continue;
+    }
+  }
+  return candidates;
+}
+
 export function surfaceForIdentity(
   host: ClaudeHost | undefined,
   entrypoint: string | undefined,
@@ -177,19 +202,7 @@ export class ClaudeJournalDiscovery {
     }
     const present = new Set(names.filter(isJournalName));
     this.wasTruncated = present.size > MAX_JOURNAL_ENTRIES;
-    const candidates: JournalCandidate[] = [];
-    let statted = 0;
-    for (const name of present) {
-      if (statted >= MAX_JOURNAL_ENTRIES) break;
-      statted += 1;
-      try {
-        const metadata = await lstat(join(this.directory, name));
-        if (!metadata.isFile()) continue;
-        candidates.push({ name, mtimeMs: metadata.mtimeMs, size: metadata.size });
-      } catch {
-        continue;
-      }
-    }
+    const candidates = await statJournals(this.directory, present);
     candidates.sort(
       (left, right) => right.mtimeMs - left.mtimeMs || (left.name < right.name ? -1 : 1),
     );
@@ -266,20 +279,17 @@ export class ClaudeJournalDiscovery {
 /**
  * Verify one journal and describe it. Only a file whose first record names
  * the session hashed into its file name and whose last record belongs to the
- * same session is ours to describe; anything else, including an empty or
- * unreadable file, yields nothing. The path never leaves this module.
+ * same session is ours to describe; anything else, including an empty file,
+ * yields nothing. A file that cannot be read rejects, so a caller that
+ * remembers verdicts can tell "not ours" from "not readable right now". The
+ * path never leaves this module.
  */
-export async function summarizeJournal(
+export async function verifyJournal(
   directory: string,
   candidate: JournalCandidate,
 ): Promise<ClaudeJournalSummary | undefined> {
   if (candidate.size === 0) return undefined;
-  let probes: [Probe, Probe] | undefined;
-  try {
-    probes = await probeJournal(join(directory, candidate.name), candidate.size);
-  } catch {
-    return undefined;
-  }
+  const probes = await probeJournal(join(directory, candidate.name), candidate.size);
   if (probes === undefined) return undefined;
   const [first, last] = probes;
   const nativeSessionId = first.sessionId;
@@ -300,6 +310,18 @@ export async function summarizeJournal(
     updatedAt: Math.round(candidate.mtimeMs),
     endOffset: candidate.size,
   };
+}
+
+/** `verifyJournal` for discovery, where an unreadable file is simply not listed. */
+async function summarizeJournal(
+  directory: string,
+  candidate: JournalCandidate,
+): Promise<ClaudeJournalSummary | undefined> {
+  try {
+    return await verifyJournal(directory, candidate);
+  } catch {
+    return undefined;
+  }
 }
 
 /** Newest first, capped at the shared discovery window, for one surface. */

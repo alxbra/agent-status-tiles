@@ -1,4 +1,14 @@
-import { access, mkdir, mkdtemp, readdir, rm, symlink, utimes, writeFile } from 'node:fs/promises';
+import {
+  access,
+  chmod,
+  mkdir,
+  mkdtemp,
+  readdir,
+  rm,
+  symlink,
+  utimes,
+  writeFile,
+} from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -9,10 +19,12 @@ import {
   JOURNAL_RETENTION_MS,
   JOURNAL_SWEEP_INTERVAL_MS,
   MAX_SWEEP_PROBES,
+  journalWindow,
   retainedClaudeJournals,
   type ClaudeJournalCollectorOptions,
 } from '../../src/main/providers/claude/journal-collector';
 import { makeHookJournalBaseName } from '../../src/main/providers/hooks/hook-journal-reader';
+import { MAX_JOURNAL_ENTRIES } from '../../src/main/providers/claude/journal-discovery';
 import { createInitialMonitoringState } from '../../src/main/sessions/persistence';
 
 const roots: string[] = [];
@@ -152,9 +164,13 @@ describe('claude journal collector', () => {
       'claude:with-session': {} as never,
       'codex:elsewhere': {} as never,
     };
-    const retained = retainedClaudeJournals(state);
-    expect(retained).toEqual(new Set([baseName('with-cursor'), baseName('with-session')]));
-    retained.add(baseName('in-cohort'));
+    const retained = retainedClaudeJournals(state, [
+      { cohort: new Set([baseName('in-cohort')]) },
+      { cohort: new Set() },
+    ]);
+    expect(retained).toEqual(
+      new Set([baseName('in-cohort'), baseName('with-cursor'), baseName('with-session')]),
+    );
 
     const sweep = await collector(root, { retained: () => retained }).sweep();
     expect(sweep).toMatchObject({ removed: 1 });
@@ -262,5 +278,66 @@ describe('claude journal collector', () => {
     expect(await gc.sweep()).toEqual({ probed: 1, removed: 1, refused: 0, failed: 0 });
     expect(await exists(journalPath(root, 'live-000'))).toBe(false);
     expect((await readdir(join(root, 'journals', 'claude'))).length).toBe(total - 1);
+  });
+
+  it('bounds removals per sweep and still removes journals judged on an earlier sweep', async () => {
+    const root = await appData();
+    for (let index = 0; index < 5; index += 1) {
+      await seed(root, `ended-${index}`, { ended: true, ageMs: OLD + (5 - index) * 1_000 });
+    }
+    let now = NOW;
+    const gc = collector(root, { now: () => now, maxProbes: 3, maxRemovals: 2 });
+    // Three are read, two removed; the third keeps its verdict for next time.
+    expect(await gc.sweep()).toEqual({ probed: 3, removed: 2, refused: 0, failed: 0 });
+    now += JOURNAL_SWEEP_INTERVAL_MS;
+    // Reading stays bounded, but the journal already judged needs no read.
+    expect(await gc.sweep()).toEqual({ probed: 2, removed: 2, refused: 0, failed: 0 });
+    now += JOURNAL_SWEEP_INTERVAL_MS;
+    expect(await gc.sweep()).toEqual({ probed: 0, removed: 1, refused: 0, failed: 0 });
+    expect(await readdir(join(root, 'journals', 'claude'))).toEqual([]);
+  });
+
+  it('does not turn a transient read error or a failed removal into a lasting verdict', async () => {
+    const root = await appData();
+    await seed(root, 'unreadable', { ended: true, ageMs: OLD });
+    await chmod(journalPath(root, 'unreadable'), 0o000);
+    let now = NOW;
+    const gc = collector(root, { now: () => now });
+    expect(await gc.sweep()).toEqual({ probed: 1, removed: 0, refused: 0, failed: 1 });
+    await chmod(journalPath(root, 'unreadable'), 0o600);
+    now += JOURNAL_SWEEP_INTERVAL_MS;
+    expect(await gc.sweep()).toEqual({ probed: 1, removed: 1, refused: 0, failed: 0 });
+
+    await seed(root, 'stuck', { ended: true, ageMs: OLD, archives: 1 });
+    const directory = join(root, 'journals', 'claude');
+    await chmod(directory, 0o500);
+    now += JOURNAL_SWEEP_INTERVAL_MS;
+    try {
+      expect(await gc.sweep()).toEqual({ probed: 1, removed: 0, refused: 0, failed: 1 });
+    } finally {
+      await chmod(directory, 0o700);
+    }
+    expect(await exists(journalPath(root, 'stuck'))).toBe(true);
+    now += JOURNAL_SWEEP_INTERVAL_MS;
+    expect(await gc.sweep()).toEqual({ probed: 0, removed: 1, refused: 0, failed: 0 });
+    expect(await exists(journalPath(root, 'stuck', '.1'))).toBe(false);
+  });
+
+  it('walks an oversized directory in windows that continue where the last stopped', () => {
+    const small = new Set(['b', 'a']);
+    expect(journalWindow(small, undefined)).toEqual(['b', 'a']);
+    const names = Array.from(
+      { length: MAX_JOURNAL_ENTRIES + 3 },
+      (_, index) => `n${String(index).padStart(5, '0')}`,
+    );
+    const present = new Set(names.slice().reverse());
+    const first = journalWindow(present, undefined);
+    expect(first).toEqual(names.slice(0, MAX_JOURNAL_ENTRIES));
+    const second = journalWindow(present, first[first.length - 1]);
+    expect(second).toHaveLength(MAX_JOURNAL_ENTRIES);
+    expect(second.slice(0, 3)).toEqual(names.slice(MAX_JOURNAL_ENTRIES));
+    expect(second[3]).toBe(names[0]);
+    // A remembered name that vanished starts the walk over.
+    expect(journalWindow(present, 'zzz')[0]).toBe(names[0]);
   });
 });
