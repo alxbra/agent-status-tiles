@@ -17,7 +17,8 @@ approved mockup lives in `docs/mockups/tab-dock.html`. In particular:
 
 - Each session is one document-style tab anchored to the usable right edge:
   **28 px tall**, **4 px apart**, an **8 px radius** on the left corners only,
-  filled with the status color, and vertically centered as a stack.
+  filled with the status color, and stacked with its center on the work
+  area's upper-third line.
 - Folded tabs show only a **12 px** colored sliver with a 24 px wide native
   hit target. A pointer within 48 px of the edge slides every tab out to
   **34 px** so the lab icon shows; hovering or focusing one tab slides it fully

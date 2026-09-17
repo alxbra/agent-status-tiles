@@ -80,7 +80,7 @@ Idle is visible when its item is within the recent limit. Unavailable status is 
 ### 2.2 Folded tab dock
 
 - Each session is one document-style tab: **28 CSS px tall**, **4 CSS px** apart, with an **8 CSS px radius** on the left corners and a square right edge that tucks into the display's usable right edge.
-- Tabs are filled with the status color and vertically centered as a stack within the display work area.
+- Tabs are filled with the status color and stacked with the stack's center on the upper-third line of the display work area (one third of the way down), clamped inside it.
 - Folded tabs show only a **12 CSS px** colored sliver: no logos, text, or status glyphs. A folded working tab may breathe with a soft highlight.
 - Each folded tab keeps a **24 px wide** native hit target; transparent space outside interactive targets passes mouse events to applications underneath.
 - No permanently visible title, toolbar, legend, or settings button, and no frosted backdrop or native vibrancy window behind the tabs.

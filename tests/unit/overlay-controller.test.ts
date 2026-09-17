@@ -64,7 +64,7 @@ const electronMocks = vi.hoisted(() => ({
 vi.mock('electron', () => electronMocks);
 
 function createOverlayWindowMock(
-  initialBounds: Bounds = { x: 1080, y: 222, width: 360, height: 480 },
+  initialBounds: Bounds = { x: 1080, y: 76, width: 360, height: 480 },
 ): OverlayWindowMock {
   let visible = false;
   let focusable = false;
@@ -197,7 +197,7 @@ describe('overlay controller', () => {
 
     expect(options).toMatchObject({
       x: 1080,
-      y: 222,
+      y: 76,
       width: 360,
       height: 480,
       frame: false,
@@ -428,7 +428,7 @@ describe('overlay controller', () => {
     )?.[1] as (() => void) | undefined;
     resume?.();
     expect(recoveredWindow.setBounds).toHaveBeenCalledWith(
-      { x: 1080, y: 222, width: 360, height: 480 },
+      { x: 1080, y: 76, width: 360, height: 480 },
       false,
     );
 
@@ -452,7 +452,7 @@ describe('overlay controller', () => {
     const controller = createOverlayController({ preferredDisplayId: '42' });
     expect(electronMocks.BrowserWindow.mock.calls[0]?.[0]).toMatchObject({
       x: 1080,
-      y: 222,
+      y: 76,
       width: 360,
       height: 480,
     });
@@ -463,13 +463,13 @@ describe('overlay controller', () => {
     )?.[1] as (() => void) | undefined;
     onAdded?.();
     expect(overlayWindow.setBounds).toHaveBeenLastCalledWith(
-      { x: -360, y: 10, width: 360, height: 480 },
+      { x: -360, y: -140, width: 360, height: 480 },
       false,
     );
 
     controller.setPreferredDisplayId('primary');
     expect(overlayWindow.setBounds).toHaveBeenLastCalledWith(
-      { x: 1080, y: 222, width: 360, height: 480 },
+      { x: 1080, y: 76, width: 360, height: 480 },
       false,
     );
     controller.destroy();
@@ -487,6 +487,19 @@ describe('overlay controller', () => {
       y: 0,
       width: 40,
       height: 80,
+    });
+    // Centered on the upper-third line, clamped inside the work area.
+    expect(overlayBounds({ x: 0, y: 24, width: 1440, height: 876 })).toEqual({
+      x: 1080,
+      y: 76,
+      width: 360,
+      height: 480,
+    });
+    expect(overlayBounds({ x: 0, y: 0, width: 1440, height: 500 })).toEqual({
+      x: 1080,
+      y: 0,
+      width: 360,
+      height: 480,
     });
     expect(isValidOverlayHitRegion({ x: 10, y: 90, width: 24, height: 10 }, 88, 100)).toBe(true);
     expect(isValidOverlayHitRegion({ x: 10, y: 90, width: 24, height: 11 }, 88, 100)).toBe(false);
@@ -552,7 +565,7 @@ describe('overlay controller', () => {
     controller.setRendererReady();
     overlayWindow.readyListener?.();
     controller.setQualifyingSessionCount(1);
-    electronMocks.screen.getCursorScreenPoint.mockReturnValue({ x: 1092, y: 244 });
+    electronMocks.screen.getCursorScreenPoint.mockReturnValue({ x: 1092, y: 98 });
     expect(controller.setHitRegions([{ x: 10, y: 20, width: 24, height: 24 }])).toBe(true);
     expect(overlayWindow.setIgnoreMouseEvents).toHaveBeenLastCalledWith(false, undefined);
     expect(controller.setHitRegions([{ x: 40, y: 20, width: 24, height: 24 }])).toBe(true);

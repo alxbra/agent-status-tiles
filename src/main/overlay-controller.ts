@@ -38,13 +38,19 @@ export interface OverlayController {
   destroy(): void;
 }
 
+/** The tab stack is centered inside the window, so the window centers on this line. */
+export const OVERLAY_ANCHOR_FRACTION = 1 / 3;
+
 export function overlayBounds(workArea: Rectangle): Rectangle {
   const width = Math.max(1, Math.min(OVERLAY_WINDOW_WIDTH, workArea.width));
   const height = Math.max(1, Math.min(OVERLAY_WINDOW_HEIGHT, workArea.height));
+  const anchorY = workArea.y + workArea.height * OVERLAY_ANCHOR_FRACTION;
+  const minY = workArea.y;
+  const maxY = workArea.y + workArea.height - height;
 
   return {
     x: Math.round(workArea.x + workArea.width - width),
-    y: Math.round(workArea.y + (workArea.height - height) / 2),
+    y: Math.round(Math.min(Math.max(anchorY - height / 2, minY), maxY)),
     width,
     height,
   };

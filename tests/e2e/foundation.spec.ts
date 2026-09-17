@@ -276,7 +276,12 @@ test('creates a hidden nonactivating overlay in the primary work area', async ()
         workArea,
         expectedOverlayBounds: {
           x: workArea.x + workArea.width - width,
-          y: workArea.y + Math.round((workArea.height - height) / 2),
+          y: Math.round(
+            Math.min(
+              Math.max(workArea.y + workArea.height / 3 - height / 2, workArea.y),
+              workArea.y + workArea.height - height,
+            ),
+          ),
           width,
           height,
         },
