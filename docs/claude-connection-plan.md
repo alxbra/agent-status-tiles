@@ -12,6 +12,7 @@
 | 6 binary override | deferred | |
 | 7 evidence | [#40](https://github.com/alxbra/agent-status-tiles/pull/40): merge record and this status; the live validation record is still pending | `1dc7ad8` |
 | 3.4 follow-up: managed hooks | [#41](https://github.com/alxbra/agent-status-tiles/pull/41) | `a4feaa8` |
+| journal collection | [#42](https://github.com/alxbra/agent-status-tiles/pull/42) | `8906f06` |
 
 Still open after these merges: the live verification matrix in section 5
 (real Claude Desktop and terminal sessions, hook coexistence, restart, uninstall,
@@ -22,9 +23,8 @@ readiness check now reads the file-based managed source and reports
 `allowManagedHooksOnly`, or `strictPluginOnlyCustomization` keeps user hooks
 from running; project-level `disableAllHooks` stays undetectable by design
 (see "Hooks silenced by policy" in `docs/claude-monitor.md`). Journal garbage
-collection for ended sessions is delivered by
-[#42](https://github.com/alxbra/agent-status-tiles/pull/42) (the collection
-section of `docs/claude-monitor.md`). Development runs need
+collection for ended sessions shipped as PR #42 (the collection section of
+`docs/claude-monitor.md`). Development runs need
 `build/hook-helper/<arch>/hook-helper`, which requires a Rust toolchain;
 packaged builds carry it.
 
