@@ -61,45 +61,10 @@ const electronMocks = vi.hoisted(() => ({
   },
 }));
 
-const dockBackdrops: ReturnType<typeof createDockBackdropMock>[] = [];
-
-function createDockBackdropMock() {
-  let visible = false;
-  let destroyed = false;
-  let bounds: Bounds | undefined;
-  let closedListener: (() => void) | undefined;
-  return {
-    contentView: { setBackgroundColor: vi.fn() },
-    destroy: vi.fn(() => {
-      destroyed = true;
-      closedListener?.();
-    }),
-    getBounds: vi.fn(() => bounds),
-    getMediaSourceId: vi.fn(() => 'window:backdrop:0'),
-    hide: vi.fn(() => {
-      visible = false;
-    }),
-    isDestroyed: vi.fn(() => destroyed),
-    isVisible: vi.fn(() => visible),
-    on: vi.fn((event: string, listener: () => void) => {
-      if (event === 'closed') closedListener = listener;
-    }),
-    setAlwaysOnTop: vi.fn(),
-    setBounds: vi.fn((nextBounds: Bounds) => {
-      bounds = nextBounds;
-    }),
-    setIgnoreMouseEvents: vi.fn(),
-    setVisibleOnAllWorkspaces: vi.fn(),
-    showInactive: vi.fn(() => {
-      visible = true;
-    }),
-  };
-}
-
 vi.mock('electron', () => electronMocks);
 
 function createOverlayWindowMock(
-  initialBounds: Bounds = { x: 1080, y: 222, width: 360, height: 480 },
+  initialBounds: Bounds = { x: 1080, y: 76, width: 360, height: 480 },
 ): OverlayWindowMock {
   let visible = false;
   let focusable = false;
@@ -199,17 +164,6 @@ function mockOverlayWindow(window: OverlayWindowMock): void {
 describe('overlay controller', () => {
   beforeEach(() => {
     vi.resetModules();
-    dockBackdrops.length = 0;
-    electronMocks.BaseWindow.mockReset();
-    electronMocks.BaseWindow.mockImplementation(
-      class BaseWindowMock {
-        constructor() {
-          const dock = createDockBackdropMock();
-          dockBackdrops.push(dock);
-          return dock;
-        }
-      } as unknown as typeof electronMocks.BaseWindow,
-    );
     electronMocks.BrowserWindow.mockReset();
     electronMocks.app.focus.mockClear();
     electronMocks.app.hide.mockClear();
@@ -243,7 +197,7 @@ describe('overlay controller', () => {
 
     expect(options).toMatchObject({
       x: 1080,
-      y: 222,
+      y: 76,
       width: 360,
       height: 480,
       frame: false,
@@ -275,55 +229,6 @@ describe('overlay controller', () => {
     expect(overlayWindow.hide).toHaveBeenCalledOnce();
     controller.destroy();
     expect(overlayWindow.destroy).toHaveBeenCalledOnce();
-  });
-
-  it('keeps native dock blur behind the overlay and removes it with the visible cohort', async () => {
-    const overlayWindow = createOverlayWindowMock();
-    mockOverlayWindow(overlayWindow);
-    const { createOverlayController, dockBackdropWindowBounds } =
-      await import('../../src/main/overlay-controller');
-    const controller = createOverlayController();
-    expect(dockBackdropWindowBounds({ x: 1080, y: 222, width: 360, height: 480 }, [])).toBeNull();
-
-    controller.setRendererReady();
-    overlayWindow.readyListener?.();
-    controller.setQualifyingSessionCount(1);
-    expect(electronMocks.BaseWindow).not.toHaveBeenCalled();
-
-    expect(controller.setHitRegions([{ x: 331, y: 228, width: 24, height: 24 }])).toBe(true);
-    expect(electronMocks.BaseWindow).toHaveBeenCalledOnce();
-    expect(electronMocks.BaseWindow.mock.calls[0]?.[0]).toMatchObject({
-      x: 1380,
-      y: 442,
-      width: 56,
-      height: 40,
-      frame: false,
-      transparent: true,
-      roundedCorners: true,
-      focusable: false,
-      vibrancy: 'hud',
-      visualEffectState: 'active',
-    });
-    const dock = dockBackdrops[0]!;
-    expect(dock.contentView.setBackgroundColor).toHaveBeenCalledWith('#00000000');
-    expect(dock.setIgnoreMouseEvents).toHaveBeenCalledWith(true);
-    expect(dock.showInactive).toHaveBeenCalledOnce();
-    expect(overlayWindow.moveAbove).toHaveBeenCalledWith('window:backdrop:0');
-
-    expect(controller.setHitRegions([{ x: 308, y: 220, width: 40, height: 40 }])).toBe(true);
-    expect(dock.setBounds).toHaveBeenLastCalledWith(
-      { x: 1380, y: 434, width: 56, height: 56 },
-      false,
-    );
-    controller.setVisible(false);
-    expect(dock.hide).toHaveBeenCalled();
-    controller.setVisible(true);
-    expect(dock.showInactive).toHaveBeenCalledTimes(2);
-    expect(overlayWindow.moveAbove).toHaveBeenCalledTimes(2);
-    expect(controller.setHitRegions([])).toBe(true);
-    expect(dock.hide).toHaveBeenCalled();
-    controller.destroy();
-    expect(dock.destroy).toHaveBeenCalledOnce();
   });
 
   it('enters keyboard mode only through explicit requests and safely refocuses', async () => {
@@ -523,7 +428,7 @@ describe('overlay controller', () => {
     )?.[1] as (() => void) | undefined;
     resume?.();
     expect(recoveredWindow.setBounds).toHaveBeenCalledWith(
-      { x: 1080, y: 222, width: 360, height: 480 },
+      { x: 1080, y: 76, width: 360, height: 480 },
       false,
     );
 
@@ -547,7 +452,7 @@ describe('overlay controller', () => {
     const controller = createOverlayController({ preferredDisplayId: '42' });
     expect(electronMocks.BrowserWindow.mock.calls[0]?.[0]).toMatchObject({
       x: 1080,
-      y: 222,
+      y: 76,
       width: 360,
       height: 480,
     });
@@ -558,13 +463,13 @@ describe('overlay controller', () => {
     )?.[1] as (() => void) | undefined;
     onAdded?.();
     expect(overlayWindow.setBounds).toHaveBeenLastCalledWith(
-      { x: -360, y: 10, width: 360, height: 480 },
+      { x: -360, y: -140, width: 360, height: 480 },
       false,
     );
 
     controller.setPreferredDisplayId('primary');
     expect(overlayWindow.setBounds).toHaveBeenLastCalledWith(
-      { x: 1080, y: 222, width: 360, height: 480 },
+      { x: 1080, y: 76, width: 360, height: 480 },
       false,
     );
     controller.destroy();
@@ -582,6 +487,19 @@ describe('overlay controller', () => {
       y: 0,
       width: 40,
       height: 80,
+    });
+    // Centered on the upper-third line, clamped inside the work area.
+    expect(overlayBounds({ x: 0, y: 24, width: 1440, height: 876 })).toEqual({
+      x: 1080,
+      y: 76,
+      width: 360,
+      height: 480,
+    });
+    expect(overlayBounds({ x: 0, y: 0, width: 1440, height: 500 })).toEqual({
+      x: 1080,
+      y: 0,
+      width: 360,
+      height: 480,
     });
     expect(isValidOverlayHitRegion({ x: 10, y: 90, width: 24, height: 10 }, 88, 100)).toBe(true);
     expect(isValidOverlayHitRegion({ x: 10, y: 90, width: 24, height: 11 }, 88, 100)).toBe(false);
@@ -647,7 +565,7 @@ describe('overlay controller', () => {
     controller.setRendererReady();
     overlayWindow.readyListener?.();
     controller.setQualifyingSessionCount(1);
-    electronMocks.screen.getCursorScreenPoint.mockReturnValue({ x: 1092, y: 244 });
+    electronMocks.screen.getCursorScreenPoint.mockReturnValue({ x: 1092, y: 98 });
     expect(controller.setHitRegions([{ x: 10, y: 20, width: 24, height: 24 }])).toBe(true);
     expect(overlayWindow.setIgnoreMouseEvents).toHaveBeenLastCalledWith(false, undefined);
     expect(controller.setHitRegions([{ x: 40, y: 20, width: 24, height: 24 }])).toBe(true);

@@ -9,6 +9,7 @@ import {
   type KeyboardEvent,
   type PointerEvent,
   type ReactElement,
+  type Ref,
   type WheelEvent,
 } from 'react';
 
@@ -16,10 +17,16 @@ import type { SessionSnapshot } from '../../shared/session';
 import {
   DEFAULT_STRIP_HEIGHT,
   DEFAULT_STRIP_WIDTH,
-  dockBackdropBounds,
-  layoutTiles,
+  DOCK_HOVER_WIDTH,
+  DOCK_PADDING,
+  layoutTabs,
+  MAX_VISIBLE_TABS,
   normalizeStripWidth,
-  TILE_CONTENT_SIZE,
+  TAB_MOTION_MS,
+  TAB_STAGGER_MS,
+  tabHitRegion,
+  type TabLayout,
+  type TabSlot,
   type TileHitRegion,
 } from './geometry';
 import {
@@ -42,12 +49,16 @@ export interface StatusTilesProps {
   /** Monotonic signal from the native menu-bar keyboard-entry action. */
   keyboardEntryRevision?: number;
   reducedMotion?: boolean;
-  /** Tests and the future overlay controller can provide a measured viewport. */
+  /** Tests can provide a measured viewport instead of observing the root. */
   width?: number;
   height?: number;
   /** Optional visual-fixture override; the native overlay follows system appearance. */
   backgroundTone?: 'light' | 'dark';
 }
+
+const TAB_SELECTOR = '.status-tiles__tile';
+/** Long enough to cover the slide plus the last staggered tab. */
+const HIT_REGION_SETTLE_MS = TAB_MOTION_MS + TAB_STAGGER_MS * MAX_VISIBLE_TABS + 80;
 
 function usePrefersReducedMotion(): boolean {
   const [prefersReducedMotion, setPrefersReducedMotion] = useState(() => {
@@ -117,31 +128,139 @@ function focusButton(button: HTMLButtonElement | null): void {
   window.requestAnimationFrame(() => button.focus());
 }
 
-function pointIsInside(bounds: DOMRect, clientX: number, clientY: number): boolean {
+/** Rendered tab rectangles already include the slide transform. */
+function readRenderedHitRegions(root: HTMLElement, stripWidth: number): readonly TileHitRegion[] {
+  const rootBounds = root.getBoundingClientRect();
+  return [...root.querySelectorAll<HTMLButtonElement>(TAB_SELECTOR)].flatMap((tab) => {
+    const sessionId = tab.dataset.sessionId;
+    if (sessionId === undefined) return [];
+    const bounds = tab.getBoundingClientRect();
+    const region = tabHitRegion(
+      {
+        left: bounds.left - rootBounds.left,
+        top: bounds.top - rootBounds.top,
+        width: bounds.width,
+        height: bounds.height,
+      },
+      stripWidth,
+      sessionId,
+    );
+    return region === null ? [] : [region];
+  });
+}
+
+function tabUnderPoint(root: HTMLElement, clientX: number, clientY: number): string | null {
+  if (typeof document === 'undefined') return null;
+  const element = document.elementFromPoint(clientX, clientY);
+  const tab = element?.closest<HTMLElement>(TAB_SELECTOR) ?? null;
+  if (tab === null || !root.contains(tab)) return null;
+  return tab.dataset.sessionId ?? null;
+}
+
+function pointInDockZone(
+  rootBounds: DOMRect,
+  layout: TabLayout,
+  clientX: number,
+  clientY: number,
+): boolean {
+  if (layout.slots.length === 0) return false;
+  const localX = clientX - rootBounds.left;
+  const localY = clientY - rootBounds.top;
   return (
-    clientX >= bounds.left &&
-    clientX <= bounds.right &&
-    clientY >= bounds.top &&
-    clientY <= bounds.bottom
+    localX >= rootBounds.width - DOCK_HOVER_WIDTH &&
+    localX <= rootBounds.width &&
+    localY >= layout.top - DOCK_PADDING &&
+    localY <= layout.bottom + DOCK_PADDING
   );
 }
 
-function readRenderedHitRegions(root: HTMLElement): readonly TileHitRegion[] {
-  const rootBounds = root.getBoundingClientRect();
-  return [...root.querySelectorAll<HTMLButtonElement>('.status-tiles__tile')].flatMap((tile) => {
-    const sessionId = tile.dataset.sessionId;
-    if (sessionId === undefined) return [];
-    const bounds = tile.getBoundingClientRect();
-    return [
-      {
-        x: bounds.left - rootBounds.left,
-        y: bounds.top - rootBounds.top,
-        width: bounds.width,
-        height: bounds.height,
-        sessionId,
-      },
-    ];
-  });
+interface StatusTabProps {
+  session: SessionSnapshot;
+  slot: TabSlot;
+  localIndex: number;
+  extended: boolean;
+  focused: boolean;
+  tabIndex: number;
+  buttonRef: Ref<HTMLButtonElement>;
+  onFocus: () => void;
+  onPointerDown: (event: PointerEvent<HTMLButtonElement>) => void;
+  onPointerCancel: () => void;
+  onPointerEnter: () => void;
+  onPointerLeave: (event: PointerEvent<HTMLButtonElement>) => void;
+  onClick: () => void;
+  onKeyDown: (event: KeyboardEvent<HTMLButtonElement>) => void;
+  onDismiss: () => void;
+}
+
+function StatusTab({
+  session,
+  slot,
+  localIndex,
+  extended,
+  focused,
+  tabIndex,
+  buttonRef,
+  onFocus,
+  onPointerDown,
+  onPointerCancel,
+  onPointerEnter,
+  onPointerLeave,
+  onClick,
+  onKeyDown,
+  onDismiss,
+}: StatusTabProps): ReactElement {
+  const labelRef = useRef<HTMLSpanElement>(null);
+  const [isTruncated, setIsTruncated] = useState(false);
+  const title = sessionDisplayTitle(session.title, session.id);
+
+  useLayoutEffect(() => {
+    const label = labelRef.current;
+    if (label === null) return;
+    setIsTruncated(label.scrollWidth > label.clientWidth);
+  }, [title]);
+
+  const style = {
+    top: `${slot.y}px`,
+    '--status-tiles-color': STATUS_COLOR[session.status],
+    '--status-tiles-index': localIndex,
+  } as CSSProperties;
+
+  return (
+    <TileContextMenu
+      canDismiss={session.status === 'error'}
+      onDismiss={onDismiss}
+      tooltip={isTruncated ? title : null}
+    >
+      <button
+        ref={buttonRef}
+        className="status-tiles__tile"
+        style={style}
+        type="button"
+        role="option"
+        aria-selected={focused}
+        aria-label={`${title}, ${PROVIDER_LABEL[session.provider]}, ${statusLabel(session.status)}`}
+        tabIndex={tabIndex}
+        data-session-id={session.id}
+        data-provider={session.provider}
+        data-surface={session.surface}
+        data-status={session.status}
+        data-extended={extended}
+        onFocus={onFocus}
+        onPointerDown={onPointerDown}
+        onPointerCancel={onPointerCancel}
+        onPointerEnter={onPointerEnter}
+        onPointerLeave={onPointerLeave}
+        onClick={onClick}
+        onKeyDown={onKeyDown}
+      >
+        <ProviderIcon provider={session.provider} className="status-tiles__provider-icon" />
+        <span ref={labelRef} className="status-tiles__label">
+          {title}
+        </span>
+        <StatusIcon status={session.status} className="status-tiles__status-icon" />
+      </button>
+    </TileContextMenu>
+  );
 }
 
 export function StatusTiles({
@@ -152,7 +271,7 @@ export function StatusTiles({
   onKeyboardExit,
   keyboardEntryRevision,
   reducedMotion,
-  width = DEFAULT_STRIP_WIDTH,
+  width,
   height,
   backgroundTone,
 }: StatusTilesProps): ReactElement | null {
@@ -167,10 +286,15 @@ export function StatusTiles({
   const lastHitRegionsRef = useRef<string>('');
   const lastHitRegionsCallbackRef = useRef(onHitRegionsChange);
   const [measuredHeight, setMeasuredHeight] = useState(height ?? DEFAULT_STRIP_HEIGHT);
-  const [pointerY, setPointerY] = useState<number | undefined>();
+  const [measuredWidth, setMeasuredWidth] = useState(width ?? DEFAULT_STRIP_WIDTH);
+  const [dockActive, setDockActive] = useState(false);
+  const [hoveredSessionId, setHoveredSessionId] = useState<string | null>(null);
   const [scrollOffset, setScrollOffset] = useState(0);
   const [focusedIndex, setFocusedIndex] = useState<number | null>(null);
   const handledKeyboardEntryRevisionRef = useRef(0);
+  /** Focus only selects a tab after deliberate keyboard entry or arrow navigation;
+   * the hosting window can hand stray focus to the first button otherwise. */
+  const keyboardModeRef = useRef(false);
   const [isInteracting, setIsInteracting] = useState(false);
   const [displayedSessions, setDisplayedSessions] = useState<readonly SessionSnapshot[]>(() =>
     visibleTileSessions(sessions),
@@ -179,27 +303,27 @@ export function StatusTiles({
   const prefersDarkAppearance = usePrefersDarkAppearance();
   const motionReduced = prefersReducedMotion || reducedMotion === true;
   const isDark = (backgroundTone ?? (prefersDarkAppearance ? 'dark' : 'light')) === 'dark';
-  const effectiveWidth = normalizeStripWidth(width);
+  const effectiveWidth = normalizeStripWidth(width ?? measuredWidth);
   const visibleSessions = useMemo(() => visibleTileSessions(sessions), [sessions]);
   const isStripMounted = displayedSessions.length > 0 || visibleSessions.length > 0;
   visibleSessionsRef.current = visibleSessions;
 
   useLayoutEffect(() => {
-    if (height !== undefined) {
-      setMeasuredHeight(height);
-      return undefined;
-    }
+    if (height !== undefined) setMeasuredHeight(height);
+    if (width !== undefined) setMeasuredWidth(width);
+    if (height !== undefined && width !== undefined) return undefined;
     const root = rootRef.current;
     if (root === null) return undefined;
-    const updateHeight = (): void => {
-      if (root.clientHeight > 0) setMeasuredHeight(root.clientHeight);
+    const updateSize = (): void => {
+      if (height === undefined && root.clientHeight > 0) setMeasuredHeight(root.clientHeight);
+      if (width === undefined && root.clientWidth > 0) setMeasuredWidth(root.clientWidth);
     };
-    updateHeight();
+    updateSize();
     if (typeof ResizeObserver === 'undefined') return undefined;
-    const observer = new ResizeObserver(updateHeight);
+    const observer = new ResizeObserver(updateSize);
     observer.observe(root);
     return () => observer.disconnect();
-  }, [height, isStripMounted]);
+  }, [height, width, isStripMounted]);
 
   useEffect(() => {
     setDisplayedSessions((previous) => {
@@ -210,37 +334,18 @@ export function StatusTiles({
     });
   }, [isInteracting, sessions, visibleSessions]);
 
-  const baseLayout = useMemo(
+  const layout = useMemo(
     () =>
-      layoutTiles(displayedSessions, {
+      layoutTabs(displayedSessions, {
         width: effectiveWidth,
         height: measuredHeight,
         scrollOffset,
       }),
     [displayedSessions, effectiveWidth, measuredHeight, scrollOffset],
   );
-  const focusedTile =
-    focusedIndex === null
-      ? undefined
-      : baseLayout.tiles.find((tile) => tile.index === focusedIndex);
-  const effectivePointerY = pointerY ?? focusedTile?.centerY;
-  const layout = useMemo(
-    () =>
-      layoutTiles(displayedSessions, {
-        width: effectiveWidth,
-        height: measuredHeight,
-        pointer:
-          effectivePointerY === undefined
-            ? undefined
-            : { x: effectiveWidth - 1, y: effectivePointerY },
-        scrollOffset,
-      }),
-    [displayedSessions, effectivePointerY, effectiveWidth, measuredHeight, scrollOffset],
-  );
-  const backdrop = useMemo(
-    () => dockBackdropBounds(layout.hitRegions, effectiveWidth, measuredHeight),
-    [layout.hitRegions, effectiveWidth, measuredHeight],
-  );
+  const layoutRef = useRef(layout);
+  layoutRef.current = layout;
+  const active = dockActive || focusedIndex !== null;
 
   useEffect(() => {
     if (scrollOffset <= layout.maxStart) return;
@@ -256,7 +361,7 @@ export function StatusTiles({
     let frame = 0;
     const startedAt = performance.now();
     const publish = (): void => {
-      const renderedRegions = readRenderedHitRegions(root);
+      const renderedRegions = readRenderedHitRegions(root, effectiveWidth);
       const regions =
         renderedRegions.length === layout.hitRegions.length ? renderedRegions : layout.hitRegions;
       const regionsKey = JSON.stringify(regions);
@@ -266,30 +371,39 @@ export function StatusTiles({
         lastHitRegionsCallbackRef.current = onHitRegionsChange;
         onHitRegionsChange(regions);
       }
-      if (performance.now() - startedAt < 220) {
+      if (performance.now() - startedAt < HIT_REGION_SETTLE_MS) {
         frame = window.requestAnimationFrame(publish);
       }
     };
     publish();
     return () => window.cancelAnimationFrame(frame);
-  }, [layout.hitRegions, onHitRegionsChange]);
+  }, [layout, effectiveWidth, active, hoveredSessionId, focusedIndex, onHitRegionsChange]);
 
   useEffect(() => {
     const handlePointerMove = (event: globalThis.PointerEvent): void => {
       const root = rootRef.current;
       if (root === null) return;
       const bounds = root.getBoundingClientRect();
-      const inside = pointIsInside(bounds, event.clientX, event.clientY);
+      const hovered = tabUnderPoint(root, event.clientX, event.clientY);
+      const inside =
+        hovered !== null ||
+        pointInDockZone(bounds, layoutRef.current, event.clientX, event.clientY);
       if (inside) {
         if (!pointerInsideRef.current) {
           pointerInsideRef.current = true;
           beginInteractionFromRef();
         }
-        setPointerY(event.clientY - bounds.top);
+        setDockActive(true);
+        setHoveredSessionId(hovered);
       } else if (pointerInsideRef.current) {
         pointerInsideRef.current = false;
         leavePointerFromRef();
       }
+    };
+    const handlePointerExit = (): void => {
+      if (!pointerInsideRef.current) return;
+      pointerInsideRef.current = false;
+      leavePointerFromRef();
     };
     const handlePointerUp = (event: globalThis.PointerEvent): void => {
       if (capturedPointerIdRef.current !== event.pointerId) return;
@@ -302,31 +416,33 @@ export function StatusTiles({
     };
     window.addEventListener('pointermove', handlePointerMove);
     window.addEventListener('pointerup', handlePointerUp);
+    document.documentElement.addEventListener('pointerleave', handlePointerExit);
     return () => {
       window.removeEventListener('pointermove', handlePointerMove);
       window.removeEventListener('pointerup', handlePointerUp);
+      document.documentElement.removeEventListener('pointerleave', handlePointerExit);
     };
   }, []);
 
   useEffect(() => {
     if (focusedIndex === null) return;
-    const localIndex = layout.tiles.findIndex((tile) => tile.index === focusedIndex);
+    const localIndex = layout.slots.findIndex((slot) => slot.index === focusedIndex);
     if (localIndex >= 0) focusButton(tileRefs.current[localIndex]);
-  }, [focusedIndex, layout.tiles]);
+  }, [focusedIndex, layout.slots]);
 
   useEffect(() => {
     if (
       keyboardEntryRevision === undefined ||
       keyboardEntryRevision <= handledKeyboardEntryRevisionRef.current ||
-      layout.tiles.length === 0
+      layout.slots.length === 0
     ) {
       return;
     }
     handledKeyboardEntryRevisionRef.current = keyboardEntryRevision;
-    setPointerY(undefined);
+    keyboardModeRef.current = true;
     setScrollOffset(0);
     setFocusedIndex(0);
-  }, [keyboardEntryRevision, layout.tiles]);
+  }, [keyboardEntryRevision, layout.slots]);
 
   function beginInteractionFromRef(): void {
     if (interactingRef.current) return;
@@ -336,23 +452,13 @@ export function StatusTiles({
   }
 
   function leavePointerFromRef(): void {
-    setPointerY(undefined);
+    setDockActive(false);
+    setHoveredSessionId(null);
     if (focusWithinRef.current) return;
     interactingRef.current = false;
     setIsInteracting(false);
     setDisplayedSessions(visibleSessionsRef.current);
     setFocusedIndex(null);
-  }
-
-  function endInteraction(): void {
-    pointerInsideRef.current = false;
-    leavePointerFromRef();
-  }
-
-  function handlePointerMove(event: PointerEvent<HTMLDivElement>): void {
-    pointerInsideRef.current = true;
-    beginInteractionFromRef();
-    setPointerY(event.clientY - event.currentTarget.getBoundingClientRect().top);
   }
 
   function handlePointerDown(
@@ -363,6 +469,40 @@ export function StatusTiles({
     beginInteractionFromRef();
     capturedTargetRef.current = captureOpenTarget(session);
     capturedPointerIdRef.current = event.pointerId;
+  }
+
+  /** A tab can receive the pointer without a preceding move, e.g. when the
+   * overlay appears under a resting cursor, so enter/leave also drive hover. */
+  function handleTabPointerEnter(session: SessionSnapshot): void {
+    pointerInsideRef.current = true;
+    beginInteractionFromRef();
+    setDockActive(true);
+    setHoveredSessionId(session.id);
+  }
+
+  function handleTabPointerLeave(
+    event: PointerEvent<HTMLButtonElement>,
+    session: SessionSnapshot,
+  ): void {
+    setHoveredSessionId((previous) => (previous === session.id ? null : previous));
+    const root = rootRef.current;
+    const next = event.relatedTarget;
+    const stillInside =
+      root !== null &&
+      next instanceof Node &&
+      root.contains(next) &&
+      pointInDockZone(
+        root.getBoundingClientRect(),
+        layoutRef.current,
+        event.clientX,
+        event.clientY,
+      );
+    if (stillInside) return;
+    const overTab = next instanceof Element && next.closest(TAB_SELECTOR) !== null;
+    if (overTab) return;
+    // The cursor left the window or jumped far away; fold everything back.
+    pointerInsideRef.current = false;
+    leavePointerFromRef();
   }
 
   function handleOpen(session: SessionSnapshot): void {
@@ -379,6 +519,7 @@ export function StatusTiles({
   function handleKeyboard(event: KeyboardEvent<HTMLDivElement>): void {
     if (event.key === 'Escape') {
       event.preventDefault();
+      keyboardModeRef.current = false;
       if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
       onKeyboardExit();
       return;
@@ -386,8 +527,8 @@ export function StatusTiles({
     if (displayedSessions.length === 0) return;
     if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return;
     event.preventDefault();
+    keyboardModeRef.current = true;
     beginInteractionFromRef();
-    setPointerY(undefined);
     const current = focusedIndex ?? layout.visibleStart;
     const next =
       event.key === 'ArrowDown'
@@ -419,60 +560,48 @@ export function StatusTiles({
 
   function handleBlur(event: FocusEvent<HTMLDivElement>): void {
     const nextTarget = event.relatedTarget;
-    focusWithinRef.current = nextTarget instanceof Node && event.currentTarget.contains(nextTarget);
+    focusWithinRef.current =
+      keyboardModeRef.current &&
+      nextTarget instanceof Node &&
+      event.currentTarget.contains(nextTarget);
+    if (!focusWithinRef.current) keyboardModeRef.current = false;
     if (!focusWithinRef.current && !pointerInsideRef.current) leavePointerFromRef();
   }
 
   if (!isStripMounted) return null;
 
-  const rootStyle = { width: `${effectiveWidth}px` } satisfies CSSProperties;
-  const backdropStyle = backdrop
-    ? ({
-        left: `${backdrop.x}px`,
-        top: `${backdrop.y}px`,
-        width: `${backdrop.width}px`,
-        height: `${backdrop.height}px`,
-      } satisfies CSSProperties)
-    : undefined;
-  const previousIndicatorStyle = backdrop
-    ? ({ top: `${Math.max(0, backdrop.y - 14)}px` } satisfies CSSProperties)
-    : undefined;
-  const nextIndicatorStyle = backdrop
-    ? ({
-        top: `${Math.min(Math.max(0, (Number.isFinite(measuredHeight) ? measuredHeight : DEFAULT_STRIP_HEIGHT) - 10), backdrop.y + backdrop.height + 6)}px`,
-      } satisfies CSSProperties)
-    : undefined;
+  const className = [
+    'status-tiles',
+    motionReduced ? 'status-tiles--reduced-motion' : '',
+    isDark ? 'status-tiles--dark' : '',
+    active ? 'status-tiles--active' : '',
+  ]
+    .filter(Boolean)
+    .join(' ');
+  const previousIndicatorStyle = {
+    top: `${Math.max(0, layout.top - 12)}px`,
+  } satisfies CSSProperties;
+  const nextIndicatorStyle = {
+    top: `${Math.min(Math.max(0, measuredHeight - 10), layout.bottom + 4)}px`,
+  } satisfies CSSProperties;
+
   return (
     <div
       ref={rootRef}
-      className={`status-tiles${motionReduced ? ' status-tiles--reduced-motion' : ''}${isDark ? ' status-tiles--dark' : ''}`}
-      style={rootStyle}
+      className={className}
       role="listbox"
       aria-label="Agent status sessions"
       tabIndex={-1}
+      data-active={active}
       onKeyDown={handleKeyboard}
-      onPointerEnter={() => {
-        pointerInsideRef.current = true;
-        beginInteractionFromRef();
-      }}
-      onPointerMove={handlePointerMove}
-      onPointerLeave={(event) => {
-        if (
-          !pointIsInside(event.currentTarget.getBoundingClientRect(), event.clientX, event.clientY)
-        ) {
-          endInteraction();
-        }
-      }}
       onFocusCapture={() => {
+        if (!keyboardModeRef.current) return;
         focusWithinRef.current = true;
         beginInteractionFromRef();
       }}
       onBlurCapture={handleBlur}
       onWheel={handleWheel}
     >
-      {backdropStyle ? (
-        <div className="status-tiles__backdrop" style={backdropStyle} aria-hidden="true" />
-      ) : null}
       {layout.hasPrevious ? (
         <span
           className="status-tiles__indicator status-tiles__indicator--previous"
@@ -482,49 +611,25 @@ export function StatusTiles({
           ▲
         </span>
       ) : null}
-      {layout.tiles.map((tile, localIndex) => {
-        const session = displayedSessions[tile.index];
+      {layout.slots.map((slot, localIndex) => {
+        const session = displayedSessions[slot.index];
         if (session === undefined) return null;
-        const title = sessionDisplayTitle(session.title, session.id);
-        const expanded = tile.size >= TILE_CONTENT_SIZE;
-        const targetStyle = {
-          left: `${tile.hitRegion.x}px`,
-          top: `${tile.hitRegion.y}px`,
-          width: `${tile.hitRegion.width}px`,
-          height: `${tile.hitRegion.height}px`,
-        } satisfies CSSProperties;
-        const surfaceStyle = {
-          width: `${tile.size}px`,
-          height: `${tile.size}px`,
-          borderRadius: `${tile.radius}px`,
-          backgroundColor: STATUS_COLOR[session.status],
-        } satisfies CSSProperties;
-        const button = (
-          <button
-            ref={(buttonElement) => {
+        const focused = focusedIndex === slot.index;
+        return (
+          <StatusTab
+            key={session.id}
+            session={session}
+            slot={slot}
+            localIndex={localIndex}
+            extended={focused || hoveredSessionId === session.id}
+            focused={focused}
+            tabIndex={focusedIndex === null ? (localIndex === 0 ? 0 : -1) : focused ? 0 : -1}
+            buttonRef={(buttonElement) => {
               tileRefs.current[localIndex] = buttonElement;
             }}
-            className="status-tiles__tile"
-            style={targetStyle}
-            type="button"
-            role="option"
-            aria-selected={focusedIndex === tile.index}
-            aria-label={`${title}, ${PROVIDER_LABEL[session.provider]}, ${statusLabel(session.status)}`}
-            tabIndex={
-              focusedIndex === null
-                ? localIndex === 0
-                  ? 0
-                  : -1
-                : focusedIndex === tile.index
-                  ? 0
-                  : -1
-            }
-            data-session-id={session.id}
-            data-provider={session.provider}
-            data-status={session.status}
-            data-expanded={expanded}
             onFocus={() => {
-              setFocusedIndex(tile.index);
+              if (!keyboardModeRef.current) return;
+              setFocusedIndex(slot.index);
               focusWithinRef.current = true;
               beginInteractionFromRef();
             }}
@@ -533,30 +638,18 @@ export function StatusTiles({
               capturedTargetRef.current = null;
               capturedPointerIdRef.current = null;
             }}
+            onPointerEnter={() => handleTabPointerEnter(session)}
+            onPointerLeave={(event) => handleTabPointerLeave(event, session)}
             onClick={() => handleOpen(session)}
             onKeyDown={(event) => {
               if (event.key === 'Enter' || event.key === ' ') {
                 capturedTargetRef.current = captureOpenTarget(session);
               }
             }}
-          >
-            <span className="status-tiles__tile-surface" style={surfaceStyle} aria-hidden="true">
-              <ProviderIcon provider={session.provider} className="status-tiles__provider-icon" />
-              <StatusIcon status={session.status} className="status-tiles__status-icon" />
-            </span>
-          </button>
-        );
-        return (
-          <TileContextMenu
-            key={session.id}
-            canDismiss={session.status === 'error'}
             onDismiss={() =>
               void Promise.resolve(onDismissError(session.id)).catch(() => undefined)
             }
-            tooltip={title}
-          >
-            {button}
-          </TileContextMenu>
+          />
         );
       })}
       {layout.hasNext ? (

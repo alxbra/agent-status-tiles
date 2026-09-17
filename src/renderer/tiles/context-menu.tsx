@@ -13,7 +13,8 @@ interface TileContextMenuProps {
   children: ReactElement;
   canDismiss: boolean;
   onDismiss: () => void;
-  tooltip: string;
+  /** Full title shown only when the tab label had to truncate it. */
+  tooltip: string | null;
 }
 
 /** Composes only the generated shadcn primitives; tiles supply the behavior. */
@@ -31,28 +32,33 @@ export function TileContextMenu({
     return () => window.removeEventListener(DISMISS_TILE_PORTALS_EVENT, dismiss);
   }, []);
 
+  const menu = (trigger: ReactElement): ReactElement => (
+    <ContextMenu open={isContextMenuOpen} onOpenChange={setIsContextMenuOpen}>
+      <ContextMenuTrigger asChild>{trigger}</ContextMenuTrigger>
+      <ContextMenuContent>
+        <ContextMenuItem
+          disabled={!canDismiss}
+          onSelect={() => {
+            if (canDismiss) onDismiss();
+          }}
+        >
+          Dismiss error
+        </ContextMenuItem>
+      </ContextMenuContent>
+    </ContextMenu>
+  );
+
+  if (tooltip === null) return menu(children);
+
   return (
     <TooltipProvider delayDuration={350}>
       <Tooltip>
-        <ContextMenu open={isContextMenuOpen} onOpenChange={setIsContextMenuOpen}>
-          <TooltipTrigger asChild>
-            <ContextMenuTrigger asChild>{children}</ContextMenuTrigger>
-          </TooltipTrigger>
-          <ContextMenuContent>
-            <ContextMenuItem
-              disabled={!canDismiss}
-              onSelect={() => {
-                if (canDismiss) onDismiss();
-              }}
-            >
-              Dismiss error
-            </ContextMenuItem>
-          </ContextMenuContent>
-        </ContextMenu>
+        {menu(<TooltipTrigger asChild>{children}</TooltipTrigger>)}
         <TooltipContent
           collisionPadding={8}
-          side="left"
-          sideOffset={8}
+          side="bottom"
+          align="end"
+          sideOffset={6}
           className="status-tiles__tooltip whitespace-nowrap"
         >
           {tooltip}

@@ -17,7 +17,7 @@ The first publishable release targets macOS and supports:
 
 Each eligible top-level thread or task gets one tile. The dock shows the five most recently updated items across connected harnesses by default, configurable from one to ten. Spawned subagents remain represented by their parent.
 
-The main interface is a vertical row of tiny colored rounded-square tiles on the right desktop edge. Hovering produces macOS Dock-style magnification. Expanded tiles display the AI lab icon and a status icon. Clicking foregrounds the owning harness and selects the specific session where supported.
+The main interface is a vertical stack of document-style tabs folded into the right desktop edge, one per session, colored by status. Moving the pointer to the edge slides every tab out far enough to show its AI lab icon; hovering one tab slides it fully out to show the lab icon, the thread name, and a status icon. Clicking foregrounds the owning harness and selects the specific session where supported. The user authorized this tab dock on 2026-09-17, replacing the earlier rounded-square tiles and Dock-style magnification; the approved mockup is `docs/mockups/tab-dock.html`.
 
 ### Fixed scope
 
@@ -77,78 +77,63 @@ Use `#111315` for dark glyphs over filled status backgrounds.
 
 Idle is visible when its item is within the recent limit. Unavailable status is distinct from idle and is used when a previously observed item can no longer be observed reliably.
 
-### 2.2 Collapsed strip
+### 2.2 Folded tab dock
 
-- Default tile size: **10 × 10 CSS pixels**, with a **3 CSS pixel corner radius**.
-- Tiles must remain visibly square with rounded corners, never circular or pill-shaped.
-- Default tile-center spacing: **24 CSS pixels**.
-- Tile column sits **12 CSS pixels from the display’s usable right edge**.
-- Vertically center the strip within the display work area.
-- Collapsed tiles contain color only: no logos, numbers, text, borders, or status glyphs.
-- A non-interactive, translucent macOS-style blurred backdrop with rounded corners sits behind the visible tile cohort. On macOS, a separate native vibrancy surface supplies desktop blur beneath the transparent tile overlay. It must not change tile geometry or expand native hit regions; the user explicitly authorized this after PR #25.
-- No permanently visible title, toolbar, legend, or settings button.
-- Each tile has a **24 × 24 pixel hit target**.
-- Transparent space outside interactive targets passes mouse events to applications underneath.
-- If no sessions qualify, hide the strip completely. The menu-bar icon remains available.
+- Each session is one document-style tab: **28 CSS px tall**, **4 CSS px** apart, with an **8 CSS px radius** on the left corners and a square right edge that tucks into the display's usable right edge.
+- Tabs are filled with the status color and stacked with the stack's center on the upper-third line of the display work area (one third of the way down), clamped inside it.
+- Folded tabs show only a **12 CSS px** colored sliver: no logos, text, or status glyphs. A folded working tab may breathe with a soft highlight.
+- Each folded tab keeps a **24 px wide** native hit target; transparent space outside interactive targets passes mouse events to applications underneath.
+- No permanently visible title, toolbar, legend, or settings button, and no frosted backdrop or native vibrancy window behind the tabs.
+- If no sessions qualify, hide the dock completely. The menu-bar icon remains available.
 
-### 2.3 Dock magnification
+### 2.3 Tab reveal
 
-Use smooth, distance-based magnification:
+Reveal is a single horizontal slide driven by one transform transition:
 
-- Hovered tile grows to **40 × 40 pixels**.
-- Adjacent tiles grow progressively less.
-- Tiles outside a two-slot influence radius remain 10 × 10 pixel rounded squares.
-- Expanded surfaces use an **8 CSS pixel corner radius** and the existing status color. Interpolate the radius from 3 to 8 pixels during magnification while preserving the rounded-square silhouette.
-- Maintain at least 6 pixels between visible surfaces.
-- Expansion grows inward from the right edge and must remain inside the work area.
-- The layout must not oscillate because magnification changes the pointer’s target.
-- Use stable, unmagnified slot coordinates to calculate pointer influence.
-- Animate expansion and collapse over approximately **160 ms**.
-- Keep the right edge anchored throughout animation.
-- The backdrop follows the visible tile cohort with neutral light/dark material, without labels or controls. Its empty and corner areas remain click-through.
+- Pointer within **48 px** of the right edge, beside the stack: every tab slides out to **34 px**, exactly the lab icon plus its gutter. The title starts at the fold, so no text peeks.
+- Pointer over one tab, or keyboard focus on it: that tab slides fully out; the others stay at the icon depth.
+- Slide duration **140 ms** with an ease-out curve and an **8 ms** per-tab stagger on dock hover; the hovered or focused tab never waits.
+- The right edge stays anchored throughout; fully extended tabs must remain inside the overlay window.
 
-An expanded tile shows:
+An extended tab shows, in order:
 
 - One lab icon: OpenAI or Anthropic.
-- One status icon.
+- The session title, truncated with an ellipsis at **220 px**.
+- One lucide status icon.
 - Nothing else.
 
-Fade icons in only when the tile is large enough to render them clearly. Use a single-line stock tooltip for the task title. For Codex, use a validated catalog `name`, falling back to the project folder name. The user authorized storing this bounded name locally; never derive a title from `preview`, a transcript, or a rollout payload.
+Show the stock single-line tooltip only when the title had to truncate. For Codex, use a validated catalog `name`, falling back to the project folder name. The user authorized storing this bounded name locally; never derive a title from `preview`, a transcript, or a rollout payload.
 
 Keep titles out of logs and diagnostics.
 
 #### Interaction mockup
 
 ```text
-Collapsed                         Hovering
+Folded            Dock hovered         One tab hovered
 
-                              ▪
-                              ▣
-          ▪          ╭──────────────╮
-          ▪          │  lab   state │
-          ▪          ╰──────────────╯
-          ▪                   ▣
-                              ▪
-             │ desktop edge                │ desktop edge
+            ▌               ╭─ A▌                ╭─ A▌
+            ▌               ╭─ ⊙▌      ╭─ ⊙ Overlay hit-region clipping ?▌
+            ▌               ╭─ A▌                ╭─ A▌
+   desktop edge │      desktop edge │                    desktop edge │
 ```
 
-The labels above explain the mockup; they must not appear inside actual tiles. Square symbols represent rounded-square tiles; implement their exact geometry using the dimensions above. Circular status glyphs may appear inside expanded tiles, but the tile surfaces themselves must remain rounded squares.
+The labels above explain the mockup; they must not appear inside actual tabs beyond the lab icon, title, and status icon. The interactive mockup in `docs/mockups/tab-dock.html` is the visual reference.
 
 ### 2.4 Ordering, overflow, and removal
 
 - Sort eligible items by confirmed provider update or task activity, newest first, with a stable ID tie-break. Local acknowledgement and error dismissal do not change recency.
 - Apply the global Recent threads limit (default five, range one to ten) across connected harnesses, including idle items.
-- Freeze ordering and automatic removals while the pointer is inside the strip.
+- Freeze ordering and automatic removals while the pointer is inside the dock.
 - Apply pending list changes after pointer exit.
 - Bind clicks to the session ID captured on pointer-down.
-- Show at most 12 collapsed slots, further limited by available display height.
+- Show at most 12 tabs, further limited by available display height.
 - Allow scrolling through overflow while hovering.
 - Show a small directional indicator only when additional sessions exist outside the viewport.
 - Items outside the configured recent limit remain in local state and return when they become recent enough.
 - Successful opening acknowledges the completion that was visible when clicked.
 - A newer completion arriving during navigation must remain unread.
 - Failed navigation must not acknowledge completion.
-- Errors remain until a new turn or explicit dismissal through the tile’s context menu.
+- Errors remain until a new turn or explicit dismissal through the tab’s context menu.
 - Dismissal affects only the companion’s display, never the underlying task.
 
 ### 2.5 Settings
@@ -196,9 +181,9 @@ Rules:
 - Hover must not activate the app or steal keyboard focus.
 - Support keyboard entry through the menu-bar action, arrow navigation, Enter to open, and Escape to close.
 - Screen-reader names include session, provider, and status.
-- Keyboard focus expands the selected tile.
+- Keyboard focus slides the selected tab fully out.
 - Respect system reduced-motion settings; allow explicitly enabling reduced motion.
-- Reduced motion disables working animation and animated magnification.
+- Reduced motion disables the working animation and the animated slide.
 - Tooltips must remain within the selected display.
 - Display disconnection moves the strip to the primary display; reconnecting restores the selected display.
 - Sleep/wake must restore monitoring and placement.
@@ -772,10 +757,9 @@ Record corrections made after review and the commit used for final validation.
 ### Final acceptance checklist
 
 - [ ] All four local harness surfaces have live validation evidence.
-- [ ] Collapsed tiles are 10 × 10 pixel rounded squares with 3 pixel corner radii and contain only color.
-- [ ] Tile surfaces remain rounded squares throughout magnification; no circular or pill-shaped tile surfaces appear.
-- [ ] Dock magnification is stable and matches the specified geometry.
-- [ ] Expanded tiles contain only lab and status icons.
+- [ ] Folded tabs show only a 12 pixel colored sliver of a 28 pixel tall, 8 pixel radius tab.
+- [ ] Dock hover reveals exactly the lab icon (34 pixels); hovering or focusing one tab slides it fully out within 140 ms.
+- [ ] Extended tabs contain only the lab icon, the session title, and one lucide status icon.
 - [ ] Settings use stock shadcn without redundant copy.
 - [ ] The configured number of recent eligible items appears, including idle and acknowledged items.
 - [ ] Clicks foreground the correct owning app.

@@ -276,7 +276,12 @@ test('creates a hidden nonactivating overlay in the primary work area', async ()
         workArea,
         expectedOverlayBounds: {
           x: workArea.x + workArea.width - width,
-          y: workArea.y + Math.round((workArea.height - height) / 2),
+          y: Math.round(
+            Math.min(
+              Math.max(workArea.y + workArea.height / 3 - height / 2, workArea.y),
+              workArea.y + workArea.height - height,
+            ),
+          ),
           width,
           height,
         },
@@ -598,7 +603,36 @@ for (const testSessionCount of [0, 1, 12, 30]) {
       await expect(tiles).toHaveCount(Math.min(testSessionCount, 12));
       if (testSessionCount === 0) {
         await expect(page.locator('.status-tiles')).toHaveCount(0);
-        await expect(page.locator('.status-tiles__backdrop')).toHaveCount(0);
+      } else {
+        await expect(page.getByRole('listbox', { name: 'Agent status sessions' })).toBeVisible();
+        // Tabs fold into the right edge: only a 12px colored sliver stays on screen.
+        // The real cursor may rest on the native overlay, which legitimately
+        // reveals the icon depth (34px) or the whole hovered tab.
+        const firstTab = page.locator('.status-tiles__tile').first();
+        await expect
+          .poll(async () => {
+            const box = await firstTab.boundingBox();
+            if (box === null) return 'missing';
+            const width = await page.evaluate(() => window.innerWidth);
+            const visible = Math.round(width - box.x);
+            if (visible === 12) return 'folded';
+            const cursor = await application!.evaluate(({ BrowserWindow, screen }) => {
+              const overlay = BrowserWindow.getAllWindows().find((window) =>
+                window.webContents.getURL().includes('/renderer/overlay.html'),
+              );
+              const bounds = overlay?.getBounds();
+              const point = screen.getCursorScreenPoint();
+              return bounds === undefined
+                ? false
+                : point.x >= bounds.x &&
+                    point.x < bounds.x + bounds.width &&
+                    point.y >= bounds.y &&
+                    point.y < bounds.y + bounds.height;
+            });
+            const revealed = visible === 34 || visible === Math.round(box.width);
+            return cursor && revealed ? 'revealed-under-cursor' : `unexpected:${String(visible)}`;
+          })
+          .toMatch(/^(?:folded|revealed-under-cursor)$/u);
         expect(
           await application.evaluate(
             ({ BaseWindow }) =>
@@ -607,29 +641,6 @@ for (const testSessionCount of [0, 1, 12, 30]) {
               ).length,
           ),
         ).toBe(0);
-      } else {
-        await expect(page.getByRole('listbox', { name: 'Agent status sessions' })).toBeVisible();
-        const backdrop = page.locator('.status-tiles__backdrop');
-        await expect(backdrop).toHaveCount(1);
-        await expect(backdrop).toHaveCSS('pointer-events', 'none');
-        await expect(backdrop).toHaveCSS('backdrop-filter', /blur\(20px\)/u);
-        await expect
-          .poll(() =>
-            application!.evaluate(({ BaseWindow }) => {
-              const dock = BaseWindow.getAllWindows().find(
-                (window) => window.getTitle() === 'Agent Status Tiles Dock Backdrop',
-              );
-              return dock
-                ? {
-                    visible: dock.isVisible(),
-                    focusable: dock.isFocusable(),
-                    alwaysOnTop: dock.isAlwaysOnTop(),
-                    width: dock.getBounds().width,
-                  }
-                : null;
-            }),
-          )
-          .toMatchObject({ visible: true, focusable: false, alwaysOnTop: true, width: 56 });
         await expect(page.getByRole('option').first()).toHaveAttribute(
           'aria-label',
           /Test session 1/u,
@@ -660,19 +671,26 @@ for (const testSessionCount of [1, 12]) {
       await expect(page.locator('.status-tiles__tile')).toHaveCount(testSessionCount);
 
       const firstTile = page.locator('.status-tiles__tile').first();
-      await firstTile.hover();
-      const tooltip = page.locator('[data-slot="tooltip-content"]');
-      await expect(tooltip).toBeVisible();
-      const tooltipBounds = await tooltip.boundingBox();
       const viewport = await page.evaluate(() => ({
         width: window.innerWidth,
         height: window.innerHeight,
       }));
-      if (tooltipBounds === null) throw new Error('Tooltip has no bounds');
-      expect(tooltipBounds.x).toBeGreaterThanOrEqual(0);
-      expect(tooltipBounds.y).toBeGreaterThanOrEqual(0);
-      expect(tooltipBounds.x + tooltipBounds.width).toBeLessThanOrEqual(viewport.width);
-      expect(tooltipBounds.y + tooltipBounds.height).toBeLessThanOrEqual(viewport.height);
+      const foldedBox = await firstTile.boundingBox();
+      if (foldedBox === null) throw new Error('First tab has no bounds');
+      // Hover the visible sliver; the tab then slides fully into the window.
+      await page.mouse.move(viewport.width - 6, foldedBox.y + foldedBox.height / 2);
+      await expect(firstTile).toHaveAttribute('data-extended', 'true');
+      await expect
+        .poll(async () => {
+          const box = await firstTile.boundingBox();
+          return box === null ? null : Math.round((box.x + box.width - viewport.width) * 10) / 10;
+        })
+        .toBe(0);
+      const extendedBox = await firstTile.boundingBox();
+      if (extendedBox === null) throw new Error('Extended tab has no bounds');
+      expect(extendedBox.x).toBeGreaterThanOrEqual(0);
+      // Short titles fit on the tab, so no tooltip portal is needed.
+      await expect(page.locator('[data-slot="tooltip-content"]')).toHaveCount(0);
 
       await firstTile.click({ button: 'right' });
       const contextMenu = page.locator('[data-slot="context-menu-content"]');
