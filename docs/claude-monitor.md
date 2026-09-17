@@ -46,10 +46,17 @@ that aged off the page, an ended Claude session only returns if it is resumed
 into the same session ID. A session killed without `SessionEnd` keeps its last
 state until it ages out of the window, because silence is never interpreted.
 
-Sources use the journal hash as their ID and cursor key, the project folder
-name as the title (a short session ID when none was recorded), the journal's
+Sources use the journal hash as their ID and cursor key, the journal's
 modification time as `updatedAt`, and the active file size as the baseline
-cutoff. Titles never come from prompt content.
+cutoff. The title is Claude's own session name when one is known, else the
+project folder name, else a short session ID. Claude Code keeps one small
+JSON file per running process under its configuration directory's `sessions`
+folder with the session ID and the name its Desktop sidebar shows;
+`ClaudeSessionNames` reads only those two fields, bounded and validated, as
+best-effort display enrichment. This registry is observed rather than
+documented behaviour, so a missing or unreadable file simply means the folder
+name is used. The companion never derives a title from content itself; the
+name shown is the one the harness chose, as with Codex thread names.
 
 ## Replay
 
@@ -87,7 +94,11 @@ shared reducer, per session and in journal order. Claude hooks carry no turn
 identifier, so a turn is keyed by the receipt time of the `UserPromptSubmit`
 that started it and every later record of the session attaches to the newest
 turn; the persisted record's active turn and open requests seed the state at
-the start of each read.
+the start of each read. A session first seen mid-turn (hooks installed while
+it was already working, or a journal that begins after the prompt) has no
+start record, so any work, wait, or stop record with no open turn opens one
+at that moment; a session that is idle when the hooks arrive stays hidden
+until its next prompt.
 
 | Journal record | Lifecycle event |
 | --- | --- |
@@ -97,7 +108,7 @@ the start of each read.
 | `ElicitationResult`, `Notification` `elicitation_complete` / `elicitation_response` | `input-resolved` |
 | other `PreToolUse`, `PostToolUseFailure` | resolves everything open, then `activity` |
 | `Stop` with neither `stop_hook_active` nor `is_subagent` | `turn-completed` with a deterministic completion ID |
-| `Stop` from a subagent or while another stop hook continues the turn, or before any turn | `activity` |
+| `Stop` from a subagent or while another stop hook continues the turn | `activity` |
 | `StopFailure` | `turn-failed` |
 | `SessionStart`, `SessionEnd`, other notifications | nothing (`SessionEnd` acts through discovery) |
 

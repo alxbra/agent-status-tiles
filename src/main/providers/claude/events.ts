@@ -21,6 +21,8 @@ interface TurnState {
   openRequests: Set<string>;
   /** Requests issued in this turn, resolved ones included; bounded by persistence. */
   issued: number;
+  /** A turn has been observed or persisted; later stray records never open another. */
+  sawTurn: boolean;
 }
 
 function seedState(record: SessionRecord | undefined): TurnState {
@@ -33,7 +35,12 @@ function seedState(record: SessionRecord | undefined): TurnState {
       if (request.resolvedAt === undefined) openRequests.add(callId);
     }
   }
-  return { turnId: record?.activeTurnId, openRequests, issued };
+  return {
+    turnId: record?.activeTurnId,
+    openRequests,
+    issued,
+    sawTurn: record !== undefined && record.lastTurnStartedAt > 0,
+  };
 }
 
 /**
@@ -128,11 +135,31 @@ export function normalizeClaudeEvents(
       }
     };
 
+    // A session observed mid-turn (hooks installed while it was already
+    // working, or a journal that begins after the prompt) has no start
+    // record. Its first work, wait, or stop proves a turn is in progress, so
+    // one is opened at that moment. Once any turn has been seen, a stray
+    // record after a completion or failure is plain activity again.
+    if (
+      current.turnId === undefined &&
+      !current.sawTurn &&
+      event.eventName !== 'UserPromptSubmit' &&
+      event.eventName !== 'SessionStart' &&
+      event.eventName !== 'SessionEnd'
+    ) {
+      current.turnId = `turn:${timestamp}`;
+      current.openRequests.clear();
+      current.issued = 0;
+      current.sawTurn = true;
+      output.push({ type: 'turn-started', sessionId, turnId: current.turnId, timestamp });
+    }
+
     switch (event.eventName) {
       case 'UserPromptSubmit': {
         current.turnId = `turn:${timestamp}`;
         current.openRequests.clear();
         current.issued = 0;
+        current.sawTurn = true;
         output.push({ type: 'turn-started', sessionId, turnId: current.turnId, timestamp });
         break;
       }

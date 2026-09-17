@@ -339,8 +339,9 @@ describe('claude surface monitor', () => {
     }
     expect(passes).toBeGreaterThan(1);
     expect(result.exhaustedSourceIds).toEqual([sources[0]!.id]);
-    // One activity before any turn; per turn a start, three events per pair, and a completion.
-    expect(total).toBe(1 + turns * (2 + pairsPerTurn * 3));
+    // The leading record infers a turn (start plus activity); per turn a start,
+    // three events per pair, and a completion.
+    expect(total).toBe(2 + turns * (2 + pairsPerTurn * 3));
     expect(state.sessions['claude:busy']!.status).toBe('unread');
   });
 
@@ -423,5 +424,41 @@ describe('claude surface monitor', () => {
     await expect(monitor.start()).rejects.toThrow('hooks-disabled');
     monitor.stop();
     expect(monitor.lastIssue).toBeUndefined();
+  });
+
+  it("titles a source from Claude's own session name when one is known", async () => {
+    const monitor = new ClaudeDesktopMonitor({
+      appDataPath: '/unused',
+      discovery: {
+        list: async () => [
+          {
+            baseName: 'b1',
+            nativeSessionId: 'named',
+            projectName: 'worktree-slug',
+            surface: 'desktop',
+            ended: false,
+            updatedAt: 2,
+            endOffset: 1,
+          },
+          {
+            baseName: 'b2',
+            nativeSessionId: 'unnamed',
+            projectName: 'project',
+            surface: 'desktop',
+            ended: false,
+            updatedAt: 1,
+            endOffset: 1,
+          },
+        ],
+        truncated: false,
+      },
+      reader: { read: async () => ({ events: [], cursors: {}, diagnostics: [] }) },
+      sessionNames: { lookup: async () => new Map([['named', 'Add journal garbage collection']]) },
+    });
+    monitor.start();
+    expect((await monitor.discover()).sources.map((source) => source.title)).toEqual([
+      'Add journal garbage collection',
+      'project',
+    ]);
   });
 });

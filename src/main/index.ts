@@ -57,6 +57,7 @@ import {
 import { CodexCliMonitor, type CodexCliMonitorOptions } from './providers/codex/cli-monitor';
 import { ClaudeCliMonitor, ClaudeDesktopMonitor } from './providers/claude/surface-monitor';
 import { ClaudeJournalDiscovery } from './providers/claude/journal-discovery';
+import { ClaudeSessionNames } from './providers/claude/session-names';
 
 const hasSingleInstanceLock = app.requestSingleInstanceLock();
 const TEST_KEYBOARD_ENTRY_HOOK = Symbol.for('agent-status-tiles.test.keyboard-entry');
@@ -331,14 +332,22 @@ if (!hasSingleInstanceLock) {
             });
             return readinessInFlight;
           };
+    // Test runs point at an explicit configuration directory; a seeded-journal
+    // test has none, so titles fall back to project names there.
+    const claudeSessionNames =
+      claude === undefined && isTestRuntime()
+        ? undefined
+        : new ClaudeSessionNames({ configDirectory: claude?.configDirectory });
     const claudeDesktopMonitor = new ClaudeDesktopMonitor({
       appDataPath: app.getPath('userData'),
       discovery: claudeJournals,
+      ...(claudeSessionNames === undefined ? {} : { sessionNames: claudeSessionNames }),
       ...(checkClaudeReadiness === undefined ? {} : { checkReadiness: checkClaudeReadiness }),
     });
     const claudeCliMonitor = new ClaudeCliMonitor({
       appDataPath: app.getPath('userData'),
       discovery: claudeJournals,
+      ...(claudeSessionNames === undefined ? {} : { sessionNames: claudeSessionNames }),
       ...(checkClaudeReadiness === undefined ? {} : { checkReadiness: checkClaudeReadiness }),
     });
     providerSetups =
