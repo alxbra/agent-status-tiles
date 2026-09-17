@@ -181,4 +181,87 @@ describe('claude event normalization', () => {
       expect.objectContaining({ type: 'turn-completed', turnId: 'turn:1' }),
     ]);
   });
+
+  it('keeps waiting for a subagent permission, separates interleaved sessions, and ignores tombstones', () => {
+    expect(
+      statusAfter([
+        journal('UserPromptSubmit'),
+        journal('PermissionRequest', { toolCallId: 'sub-1', isSubagent: true }),
+      ]),
+    ).toEqual(['turn-started:working', 'input-requested:needs-input']);
+
+    const interleaved = normalizeClaudeEvents(
+      [
+        journal('UserPromptSubmit'),
+        journal('UserPromptSubmit', { sessionId: 'native-2' }),
+        journal('Stop', { sessionId: 'native-2' }),
+        journal('Stop'),
+      ],
+      {},
+    );
+    expect(interleaved.map((event) => `${event.type}@${event.sessionId}`)).toEqual([
+      'turn-started@claude:native-1',
+      'turn-started@claude:native-2',
+      'turn-completed@claude:native-2',
+      'turn-completed@claude:native-1',
+    ]);
+
+    const settled = reduceSessionState(
+      reduceSessionState(
+        reduceSessionState(
+          reduceSessionState(createInitialSessionState(), {
+            type: 'upsert',
+            provider: 'claude',
+            nativeSessionId: 'native-1',
+            surface: 'cli',
+            title: 'project',
+            isTopLevel: true,
+            isArchived: false,
+            canOpen: false,
+            updatedAt: 1,
+          }),
+          { type: 'turn-started', sessionId, turnId: 'turn:1', timestamp: 10 },
+        ),
+        { type: 'input-requested', sessionId, turnId: 'turn:1', callId: 'done', timestamp: 11 },
+      ),
+      { type: 'input-resolved', sessionId, turnId: 'turn:1', callId: 'done', timestamp: 12 },
+    );
+    const late = normalizeClaudeEvents(
+      [journal('PostToolUse', { toolCallId: 'done' }), journal('Stop')],
+      settled.sessions,
+    );
+    expect(late.map((event) => event.type)).toEqual(['activity', 'turn-completed']);
+  });
+
+  it('treats a stop after a failure as activity and pins the parallel-batch resolution', () => {
+    expect(
+      normalizeClaudeEvents(
+        [journal('UserPromptSubmit'), journal('StopFailure'), journal('Stop')],
+        {},
+      ).map((event) => event.type),
+    ).toEqual(['turn-started', 'turn-failed', 'activity']);
+
+    // Another tool finishing while tool A's permission is open counts as the
+    // user acting, so A's wait resolves; the prompt notification would reopen it.
+    const batch = normalizeClaudeEvents(
+      [
+        journal('UserPromptSubmit'),
+        journal('PreToolUse'),
+        journal('PreToolUse'),
+        journal('PermissionRequest', { toolCallId: 'A' }),
+        journal('PostToolUse', { toolCallId: 'B' }),
+        journal('Notification', { notificationType: 'permission_prompt' }),
+      ],
+      {},
+    );
+    expect(batch.map((event) => `${event.type}:${'callId' in event ? event.callId : ''}`)).toEqual([
+      'turn-started:',
+      'activity:',
+      'activity:',
+      'input-requested:A',
+      'input-resolved:A',
+      'activity:',
+      expect.stringMatching(/^input-requested:notification:/u),
+    ]);
+  });
 });

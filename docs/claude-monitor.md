@@ -8,14 +8,19 @@ module. One `ClaudeSurfaceMonitor` runs per surface (`claude:desktop`,
 
 ## Discovery
 
-`ClaudeJournalDiscovery` lists the app's own `<userData>/journals/claude`
-directory: at most 512 entries are considered, only regular files named
-`<64 hex>.jsonl` (the active journal of one session), sorted newest first by
-modification time, and at most 64 are inspected per pass. Inspecting a journal
-reads only its first and last complete records (8 KiB at each end). The first
+One `ClaudeJournalDiscovery` instance, shared by both surface monitors, lists
+the app's own `<userData>/journals/claude` directory: regular files named
+`<64 hex>.jsonl` (the active journal of one session) are stat'ed, at most
+4,096 of them, sorted newest first by modification time, and the newest 64
+are inspected per pass. Inspecting a journal reads only its first and last
+complete records (8 KiB at each end, never following a symlink). The first
 record must carry a `session_id` whose hash is the file name, and the last
 record must belong to the same session; the file is otherwise ignored. A
-journal that has not changed size or modification time is not re-read.
+journal that has not changed size or modification time is not re-read. While
+the helper rotates a journal (the active file is briefly absent or empty next
+to a `.1` archive) the previous summary is kept, so a rotation never looks like
+an ended session. Nothing deletes old journals yet; journal garbage collection
+for ended sessions is a required follow-up before release.
 
 Each inspected journal yields display-safe facts only: the session ID, the
 project folder name from the newest record, the surface, the recognised
@@ -32,7 +37,9 @@ its own surface whose newest record is not `SessionEnd`, following the
 [PR #33 cohort contract](../MVP_PLAN.md): the page is complete, an unreported
 session is dropped by the coordinator whatever its status, and it reappears
 when its journal grows again. An ended session therefore leaves the dock on
-the next 2 s discovery; a session killed without `SessionEnd` keeps its last
+the next 2 s discovery, including one that ended unread; unlike a Codex thread
+that aged off the page, an ended Claude session only returns if it is resumed
+into the same session ID. A session killed without `SessionEnd` keeps its last
 state until it ages out of the window, because silence is never interpreted.
 
 Sources use the journal hash as their ID and cursor key, the project folder
@@ -44,16 +51,22 @@ cutoff. Titles never come from prompt content.
 
 Reads pass the first `MAX_RECENT_THREAD_LIMIT` sources to `HookJournalReader`
 as explicit targets and report the rest as metadata-only, exactly as the Codex
-monitor does. Reader diagnostics that mean a journal could not be read safely
+monitor does. A record can expand into two lifecycle events and seeding a
+read can resolve every open request of every target, so each read asks the
+reader for at most `MAX_CLAUDE_RECORDS_PER_READ` records (1,408) and continues
+across passes; one read therefore never exceeds the coordinator's per-read
+event cap. Reader diagnostics that mean a journal could not be read safely
 (`unsafe-source`, `source-not-regular`, `source-oversized`,
-`source-read-failed`, `source-truncated`, `source-unstable`, `cursor-limit`)
-mark that source unavailable; malformed or oversized records, retention gaps,
-and truncated cursors only mark coverage incomplete. When the reader returns
-no continuation it has consumed every retained byte of every target, so all
+`source-read-failed`, `source-truncated`, `source-unstable`) mark that source
+unavailable; malformed or oversized records, retention gaps, and truncated
+cursors mark coverage incomplete; `read-limit` is an ordinary budget stop
+followed by a continuation and marks nothing. Without a continuation the
+reader has consumed every complete record of every readable target, so all
 read sources are reported exhausted and the read is complete. Frozen cutoffs
-are not applied to journals: a record that arrives during a baseline pass is
-replayed as historical, which can at worst hide one completion that landed in
-that window, never surface a stale one.
+are not applied to journals: discovery and the first read run in the same
+pass, and a record landing between them during a baseline is replayed as
+historical, which can hide a completion from that moment but never surfaces
+a stale one.
 
 ## Normalization
 
@@ -78,7 +91,11 @@ the start of each read.
 
 A subagent stopping never completes the parent, and an ordinary tool failure
 never reddens a session. `Stop` and `StopFailure` close the tracked turn so a
-late record after them is plain activity the reducer ignores.
+late record after them is plain activity the reducer ignores. In a parallel
+tool batch, another tool finishing while one permission prompt is still open
+resolves that prompt too: confirmed activity means the user acted, and a
+denied permission would otherwise leave the tile waiting forever; the prompt
+notification re-opens the wait if the dialog is still up.
 
 ## Not in this slice
 

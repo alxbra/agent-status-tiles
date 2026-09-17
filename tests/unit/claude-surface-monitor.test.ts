@@ -7,9 +7,13 @@ import { afterEach, describe, expect, it } from 'vitest';
 import {
   ClaudeCliMonitor,
   ClaudeDesktopMonitor,
+  MAX_CLAUDE_RECORDS_PER_READ,
 } from '../../src/main/providers/claude/surface-monitor';
 import { makeHookJournalBaseName } from '../../src/main/providers/hooks/hook-journal-reader';
-import { createRuntimeCoordinator } from '../../src/main/runtime/coordinator';
+import {
+  MAX_RUNTIME_EVENTS_PER_READ,
+  createRuntimeCoordinator,
+} from '../../src/main/runtime/coordinator';
 import type { RuntimeReadRequest } from '../../src/main/runtime/coordinator';
 import {
   createInitialMonitoringState,
@@ -201,5 +205,119 @@ describe('claude surface monitor', () => {
     } finally {
       await runtime.stop();
     }
+  });
+
+  it('reports a journal replaced by a directory as unavailable without failing the read', async () => {
+    const root = await appData();
+    await writeFile(journalPath(root, 'gone'), record('gone', 'SessionStart'));
+    const monitor = new ClaudeDesktopMonitor({ appDataPath: root });
+    monitor.start();
+    const sources = monitor.capture((await monitor.discover()).sources);
+    await rm(journalPath(root, 'gone'));
+    await mkdir(journalPath(root, 'gone'));
+    const read = await monitor.read(readRequest(sources));
+    expect(read.events).toEqual([]);
+    expect(read.unavailableSourceIds).toEqual([sources[0]!.id]);
+    expect(read.exhaustedSourceIds).toContain(sources[0]!.id);
+    expect(read.complete).toBe(true);
+  });
+
+  it('replays at most ten sources and keeps the rest metadata-only', async () => {
+    const summaries = Array.from({ length: 12 }, (_, index) => ({
+      baseName: `b${index}`,
+      nativeSessionId: `s${index}`,
+      surface: 'desktop' as const,
+      ended: false,
+      updatedAt: 100 - index,
+      endOffset: 1,
+    }));
+    const targetsSeen: number[] = [];
+    const monitor = new ClaudeDesktopMonitor({
+      appDataPath: '/unused',
+      discovery: { list: async () => summaries },
+      reader: {
+        read: async (targets) => {
+          targetsSeen.push(targets.length);
+          return { events: [], cursors: {}, diagnostics: [] };
+        },
+      },
+    });
+    monitor.start();
+    const sources = monitor.capture((await monitor.discover()).sources);
+    expect(sources).toHaveLength(12);
+    const read = await monitor.read(readRequest(sources));
+    expect(targetsSeen).toEqual([10]);
+    expect(read.unavailableSourceIds).toEqual(['b10', 'b11']);
+    expect(read.exhaustedSourceIds).toEqual([...sources.map((source) => source.id)]);
+  });
+
+  it('pages long journals so one read never exceeds the coordinator event cap', async () => {
+    const root = await appData();
+    // Lean records keep the journal under the reader's 256 KiB file bound
+    // while still exceeding the per-read record page.
+    const pairs = 800;
+    const lean = { project_name: undefined, host: undefined };
+    let content = record('busy', 'SessionStart') + record('busy', 'UserPromptSubmit');
+    for (let index = 0; index < pairs; index += 1) {
+      content +=
+        record('busy', 'PermissionRequest', { ...lean, tool_call_id: `call-${index}` }) +
+        record('busy', 'PostToolUse', { ...lean, tool_call_id: `call-${index}` });
+    }
+    expect(Buffer.byteLength(content)).toBeLessThan(256 * 1024);
+    expect(2 + pairs * 2).toBeGreaterThan(MAX_CLAUDE_RECORDS_PER_READ);
+    await writeFile(journalPath(root, 'busy'), content);
+    const monitor = new ClaudeDesktopMonitor({ appDataPath: root });
+    monitor.start();
+    const sources = monitor.capture((await monitor.discover()).sources);
+
+    const first = await monitor.read(readRequest(sources, { baseline: true }));
+    expect(first.events.length).toBeLessThanOrEqual(MAX_RUNTIME_EVENTS_PER_READ);
+    expect(first.events.length).toBeGreaterThan(MAX_CLAUDE_RECORDS_PER_READ);
+    expect(first.complete).toBe(false);
+    expect(first.nextSourceIndex).toBe(0);
+    expect(first.exhaustedSourceIds).toEqual([]);
+    expect(first.coverageIncomplete).toBeUndefined();
+
+    // The coordinator hands the reduced record back between pages so the open
+    // turn and its requests continue across the boundary.
+    let state = reduceSessionState(createInitialSessionState(), {
+      type: 'upsert',
+      provider: 'claude',
+      nativeSessionId: 'busy',
+      surface: 'desktop',
+      title: 'busy-project',
+      isTopLevel: true,
+      isArchived: false,
+      canOpen: false,
+      updatedAt: 1,
+    });
+    const reduceAll = (entries: typeof first.events): void => {
+      for (const entry of entries)
+        state = reduceSessionState(state, 'event' in entry ? entry.event : entry);
+    };
+    reduceAll(first.events);
+    let cursors = first.cursors;
+    let total = first.events.length;
+    let passes = 1;
+    let result = first;
+    while (!result.complete) {
+      result = await monitor.read(
+        readRequest(sources, {
+          baseline: true,
+          cursors,
+          sessions: state.sessions,
+          sourceStart: result.nextSourceIndex,
+        }),
+      );
+      reduceAll(result.events);
+      expect(result.events.length).toBeLessThanOrEqual(MAX_RUNTIME_EVENTS_PER_READ);
+      cursors = result.cursors;
+      total += result.events.length;
+      passes += 1;
+    }
+    expect(passes).toBeGreaterThan(1);
+    expect(result.exhaustedSourceIds).toEqual([sources[0]!.id]);
+    // One turn start, then a request, a resolution, and an activity per pair.
+    expect(total).toBe(1 + pairs * 3);
   });
 });

@@ -1,18 +1,24 @@
-import { open, readdir, lstat } from 'node:fs/promises';
+import { constants } from 'node:fs';
+import { lstat, open, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import { RECENT_THREAD_DISCOVERY_WINDOW } from '../../../shared/settings';
 import type { Surface } from '../../../shared/session';
-import { makeHookJournalBaseName, type HookJournalEvent } from '../hooks/hook-journal-reader';
+import {
+  HOOK_JOURNAL_HOSTS,
+  isSafeString,
+  makeHookJournalBaseName,
+  type HookJournalEvent,
+} from '../hooks/hook-journal-reader';
 
-/** Directory entries considered per discovery; the newest ones are inspected. */
-export const MAX_JOURNAL_ENTRIES = 512;
+/** Hash-named journals stat'ed per discovery; the newest ones are inspected. */
+export const MAX_JOURNAL_ENTRIES = 4_096;
 /** Journals inspected per discovery, before the surface filter and the window. */
 export const MAX_INSPECTED_JOURNALS = 64;
 /** Enough for one complete record at the head and at the tail of a journal. */
 const PROBE_BYTES = 8 * 1024;
 const MAX_ID_BYTES = 256;
-const HOSTS = new Set(['claude-desktop', 'terminal', 'iterm2', 'ghostty', 'warp']);
+const JOURNAL_NAME = /^[a-f0-9]{64}\.jsonl$/u;
 
 export type ClaudeHost = NonNullable<HookJournalEvent['host']>;
 
@@ -30,6 +36,12 @@ export interface ClaudeJournalSummary {
   updatedAt: number;
   /** Active file size, the fixed replay boundary for a baseline. */
   endOffset: number;
+}
+
+interface Candidate {
+  name: string;
+  mtimeMs: number;
+  size: number;
 }
 
 interface CacheEntry {
@@ -50,14 +62,8 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
 
-function safeString(value: unknown, maxBytes: number): string | undefined {
-  return typeof value === 'string' &&
-    value.length > 0 &&
-    value === value.trim() &&
-    !/\p{Cc}/u.test(value) &&
-    Buffer.byteLength(value) <= maxBytes
-    ? value
-    : undefined;
+function optionalString(value: unknown, maxBytes: number): string | undefined {
+  return isSafeString(value, maxBytes) ? value : undefined;
 }
 
 function probeOf(line: string): Probe | undefined {
@@ -70,19 +76,19 @@ function probeOf(line: string): Probe | undefined {
   if (!isRecord(parsed) || parsed.schema_version !== 1 || parsed.provider !== 'claude') {
     return undefined;
   }
-  const host = safeString(parsed.host, 64);
+  const host = optionalString(parsed.host, 64);
   return {
-    sessionId: safeString(parsed.session_id, MAX_ID_BYTES),
-    projectName: safeString(parsed.project_name, MAX_ID_BYTES),
-    host: host !== undefined && HOSTS.has(host) ? (host as ClaudeHost) : undefined,
-    entrypoint: safeString(parsed.entrypoint, 64),
-    eventName: safeString(parsed.event_name, 64),
+    sessionId: optionalString(parsed.session_id, MAX_ID_BYTES),
+    projectName: optionalString(parsed.project_name, MAX_ID_BYTES),
+    host: host !== undefined && HOOK_JOURNAL_HOSTS.has(host) ? (host as ClaudeHost) : undefined,
+    entrypoint: optionalString(parsed.entrypoint, 64),
+    eventName: optionalString(parsed.event_name, 64),
   };
 }
 
 /** First complete line of the head chunk and last complete line of the tail chunk. */
 async function probeJournal(path: string, size: number): Promise<[Probe, Probe] | undefined> {
-  const handle = await open(path, 'r');
+  const handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
   try {
     const headLength = Math.min(size, PROBE_BYTES);
     const head = Buffer.alloc(headLength);
@@ -91,6 +97,7 @@ async function probeJournal(path: string, size: number): Promise<[Probe, Probe] 
     const tail = tailStart === 0 && headLength === size ? head : Buffer.alloc(size - tailStart);
     if (tail !== head) await handle.read(tail, 0, tail.length, tailStart);
     const headLines = head.toString('utf8').split('\n');
+    // A first line longer than the probe has no terminator inside the chunk.
     const firstLine = headLines.length > 1 ? headLines[0] : undefined;
     const tailLines = tail.toString('utf8').split('\n');
     // The last element is the unterminated remainder (or empty after a newline).
@@ -116,7 +123,8 @@ export function surfaceForIdentity(
  * Bounded listing of the app's own Claude journal directory. It never scans
  * the user's home directory: the helper wrote every file here, each file is
  * verified against the hash of the session ID it claims, and only display-safe
- * metadata is returned. Missing directories mean no sessions.
+ * metadata is returned. Missing directories mean no sessions. One instance is
+ * shared by both surface monitors so the directory is read once per pass.
  */
 export class ClaudeJournalDiscovery {
   private readonly directory: string;
@@ -126,7 +134,7 @@ export class ClaudeJournalDiscovery {
     this.directory = join(options.appDataPath, 'journals', 'claude');
   }
 
-  async list(limit = MAX_INSPECTED_JOURNALS): Promise<readonly ClaudeJournalSummary[]> {
+  async list(): Promise<readonly ClaudeJournalSummary[]> {
     let names: string[];
     try {
       names = await readdir(this.directory);
@@ -134,9 +142,11 @@ export class ClaudeJournalDiscovery {
       if ((error as { code?: unknown }).code === 'ENOENT') return [];
       throw error;
     }
-    const candidates: { name: string; mtimeMs: number; size: number }[] = [];
-    for (const name of names.slice(0, MAX_JOURNAL_ENTRIES)) {
-      if (!/^[a-f0-9]{64}\.jsonl$/u.test(name)) continue;
+    const candidates: Candidate[] = [];
+    let statted = 0;
+    for (const name of names) {
+      if (!JOURNAL_NAME.test(name) || statted >= MAX_JOURNAL_ENTRIES) continue;
+      statted += 1;
       try {
         const metadata = await lstat(join(this.directory, name));
         if (!metadata.isFile()) continue;
@@ -150,7 +160,7 @@ export class ClaudeJournalDiscovery {
     );
     const live = new Set<string>();
     const summaries: ClaudeJournalSummary[] = [];
-    for (const candidate of candidates.slice(0, Math.min(limit, MAX_INSPECTED_JOURNALS))) {
+    for (const candidate of candidates.slice(0, MAX_INSPECTED_JOURNALS)) {
       live.add(candidate.name);
       const cached = this.cache.get(candidate.name);
       if (
@@ -162,18 +172,40 @@ export class ClaudeJournalDiscovery {
         continue;
       }
       const summary = await this.summarize(candidate);
+      if (summary === undefined && cached?.summary !== undefined && candidate.size === 0) {
+        // The helper rotates by renaming the active file away and recreating it;
+        // an empty active file with an archive beside it is that moment, not an
+        // ended session. Keep the last summary until the next record lands.
+        if (await this.hasArchive(candidate.name)) {
+          summaries.push(cached.summary);
+          continue;
+        }
+      }
       this.cache.set(candidate.name, { mtimeMs: candidate.mtimeMs, size: candidate.size, summary });
       if (summary !== undefined) summaries.push(summary);
     }
-    for (const name of this.cache.keys()) if (!live.has(name)) this.cache.delete(name);
+    for (const [name, cached] of this.cache) {
+      if (live.has(name)) continue;
+      // Between the rename and the recreate the active file is absent for a
+      // moment; keep the session while its archive proves the rotation.
+      if (cached.summary !== undefined && (await this.hasArchive(name))) {
+        summaries.push(cached.summary);
+        continue;
+      }
+      this.cache.delete(name);
+    }
     return summaries;
   }
 
-  private async summarize(candidate: {
-    name: string;
-    mtimeMs: number;
-    size: number;
-  }): Promise<ClaudeJournalSummary | undefined> {
+  private async hasArchive(name: string): Promise<boolean> {
+    try {
+      return (await lstat(join(this.directory, `${name}.1`))).isFile();
+    } catch {
+      return false;
+    }
+  }
+
+  private async summarize(candidate: Candidate): Promise<ClaudeJournalSummary | undefined> {
     if (candidate.size === 0) return undefined;
     let probes: [Probe, Probe] | undefined;
     try {

@@ -88,8 +88,10 @@ export function normalizeClaudeEvents(
       current.openRequests.delete(callId);
       output.push({ type: 'input-resolved', sessionId, turnId: current.turnId, callId, timestamp });
     };
-    // A tool finishing answers its own request and any prompt notification,
-    // which is never tied to one tool; other tools' requests stay open.
+    // A tool finishing with a matching open request answers that request and
+    // any prompt notification, which is never tied to one tool, while other
+    // tools' requests stay open. Progress without a match means the user
+    // acted (confirmed resumed activity), so everything open is resolved.
     const resolveOne = (callId: string | undefined): void => {
       if (callId === undefined || !current.openRequests.has(callId)) {
         resolveAll();

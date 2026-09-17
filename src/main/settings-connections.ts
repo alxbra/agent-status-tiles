@@ -30,7 +30,7 @@ const CONNECTION_TARGETS: Readonly<
   ],
 };
 
-/** Rows whose surfaces have live monitors. Claude stays unavailable until its adapter lands. */
+/** Rows that can be connected from Settings. Claude waits for its hook-install wiring. */
 export const CONNECTABLE_CONNECTIONS: readonly SettingsConnectionKey[] = ['codex'];
 
 export function isConnectable(connection: SettingsConnectionKey): boolean {

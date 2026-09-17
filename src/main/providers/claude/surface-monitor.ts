@@ -1,12 +1,13 @@
 import { makeCursorKey, type FileCursorMap } from '../../../shared/cursor';
 import type { Surface } from '../../../shared/session';
 import { MAX_RECENT_THREAD_LIMIT } from '../../../shared/settings';
-import type {
-  ProviderSurfaceMonitor,
-  RuntimeDiscoveryResult,
-  RuntimeMonitorSource,
-  RuntimeReadRequest,
-  RuntimeReadResult,
+import {
+  MAX_RUNTIME_EVENTS_PER_READ,
+  type ProviderSurfaceMonitor,
+  type RuntimeDiscoveryResult,
+  type RuntimeMonitorSource,
+  type RuntimeReadRequest,
+  type RuntimeReadResult,
 } from '../../runtime/coordinator';
 import {
   HookJournalReader,
@@ -37,8 +38,25 @@ const SOURCE_UNAVAILABLE_DIAGNOSTICS: ReadonlySet<HookJournalDiagnosticCode> = n
   'source-read-failed',
   'source-truncated',
   'source-unstable',
-  'cursor-limit',
 ]);
+/** History was skipped but the remaining observations stay usable. */
+const COVERAGE_DIAGNOSTICS: ReadonlySet<HookJournalDiagnosticCode> = new Set([
+  'record-malformed',
+  'record-oversized',
+  'possible-retention-gap',
+  'cursor-truncated',
+]);
+/** Every persisted session keeps at most this many open requests (persistence bound). */
+const MAX_PERSISTED_INPUT_REQUESTS = 128;
+/**
+ * A record can expand into two lifecycle events (a resolution plus a
+ * progress or completion event), and seeding a read can resolve every open
+ * request of every target, so the reader page is sized to keep one read's
+ * events under the coordinator's cap in the worst case.
+ */
+export const MAX_CLAUDE_RECORDS_PER_READ = Math.floor(
+  (MAX_RUNTIME_EVENTS_PER_READ - MAX_PERSISTED_INPUT_REQUESTS * MAX_RECENT_THREAD_LIMIT) / 2,
+);
 
 function readerCursorKey(baseName: string): string {
   return makeCursorKey('claude', baseName);
@@ -140,16 +158,17 @@ export class ClaudeSurfaceMonitor implements ProviderSurfaceMonitor {
     );
     const result: HookJournalReadResult = await this.reader.read(targets, readerCursors, {
       startTargetIndex: Math.min(request.sourceStart ?? 0, targets.length),
+      maxRecords: MAX_CLAUDE_RECORDS_PER_READ,
     });
     let coverageIncomplete = false;
     for (const diagnostic of result.diagnostics) {
+      // Reader diagnostics name the journal by its base name, our source ID.
       if (SOURCE_UNAVAILABLE_DIAGNOSTICS.has(diagnostic.code)) {
-        this.unavailableSourceIds.add(runtimeSourceId(diagnostic.sourceId));
-      } else {
-        // Malformed or oversized records, retention gaps, and truncated
-        // cursors skip history but leave the remaining observations usable.
+        this.unavailableSourceIds.add(diagnostic.sourceId);
+      } else if (COVERAGE_DIAGNOSTICS.has(diagnostic.code)) {
         coverageIncomplete = true;
       }
+      // `read-limit` is an ordinary budget stop followed by a continuation.
     }
     const sessionEvents = normalizeClaudeEvents(result.events, request.sessions);
     const readIds = active.map((source) => source.id);
@@ -159,8 +178,8 @@ export class ClaudeSurfaceMonitor implements ProviderSurfaceMonitor {
       cursors: Object.fromEntries(
         Object.entries(result.cursors).map(([key, cursor]) => [runtimeSourceId(key), cursor]),
       ),
-      // The reader stops only at its work budget; without a continuation it
-      // has consumed every retained byte of every target.
+      // Without a continuation the reader has consumed every complete record
+      // of every readable target; unreadable ones are reported unavailable.
       complete: finished,
       ...(coverageIncomplete ? { coverageIncomplete: true } : {}),
       ...(this.unavailableSourceIds.size > 0 || metadataOnlySourceIds.length > 0
