@@ -73,8 +73,9 @@ entries and drops the groups, events, and `hooks` object that become empty. A
 file whose planned content equals its current content is not rewritten, which
 also covers a complete install the user has silenced with `disableAllHooks`.
 
-The file is re-serialised as two-space JSON with a trailing newline, the same
-form Claude Code writes. Writes go through a symlinked settings file rather
+The file is re-serialised as two-space JSON with a trailing newline. A file
+the app creates is mode `0600` inside a `0700` configuration directory it
+creates when absent. Writes go through a symlinked settings file rather
 than replacing the link, keep the file's exact mode regardless of the umask,
 land through a temporary file and rename, and remove that temporary file on
 any failure. Claude Desktop and the CLI write the same file, so the version the
@@ -91,7 +92,8 @@ Verification reports `installed` (every event carries exactly one owned entry
 with the exact written shape in a matcher-less group), `missing`, `stale` (an
 owned entry is absent, duplicated, matcher-scoped, or differs in any field),
 `disabled` when `disableAllHooks` is set in the same file, or `unreadable`
-with one of the codes above. Connecting the Claude row and surfacing these
+with one of the read codes above (`settings-changed` and `settings-unwritable`
+only arise from a write). Connecting the Claude row and surfacing these
 states in Settings belong to later slices.
 
 ## Input and privacy

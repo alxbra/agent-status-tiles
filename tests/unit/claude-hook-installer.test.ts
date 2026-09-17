@@ -11,6 +11,7 @@ import {
   symlink,
   writeFile,
 } from 'node:fs/promises';
+import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -124,6 +125,8 @@ describe('claude hook installer', () => {
     expect(await inspectClaudeHooks({ configDirectory: directory, ...command })).toEqual({
       status: 'installed',
     });
+    // A file this app creates is private to the user.
+    expect((await stat(claudeSettingsPath(directory))).mode & 0o777).toBe(0o600);
 
     const before = await readFile(claudeSettingsPath(directory), 'utf8');
     expect(await installClaudeHooks({ configDirectory: directory, ...command })).toEqual({
@@ -349,7 +352,13 @@ describe('claude hook installer', () => {
     const directory = await configDirectory();
     await writeFile(claudeSettingsPath(directory), '{}\n');
     await chmod(claudeSettingsPath(directory), 0o666);
-    await installClaudeHooks({ configDirectory: directory, ...command });
+    // A restrictive umask would strip group and other bits from a plain open.
+    const previousUmask = process.umask(0o077);
+    try {
+      await installClaudeHooks({ configDirectory: directory, ...command });
+    } finally {
+      process.umask(previousUmask);
+    }
     expect((await stat(claudeSettingsPath(directory))).mode & 0o777).toBe(0o666);
     expect(await readdir(directory)).toEqual(['settings.json']);
 
@@ -374,23 +383,49 @@ describe('claude hook installer', () => {
     openHook.current = async (opened) => {
       if (opened.includes('.tmp')) {
         openHook.current = undefined;
-        await writeFile(path, '{"theme":"light","permissions":{"allow":["Bash(ls)"]}}\n');
+        // Same length and same inode as before: only the timestamps differ.
+        await writeFile(path, '{"theme":"blue"}\n');
       }
     };
     await expect(
       installClaudeHooks({ configDirectory: directory, ...command }),
     ).rejects.toMatchObject({ code: 'settings-changed' });
-    expect(JSON.parse(await readFile(path, 'utf8'))).toEqual({
-      theme: 'light',
-      permissions: { allow: ['Bash(ls)'] },
-    });
+    expect(await readFile(path, 'utf8')).toBe('{"theme":"blue"}\n');
     expect(await readdir(directory)).toEqual(['settings.json']);
 
     // The next attempt sees the new content and installs on top of it.
     await installClaudeHooks({ configDirectory: directory, ...command });
-    const settings = await readSettings(directory);
-    expect(settings.theme).toBe('light');
-    expect(settings.permissions).toEqual({ allow: ['Bash(ls)'] });
+    expect((await readSettings(directory)).theme).toBe('blue');
+  });
+
+  it('reports a non-file at the settings path instead of rewriting it', async () => {
+    const directory = await configDirectory();
+    execFileSync('mkfifo', [claudeSettingsPath(directory)]);
+    expect(await inspectClaudeHooks({ configDirectory: directory, ...command })).toEqual({
+      status: 'unreadable',
+      code: 'settings-unreadable',
+    });
+    await expect(
+      installClaudeHooks({ configDirectory: directory, ...command }),
+    ).rejects.toMatchObject({ code: 'settings-unreadable' });
+    expect((await lstat(claudeSettingsPath(directory))).isFIFO()).toBe(true);
+  });
+
+  it('keeps a literal __proto__ key as data on install and removal', async () => {
+    const directory = await configDirectory();
+    const content =
+      '{"__proto__":{"x":1},"theme":"dark","hooks":{"__proto__":[{"hooks":[{"type":"command","command":"echo keep"}]}]}}\n';
+    await writeFile(claudeSettingsPath(directory), content);
+    expect(await removeClaudeHooks({ configDirectory: directory })).toEqual({ changed: false });
+    expect(await readFile(claudeSettingsPath(directory), 'utf8')).toBe(content);
+    await installClaudeHooks({ configDirectory: directory, ...command });
+    const raw = await readFile(claudeSettingsPath(directory), 'utf8');
+    expect(raw).toContain('"__proto__": {\n    "x": 1');
+    expect(raw).toContain('echo keep');
+    await removeClaudeHooks({ configDirectory: directory });
+    expect(JSON.parse(await readFile(claudeSettingsPath(directory), 'utf8'))).toEqual(
+      JSON.parse(content),
+    );
   });
 
   it('never rewrites a file it cannot parse or that is not a JSON object', async () => {

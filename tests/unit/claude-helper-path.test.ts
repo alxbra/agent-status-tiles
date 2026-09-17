@@ -78,4 +78,44 @@ describe('hook helper path', () => {
       code: 'helper-not-regular',
     });
   });
+
+  it('reports a stray file in place of the architecture directory as missing', async () => {
+    const resources = await root();
+    await mkdir(join(resources, 'hook-helper'), { recursive: true });
+    await writeFile(join(resources, 'hook-helper', 'arm64'), 'not a directory');
+    expect(
+      resolveHookHelperPath({
+        isPackaged: true,
+        resourcesPath: resources,
+        appRoot: '/x',
+        arch: 'arm64',
+      }),
+    ).toEqual({ ok: false, code: 'helper-missing' });
+  });
+
+  it('refuses a translocated app bundle and maps other stat failures to resolver-failed', () => {
+    const translocated =
+      '/private/var/folders/xx/T/AppTranslocation/0B1C-2D3E/d/Agent Status Tiles.app/Contents/Resources';
+    expect(
+      resolveHookHelperPath({
+        isPackaged: true,
+        resourcesPath: translocated,
+        appRoot: '/x',
+        arch: 'arm64',
+      }),
+    ).toEqual({ ok: false, code: 'helper-translocated' });
+
+    const denied = Object.assign(new Error('denied'), { code: 'EACCES' });
+    expect(
+      resolveHookHelperPath({
+        isPackaged: true,
+        resourcesPath: '/Applications/A.app/Contents/Resources',
+        appRoot: '/x',
+        arch: 'x64',
+        lstat: () => {
+          throw denied;
+        },
+      }),
+    ).toEqual({ ok: false, code: 'resolver-failed' });
+  });
 });

@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
-import { lstat, mkdir, open, readFile, realpath, rename, stat, unlink } from 'node:fs/promises';
+import { constants, type BigIntStats } from 'node:fs';
+import { lstat, mkdir, open, realpath, rename, stat, unlink } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { basename, dirname, isAbsolute, join } from 'node:path';
 
@@ -19,8 +20,6 @@ export const CLAUDE_HOOK_EVENTS = [
   'ElicitationResult',
 ] as const;
 
-export type ClaudeHookEvent = (typeof CLAUDE_HOOK_EVENTS)[number];
-
 /** The helper finishes in well under a second; the cap only bounds a wedged disk. */
 export const CLAUDE_HOOK_TIMEOUT_SECONDS = 5;
 const MAX_SETTINGS_BYTES = 1024 * 1024;
@@ -35,17 +34,33 @@ export type ClaudeHookVerification =
   | { status: 'stale' }
   /** Owned hooks are complete but `disableAllHooks` silences them. */
   | { status: 'disabled' }
-  | { status: 'unreadable'; code: ClaudeHookSettingsCode };
+  | { status: 'unreadable'; code: ClaudeHookReadCode };
 
-export type ClaudeHookSettingsCode =
+/** Why the settings file could not be read or understood. */
+export type ClaudeHookReadCode =
   | 'settings-unreadable'
   | 'settings-not-json'
   | 'settings-not-object'
   | 'settings-oversized'
-  | 'hooks-unsupported'
+  | 'hooks-unsupported';
+
+export type ClaudeHookSettingsCode =
+  | ClaudeHookReadCode
   /** The file changed between the read and the write; nothing was written. */
   | 'settings-changed'
   | 'settings-unwritable';
+
+const READ_CODES: ReadonlySet<ClaudeHookSettingsCode> = new Set<ClaudeHookReadCode>([
+  'settings-unreadable',
+  'settings-not-json',
+  'settings-not-object',
+  'settings-oversized',
+  'hooks-unsupported',
+]);
+
+function isReadCode(code: ClaudeHookSettingsCode): code is ClaudeHookReadCode {
+  return READ_CODES.has(code);
+}
 
 export class ClaudeHookSettingsError extends Error {
   readonly code: ClaudeHookSettingsCode;
@@ -84,6 +99,8 @@ interface SettingsSnapshot {
   ino: bigint;
   size: bigint;
   mtimeNs: bigint;
+  /** Changes on chmod and ownership changes too, which mtime does not reflect. */
+  ctimeNs: bigint;
   mode: number;
 }
 
@@ -193,22 +210,6 @@ function withoutOwnedHooks(groups: readonly unknown[]): unknown[] {
   return result;
 }
 
-/** Replace the `hooks` key in place (or drop it) without moving any other key. */
-function withHooksSection(settings: JsonObject, hooks: JsonObject | undefined): JsonObject {
-  const next: JsonObject = {};
-  let placed = false;
-  for (const [key, value] of Object.entries(settings)) {
-    if (key !== 'hooks') {
-      next[key] = value;
-    } else if (hooks !== undefined) {
-      next.hooks = hooks;
-      placed = true;
-    }
-  }
-  if (hooks !== undefined && !placed) next.hooks = hooks;
-  return next;
-}
-
 /**
  * Return the settings object with exactly one owned entry per event, keeping
  * every unrelated key, event, matcher group, and hook in place and in order.
@@ -220,18 +221,22 @@ export function planClaudeHookInstall(settings: JsonObject, command: OwnedHookCo
     const groups = hooks[event] ?? [];
     nextHooks[event] = [...withoutOwnedHooks(groups), { hooks: [ownedHookEntry(command)] }];
   }
-  return withHooksSection(settings, nextHooks);
+  // Spread keeps an existing `hooks` key in place and appends a new one; it
+  // also copies a user's literal "__proto__" key as data, which assignment
+  // would not.
+  return { ...settings, hooks: nextHooks };
 }
 
 /** Return the settings object with every owned entry removed and empty containers dropped. */
 export function planClaudeHookRemoval(settings: JsonObject): JsonObject {
   const hooks = readHooksSection(settings);
-  const nextHooks: JsonObject = {};
-  for (const [event, groups] of Object.entries(hooks)) {
-    const remaining = withoutOwnedHooks(groups);
-    if (remaining.length > 0) nextHooks[event] = remaining;
-  }
-  return withHooksSection(settings, Object.keys(nextHooks).length === 0 ? undefined : nextHooks);
+  const nextHooks = Object.fromEntries(
+    Object.entries(hooks)
+      .map(([event, groups]) => [event, withoutOwnedHooks(groups)] as const)
+      .filter(([, remaining]) => remaining.length > 0),
+  );
+  if (Object.keys(nextHooks).length > 0) return { ...settings, hooks: nextHooks };
+  return Object.fromEntries(Object.entries(settings).filter(([key]) => key !== 'hooks'));
 }
 
 /** Compare the file's owned entries against the intended entry without writing. */
@@ -243,7 +248,9 @@ export function verifyClaudeHooks(
   try {
     hooks = readHooksSection(settings);
   } catch (error) {
-    if (error instanceof ClaudeHookSettingsError) return { status: 'unreadable', code: error.code };
+    if (error instanceof ClaudeHookSettingsError && isReadCode(error.code)) {
+      return { status: 'unreadable', code: error.code };
+    }
     throw error;
   }
   const expected = ownedHookEntry(command);
@@ -279,12 +286,24 @@ function errorCode(error: unknown): unknown {
   return (error as { code?: unknown }).code;
 }
 
+function snapshotOf(target: string, metadata: BigIntStats): SettingsSnapshot {
+  if (!metadata.isFile()) throw new ClaudeHookSettingsError('settings-unreadable');
+  return {
+    target,
+    ino: metadata.ino,
+    size: metadata.size,
+    mtimeNs: metadata.mtimeNs,
+    ctimeNs: metadata.ctimeNs,
+    mode: Number(metadata.mode & 0o777n),
+  };
+}
+
 /**
  * Resolve the file behind the settings path. A symlink (dotfile setups) is
- * followed so writes go through it; a dangling link or a non-file is the
- * user's to repair and is reported as unreadable, never replaced.
+ * followed so writes go through it; a dangling link is the user's to repair
+ * and is reported as unreadable, never replaced. Undefined means no entry.
  */
-async function resolveSettingsTarget(path: string): Promise<SettingsSnapshot | undefined> {
+async function resolveSettingsTarget(path: string): Promise<string | undefined> {
   let link: Awaited<ReturnType<typeof lstat>>;
   try {
     link = await lstat(path);
@@ -292,37 +311,58 @@ async function resolveSettingsTarget(path: string): Promise<SettingsSnapshot | u
     if (errorCode(error) === 'ENOENT') return undefined;
     throw new ClaudeHookSettingsError('settings-unreadable');
   }
+  if (!link.isSymbolicLink()) return path;
   try {
-    const target = link.isSymbolicLink() ? await realpath(path) : path;
-    const metadata = await stat(target, { bigint: true });
-    if (!metadata.isFile()) throw new ClaudeHookSettingsError('settings-unreadable');
-    return {
-      target,
-      ino: metadata.ino,
-      size: metadata.size,
-      mtimeNs: metadata.mtimeNs,
-      mode: Number(metadata.mode & 0o777n),
-    };
+    return await realpath(path);
+  } catch {
+    throw new ClaudeHookSettingsError('settings-unreadable');
+  }
+}
+
+/** Identity of the current file for the pre-rename check; undefined means no entry. */
+async function currentSnapshot(path: string): Promise<SettingsSnapshot | undefined> {
+  const target = await resolveSettingsTarget(path);
+  if (target === undefined) return undefined;
+  try {
+    return snapshotOf(target, await stat(target, { bigint: true }));
   } catch (error) {
     if (error instanceof ClaudeHookSettingsError) throw error;
     throw new ClaudeHookSettingsError('settings-unreadable');
   }
 }
 
+/**
+ * Read the file through one descriptor so the snapshot describes exactly the
+ * bytes that were read, and read at most the bound plus one byte so an
+ * oversized file is rejected without being consumed.
+ */
 async function readSettingsFile(path: string): Promise<SettingsRead> {
-  const snapshot = await resolveSettingsTarget(path);
-  if (snapshot === undefined) return { settings: {}, snapshot };
-  if (snapshot.size > BigInt(MAX_SETTINGS_BYTES)) {
-    throw new ClaudeHookSettingsError('settings-oversized');
-  }
+  const target = await resolveSettingsTarget(path);
+  if (target === undefined) return { settings: {}, snapshot: undefined };
+  let snapshot: SettingsSnapshot;
   let raw: string;
   try {
-    raw = await readFile(snapshot.target, 'utf8');
-  } catch {
+    const handle = await open(
+      target,
+      constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
+    );
+    try {
+      snapshot = snapshotOf(target, await handle.stat({ bigint: true }));
+      const buffer = Buffer.alloc(MAX_SETTINGS_BYTES + 1);
+      let length = 0;
+      while (length < buffer.length) {
+        const { bytesRead } = await handle.read(buffer, length, buffer.length - length, length);
+        if (bytesRead === 0) break;
+        length += bytesRead;
+      }
+      if (length > MAX_SETTINGS_BYTES) throw new ClaudeHookSettingsError('settings-oversized');
+      raw = buffer.toString('utf8', 0, length);
+    } finally {
+      await handle.close();
+    }
+  } catch (error) {
+    if (error instanceof ClaudeHookSettingsError) throw error;
     throw new ClaudeHookSettingsError('settings-unreadable');
-  }
-  if (Buffer.byteLength(raw) > MAX_SETTINGS_BYTES) {
-    throw new ClaudeHookSettingsError('settings-oversized');
   }
   if (raw.trim().length === 0) return { settings: {}, snapshot };
   let parsed: unknown;
@@ -361,7 +401,7 @@ async function writeSettingsFile(
     } finally {
       await handle.close();
     }
-    const current = await resolveSettingsTarget(path);
+    const current = await currentSnapshot(path);
     const unchanged =
       expected === undefined
         ? current === undefined
@@ -369,7 +409,9 @@ async function writeSettingsFile(
           current.target === expected.target &&
           current.ino === expected.ino &&
           current.size === expected.size &&
-          current.mtimeNs === expected.mtimeNs;
+          current.mtimeNs === expected.mtimeNs &&
+          current.ctimeNs === expected.ctimeNs &&
+          current.mode === expected.mode;
     if (!unchanged) throw new ClaudeHookSettingsError('settings-changed');
     await rename(temporaryPath, target);
   } catch (error) {
@@ -429,7 +471,9 @@ export async function inspectClaudeHooks(
     const { settings } = await readSettingsFile(claudeSettingsPath(options.configDirectory));
     return verifyClaudeHooks(settings, command);
   } catch (error) {
-    if (error instanceof ClaudeHookSettingsError) return { status: 'unreadable', code: error.code };
+    if (error instanceof ClaudeHookSettingsError && isReadCode(error.code)) {
+      return { status: 'unreadable', code: error.code };
+    }
     throw error;
   }
 }
