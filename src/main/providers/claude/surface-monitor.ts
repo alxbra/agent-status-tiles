@@ -1,0 +1,191 @@
+import { makeCursorKey, type FileCursorMap } from '../../../shared/cursor';
+import type { Surface } from '../../../shared/session';
+import { MAX_RECENT_THREAD_LIMIT } from '../../../shared/settings';
+import type {
+  ProviderSurfaceMonitor,
+  RuntimeDiscoveryResult,
+  RuntimeMonitorSource,
+  RuntimeReadRequest,
+  RuntimeReadResult,
+} from '../../runtime/coordinator';
+import {
+  HookJournalReader,
+  type HookJournalDiagnosticCode,
+  type HookJournalReadResult,
+  type HookJournalTarget,
+} from '../hooks/hook-journal-reader';
+import { normalizeClaudeEvents } from './events';
+import {
+  ClaudeJournalDiscovery,
+  selectCohort,
+  type ClaudeJournalSummary,
+} from './journal-discovery';
+
+export interface ClaudeMonitorOptions {
+  /** The app's private data directory; journals live under `journals/claude`. */
+  appDataPath: string;
+  /** Test injection. */
+  reader?: Pick<HookJournalReader, 'read'>;
+  discovery?: Pick<ClaudeJournalDiscovery, 'list'>;
+}
+
+/** A journal that could not be read safely; its session shows as unavailable. */
+const SOURCE_UNAVAILABLE_DIAGNOSTICS: ReadonlySet<HookJournalDiagnosticCode> = new Set([
+  'unsafe-source',
+  'source-not-regular',
+  'source-oversized',
+  'source-read-failed',
+  'source-truncated',
+  'source-unstable',
+  'cursor-limit',
+]);
+
+function readerCursorKey(baseName: string): string {
+  return makeCursorKey('claude', baseName);
+}
+
+function runtimeSourceId(cursorKey: string): string {
+  if (!cursorKey.startsWith('claude:')) throw new Error('invalid-claude-cursor-key');
+  return cursorKey.slice('claude:'.length);
+}
+
+/**
+ * One Claude surface. Discovery lists the app's own journal directory and
+ * keeps the newest journals whose latest record came from this surface;
+ * reads replay those journals through the bounded hook-journal reader and
+ * normalize them into lifecycle events. No path leaves this class.
+ */
+export class ClaudeSurfaceMonitor implements ProviderSurfaceMonitor {
+  readonly key: 'claude:desktop' | 'claude:cli';
+  private readonly surface: Surface;
+  private readonly reader: Pick<HookJournalReader, 'read'>;
+  private readonly discovery: Pick<ClaudeJournalDiscovery, 'list'>;
+  private journals = new Map<string, ClaudeJournalSummary>();
+  private unavailableSourceIds = new Set<string>();
+  private started = false;
+
+  constructor(options: ClaudeMonitorOptions, surface: Surface) {
+    this.surface = surface;
+    this.key = `claude:${surface}`;
+    this.reader = options.reader ?? new HookJournalReader({ appDataPath: options.appDataPath });
+    this.discovery =
+      options.discovery ?? new ClaudeJournalDiscovery({ appDataPath: options.appDataPath });
+  }
+
+  start(): void {
+    this.started = true;
+  }
+
+  stop(): void {
+    this.started = false;
+    this.journals.clear();
+    this.unavailableSourceIds.clear();
+  }
+
+  async discover(): Promise<RuntimeDiscoveryResult> {
+    if (!this.started) throw new Error(`claude-${this.surface}-not-started`);
+    const cohort = selectCohort(await this.discovery.list(), this.surface);
+    const journals = new Map<string, ClaudeJournalSummary>();
+    const sources: RuntimeMonitorSource[] = [];
+    for (const journal of cohort) {
+      journals.set(journal.baseName, journal);
+      sources.push({
+        id: journal.baseName,
+        nativeSessionId: journal.nativeSessionId,
+        // The project folder name is the plan's title; a short session ID
+        // stands in when no project was recorded. Never prompt content.
+        title: journal.projectName ?? journal.nativeSessionId.slice(0, 8),
+        updatedAt: journal.updatedAt,
+        isTopLevel: true,
+        isArchived: false,
+        canOpen: false,
+      });
+    }
+    this.journals = journals;
+    this.unavailableSourceIds.clear();
+    return { complete: true, capturedAt: Date.now(), sources };
+  }
+
+  capture(sources: readonly RuntimeMonitorSource[]): readonly RuntimeMonitorSource[] {
+    return sources.map((source) => {
+      const journal = this.journals.get(source.id);
+      if (journal === undefined || journal.nativeSessionId !== source.nativeSessionId) {
+        throw new Error(`claude-${this.surface}-source-changed`);
+      }
+      return { ...source, endOffset: journal.endOffset };
+    });
+  }
+
+  async read(request: RuntimeReadRequest): Promise<RuntimeReadResult> {
+    const active: RuntimeMonitorSource[] = [];
+    const metadataOnlySourceIds: string[] = [];
+    for (const source of request.sources) {
+      const journal = this.journals.get(source.id);
+      if (journal === undefined || journal.nativeSessionId !== source.nativeSessionId) {
+        throw new Error(`claude-${this.surface}-source-changed`);
+      }
+      if (active.length < MAX_RECENT_THREAD_LIMIT) active.push(source);
+      else metadataOnlySourceIds.push(source.id);
+    }
+    const targets: HookJournalTarget[] = active.map((source) => ({
+      provider: 'claude',
+      nativeSessionId: source.nativeSessionId,
+      baseName: source.id,
+    }));
+    const activeIds = new Set(active.map((source) => source.id));
+    const readerCursors: FileCursorMap = Object.fromEntries(
+      Object.entries(request.cursors)
+        .filter(([sourceId]) => activeIds.has(sourceId))
+        .map(([sourceId, cursor]) => [readerCursorKey(sourceId), cursor]),
+    );
+    const result: HookJournalReadResult = await this.reader.read(targets, readerCursors, {
+      startTargetIndex: Math.min(request.sourceStart ?? 0, targets.length),
+    });
+    let coverageIncomplete = false;
+    for (const diagnostic of result.diagnostics) {
+      if (SOURCE_UNAVAILABLE_DIAGNOSTICS.has(diagnostic.code)) {
+        this.unavailableSourceIds.add(runtimeSourceId(diagnostic.sourceId));
+      } else {
+        // Malformed or oversized records, retention gaps, and truncated
+        // cursors skip history but leave the remaining observations usable.
+        coverageIncomplete = true;
+      }
+    }
+    const sessionEvents = normalizeClaudeEvents(result.events, request.sessions);
+    const readIds = active.map((source) => source.id);
+    const finished = result.nextTargetIndex === undefined;
+    return {
+      events: sessionEvents.map((event) => ({ event, historical: request.baseline })),
+      cursors: Object.fromEntries(
+        Object.entries(result.cursors).map(([key, cursor]) => [runtimeSourceId(key), cursor]),
+      ),
+      // The reader stops only at its work budget; without a continuation it
+      // has consumed every retained byte of every target.
+      complete: finished,
+      ...(coverageIncomplete ? { coverageIncomplete: true } : {}),
+      ...(this.unavailableSourceIds.size > 0 || metadataOnlySourceIds.length > 0
+        ? {
+            unavailableSourceIds: [
+              ...new Set([...this.unavailableSourceIds, ...metadataOnlySourceIds]),
+            ],
+          }
+        : {}),
+      ...(finished ? {} : { nextSourceIndex: result.nextTargetIndex }),
+      exhaustedSourceIds: [...(finished ? readIds : []), ...metadataOnlySourceIds],
+    };
+  }
+}
+
+/** Claude sessions hosted by the Claude Desktop app. */
+export class ClaudeDesktopMonitor extends ClaudeSurfaceMonitor {
+  constructor(options: ClaudeMonitorOptions) {
+    super(options, 'desktop');
+  }
+}
+
+/** Claude sessions started from a terminal (or from an unrecognised host). */
+export class ClaudeCliMonitor extends ClaudeSurfaceMonitor {
+  constructor(options: ClaudeMonitorOptions) {
+    super(options, 'cli');
+  }
+}

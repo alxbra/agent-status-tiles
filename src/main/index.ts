@@ -36,6 +36,7 @@ import {
   type CodexDesktopMonitorOptions,
 } from './providers/codex/desktop-monitor';
 import { CodexCliMonitor, type CodexCliMonitorOptions } from './providers/codex/cli-monitor';
+import { ClaudeCliMonitor, ClaudeDesktopMonitor } from './providers/claude/surface-monitor';
 
 const hasSingleInstanceLock = app.requestSingleInstanceLock();
 const TEST_KEYBOARD_ENTRY_HOOK = Symbol.for('agent-status-tiles.test.keyboard-entry');
@@ -250,6 +251,10 @@ if (!hasSingleInstanceLock) {
       monitors: [
         new CodexDesktopMonitor(desktopMonitorOptions()),
         new CodexCliMonitor(cliMonitorOptions()),
+        // Claude surfaces run only once their partitions are enabled; the
+        // Settings row stays unavailable until the hook installer is wired.
+        new ClaudeDesktopMonitor({ appDataPath: app.getPath('userData') }),
+        new ClaudeCliMonitor({ appDataPath: app.getPath('userData') }),
       ],
       onOverlayState: (state) => {
         if (preserveFixtureOverlay && state.sessions.length === 0) return;
