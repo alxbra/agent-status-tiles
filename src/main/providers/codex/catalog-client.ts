@@ -14,8 +14,6 @@ const MAX_CURSOR_BYTES = 1024;
 const MAX_ID_BYTES = 256;
 const MAX_PATH_BYTES = 4096;
 const MAX_LABEL_BYTES = 256;
-const ARCHIVED_CURSOR_PREFIX = 'archived:';
-const ARCHIVED_START_CURSOR = 'start';
 
 const DIRECT_SOURCE_KINDS = new Set(['cli', 'vscode', 'exec', 'appServer', 'unknown']);
 
@@ -109,7 +107,10 @@ export interface CodexCatalogRecord {
   parentThreadId?: string;
   forkedFromId?: string;
   isEphemeral: boolean;
-  /** Which list route produced this record; never inferred from source metadata. */
+  /**
+   * Always false: discovery lists only the live route. Archived threads are not
+   * a product surface and are never requested.
+   */
   isArchived?: boolean;
   projectBasename: string;
   name?: string;
@@ -119,20 +120,17 @@ export interface CodexCatalogRecord {
 
 export interface CodexListThreadsOptions {
   cursor?: string | null;
+  /** Records requested per `thread/list` call; the app-server rescans its store per call. */
   pageSize?: number;
   maxPages?: number;
   maxRecords?: number;
-  /** Include archived records after the complete unarchived route. */
-  includeArchived?: boolean;
-  /** Select one route. Defaults to the unarchived route. */
-  archived?: boolean;
 }
 
 export interface CodexListThreadsResult {
   records: readonly CodexCatalogRecord[];
   nextCursor: string | null;
   pagesRead: number;
-  /** False when bounded pagination stopped before exhausting the selected route(s). */
+  /** False when bounded pagination stopped before exhausting the live route. */
   complete: boolean;
   incompleteReason?: 'page-cap' | 'record-cap';
   /** At least one plausible target record could not be projected safely. */
@@ -253,7 +251,7 @@ function parseSource(value: unknown): ParsedSource | undefined {
   return undefined;
 }
 
-function projectThread(value: unknown, isArchived: boolean): CodexCatalogRecord | undefined {
+function projectThread(value: unknown): CodexCatalogRecord | undefined {
   if (!isRecord(value)) return undefined;
   const nativeId = value.id;
   const sessionId = value.sessionId;
@@ -331,7 +329,7 @@ function projectThread(value: unknown, isArchived: boolean): CodexCatalogRecord 
     ...(parentThreadId === undefined ? {} : { parentThreadId }),
     ...(forkedFromId === undefined ? {} : { forkedFromId }),
     isEphemeral: value.ephemeral,
-    isArchived,
+    isArchived: false,
     projectBasename,
     ...(name === undefined ? {} : { name }),
     ...(rolloutPath === undefined ? {} : { rolloutPath }),
@@ -536,21 +534,10 @@ export class CodexCatalogClient {
       throw new CodexCatalogError('invalid-options');
     }
 
-    const includeArchived = options.includeArchived ?? false;
-    let archivedRoute = options.archived ?? false;
     let cursor = options.cursor ?? null;
     if (cursor !== null && !safeString(cursor, MAX_CURSOR_BYTES)) {
       this.report('invalid-options');
       throw new CodexCatalogError('invalid-options');
-    }
-    if (cursor?.startsWith(ARCHIVED_CURSOR_PREFIX)) {
-      archivedRoute = true;
-      const encodedCursor = cursor.slice(ARCHIVED_CURSOR_PREFIX.length);
-      cursor = encodedCursor === ARCHIVED_START_CURSOR ? null : encodedCursor;
-      if (cursor !== null && !safeString(cursor, MAX_CURSOR_BYTES)) {
-        this.report('invalid-options');
-        throw new CodexCatalogError('invalid-options');
-      }
     }
 
     await this.start();
@@ -561,11 +548,10 @@ export class CodexCatalogClient {
     }
 
     const seenCursors = new Set<string>();
-    if (cursor !== null) seenCursors.add(`${archivedRoute ? 'archived' : 'active'}:${cursor}`);
+    if (cursor !== null) seenCursors.add(cursor);
     const records: CodexCatalogRecord[] = [];
     let pagesRead = 0;
     let complete = false;
-    let didReadArchivedPage = false;
     let coverageIncomplete = false;
 
     while (pagesRead < maxPages && records.length < maxRecords) {
@@ -575,7 +561,8 @@ export class CodexCatalogClient {
         limit,
         sortKey: 'updated_at',
         sortDirection: 'desc',
-        archived: archivedRoute,
+        // Live threads only. Archived threads are never listed.
+        archived: false,
         modelProviders: [],
         sourceKinds: [...DISCOVERY_SOURCE_KINDS],
       });
@@ -589,9 +576,8 @@ export class CodexCatalogClient {
         throw new CodexCatalogError('cursor-omitted');
       }
       pagesRead += 1;
-      if (archivedRoute) didReadArchivedPage = true;
       for (const value of page.data) {
-        const record = projectThread(value, archivedRoute);
+        const record = projectThread(value);
         if (record === undefined) {
           if (isConfidentlyUnrelatedSource(value, this.targetSurface)) continue;
           if (!coverageIncomplete) this.report('coverage-ambiguous');
@@ -601,36 +587,21 @@ export class CodexCatalogClient {
         records.push(record);
       }
       if (page.nextCursor === null) {
-        cursor = null;
-        if (includeArchived && !archivedRoute) {
-          archivedRoute = true;
-          continue;
-        }
         complete = true;
         break;
       }
-      const cursorKey = `${archivedRoute ? 'archived' : 'active'}:${page.nextCursor}`;
-      if (seenCursors.has(cursorKey)) {
+      if (seenCursors.has(page.nextCursor)) {
         this.report('cursor-repeated');
         throw new CodexCatalogError('cursor-repeated');
       }
-      seenCursors.add(cursorKey);
+      seenCursors.add(page.nextCursor);
       cursor = page.nextCursor;
     }
 
     if (!complete) {
-      const archivedRouteNeedsStart = includeArchived && !didReadArchivedPage && cursor === null;
-      const nextCursor =
-        cursor === null
-          ? archivedRouteNeedsStart
-            ? `${ARCHIVED_CURSOR_PREFIX}${ARCHIVED_START_CURSOR}`
-            : null
-          : archivedRoute
-            ? `${ARCHIVED_CURSOR_PREFIX}${cursor}`
-            : cursor;
       return {
         records,
-        nextCursor,
+        nextCursor: cursor,
         pagesRead,
         complete: false,
         incompleteReason: records.length >= maxRecords ? 'record-cap' : 'page-cap',

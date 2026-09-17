@@ -295,10 +295,10 @@ A monitoring failure belongs to integration health. Do not mark every session as
 
 Adapt the existing project’s catalog client, incremental event reader, reducer, and navigation approach rather than introducing a second independent implementation.
 
-- Use local app-server queries for task metadata.
+- Use local app-server queries for task metadata. Discovery reads one live `thread/list` page of the newest threads (`MAX_RECENT_THREAD_LIMIT` plus a margin, 25 records, sorted by `updated_at` descending) and treats that page as the complete cohort; it never lists archived threads and does not follow continuation cursors. The catalog is re-read every 5 s while the 250 ms file poll carries live status between listings.
 - Use observed local task events for work performed in another Codex process.
 - Use explicitly installed and trusted hooks to improve approval detection.
-- Include Desktop and CLI top-level threads, including user-created forks; exclude archived, ephemeral, and spawned child threads. Use the catalog thread `id` as identity and validate rollout events against the separate session ID.
+- Include Desktop and CLI top-level threads, including user-created forks; exclude archived, ephemeral, and spawned child threads. Archived threads are never requested, so a thread archived while visible leaves the live page and is dropped by the coordinator's "no longer reported" path on the next discovery. Use the catalog thread `id` as identity and validate rollout events against the separate session ID.
 - For a Codex Desktop catalog record with `vscode` source but no originator, require the validated rollout SessionMeta to confirm both `vscode` and `Codex Desktop` before showing it. Report missing or contradictory proof as incomplete coverage.
 - Replay at most the ten newest active Codex rollouts per surface while retaining older qualified task metadata. A task entering the replay cohort later must baseline its previously unread history before showing new activity. Quarantine an oversized rollout locally and report incomplete coverage without blocking other tasks.
 - Keep private/local file parsing isolated and covered by recorded, sanitized fixtures.

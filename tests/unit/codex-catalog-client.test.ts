@@ -108,11 +108,10 @@ process.stdin.on('data', (chunk) => {
       continue;
     }
     if (request.method !== 'thread/list') continue;
-    if (mode === 'archived-route') {
-      const data = request.params.archived ? [${JSON.stringify(topLevelThread)}] : [];
-      process.stdout.write(JSON.stringify({ id: request.id, result: { data, nextCursor: null } }) + '\\n');
-      continue;
-    }
+    // Archived threads are never a product surface: any archived-route request
+    // is a client regression and fails the fixture closed.
+    if (request.params.archived !== false) process.exit(7);
+    if (mode === 'require-discovery-page-size' && request.params.limit !== 25) process.exit(8);
     if (mode === 'slow-start' && !initializeResponseSent) process.exit(3);
     if (mode === 'require-source-kinds' && JSON.stringify(request.params.sourceKinds) !== JSON.stringify(expectedSourceKinds)) process.exit(4);
     if (mode === 'require-default-page-size' && request.params.limit !== 20) process.exit(5);
@@ -306,16 +305,37 @@ describe('Codex catalog client', () => {
     await client.stop();
   });
 
-  it('decodes an archived continuation independently of the includeArchived flag', async () => {
+  it('requests the caller page size on the live route and never an archived route', async () => {
     const diagnostics: CodexCatalogDiagnosticCode[] = [];
-    const client = createClient(await createFakeBinary('archived-route'), diagnostics);
-    const first = await client.listThreads({ includeArchived: true, maxPages: 1 });
-    expect(first.complete).toBe(false);
-    expect(first.nextCursor).toBe('archived:start');
-    const second = await client.listThreads({ cursor: first.nextCursor, maxPages: 1 });
-    expect(second.complete).toBe(true);
-    expect(second.records).toMatchObject([{ isArchived: true }]);
+    const client = createClient(await createFakeBinary('require-discovery-page-size'), diagnostics);
+
+    const result = await client.listThreads({ pageSize: 25, maxPages: 1 });
+
+    expect(result.pagesRead).toBe(1);
+    expect(result.complete).toBe(false);
+    expect(result.incompleteReason).toBe('page-cap');
+    expect(result.nextCursor).toBe('page-2');
+    expect(result.records).toHaveLength(2);
+    expect(result.records.every((record) => record.isArchived === false)).toBe(true);
     expect(diagnostics).toEqual([]);
+    await client.stop();
+  });
+
+  it('rejects a page size above the protocol bound before spawning a child', async () => {
+    const diagnostics: CodexCatalogDiagnosticCode[] = [];
+    const client = createClient(
+      join(tmpdir(), 'agent-status-tiles-invalid-page-size-codex-executable'),
+      diagnostics,
+    );
+
+    await expect(client.listThreads({ pageSize: 101 })).rejects.toMatchObject({
+      code: 'invalid-options',
+    });
+    await expect(client.listThreads({ pageSize: 0 })).rejects.toMatchObject({
+      code: 'invalid-options',
+    });
+    expect(diagnostics).toEqual(['invalid-options', 'invalid-options']);
+    expect(client.isConnected).toBe(false);
     await client.stop();
   });
 

@@ -319,6 +319,8 @@ test('native overlay fills five recent slots when catalog originator needs rollo
   try {
     await mkdir(userDataDir);
     await mkdir(sessionsRoot);
+    // The live page carries six threads: four with a catalog originator, one
+    // whose originator needs rollout proof, and one whose proof contradicts.
     const records = await Promise.all(
       Array.from({ length: 6 }, async (_, index) => {
         const id = `00000000-0000-7000-8000-${String(index + 1).padStart(12, '0')}`;
@@ -346,6 +348,9 @@ test('native overlay fills five recent slots when catalog originator needs rollo
         };
       }),
     );
+    // Discovery must ask for exactly one live page of 25. Any archived-route
+    // or differently sized request is answered with an error so the spec
+    // fails closed instead of filling slots from an unexpected listing.
     await writeFile(
       binaryPath,
       `#!/usr/bin/env node
@@ -360,8 +365,11 @@ process.stdin.on('data', chunk => {
     if (request.method === 'initialize') {
       process.stdout.write(JSON.stringify({id:request.id,result:{codexHome:'/tmp/test',platformFamily:'unix',platformOs:'macos',userAgent:'test'}})+'\\n');
     } else if (request.method === 'thread/list') {
-      const data = request.params.archived ? [] : ${JSON.stringify(records)};
-      process.stdout.write(JSON.stringify({id:request.id,result:{data,nextCursor:null}})+'\\n');
+      if (request.params.archived !== false || request.params.limit !== 25 || request.params.cursor !== null) {
+        process.stdout.write(JSON.stringify({id:request.id,error:{code:-32602,message:'unexpected discovery request'}})+'\\n');
+        continue;
+      }
+      process.stdout.write(JSON.stringify({id:request.id,result:{data:${JSON.stringify(records)},nextCursor:'older-threads'}})+'\\n');
     }
   }
 });

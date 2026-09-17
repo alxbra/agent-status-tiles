@@ -55,8 +55,13 @@ interface DiscoveredFile {
   isArchived: boolean;
 }
 
-const MAX_CATALOG_CONTINUATIONS = 16;
-const MAX_CATALOG_RECORDS = 1_024;
+// Discovery reads one live `thread/list` page of the newest threads. The dock
+// can show at most MAX_RECENT_THREAD_LIMIT of them; the margin lets replaced
+// or newly archived threads be noticed and covers records that fail
+// qualification. The app-server rescans its session store on every call, so
+// one wider page is far cheaper than several narrow ones.
+const DISCOVERY_PAGE_MARGIN = 15;
+export const DISCOVERY_PAGE_SIZE = MAX_RECENT_THREAD_LIMIT + DISCOVERY_PAGE_MARGIN;
 const NONFATAL_COVERAGE_DIAGNOSTICS = new Set([
   'missing-call-id',
   'unsupported-item',
@@ -143,35 +148,12 @@ export class CodexSurfaceMonitor implements ProviderSurfaceMonitor {
 
   async discover(): Promise<RuntimeDiscoveryResult> {
     if (!this.started || this.catalog === undefined) throw new Error(`${this.surface}-not-started`);
-    const records: CodexCatalogRecord[] = [];
-    const seenCursors = new Set<string>();
-    let cursor: string | null = null;
-    let complete = false;
-    let coverageIncomplete = false;
-    for (let iteration = 0; iteration < MAX_CATALOG_CONTINUATIONS; iteration += 1) {
-      const remaining = MAX_CATALOG_RECORDS - records.length;
-      if (remaining < 1) throw new Error(`${this.surface}-catalog-incomplete`);
-      const page = await this.catalog.listThreads({
-        includeArchived: true,
-        cursor,
-        // Use the catalog client's bounded default: large app-server pages
-        // can exceed its 1 MiB protocol-line limit before projection.
-        maxPages: 16,
-        maxRecords: remaining,
-      });
-      records.push(...page.records);
-      coverageIncomplete ||= page.coverageIncomplete === true;
-      if (page.complete) {
-        complete = true;
-        break;
-      }
-      if (page.nextCursor === null || seenCursors.has(page.nextCursor)) {
-        throw new Error(`${this.surface}-catalog-incomplete`);
-      }
-      seenCursors.add(page.nextCursor);
-      cursor = page.nextCursor;
-    }
-    if (!complete) throw new Error(`${this.surface}-catalog-incomplete`);
+    // A single live page, newest first, is the whole product surface. Threads
+    // beyond it are older than anything the dock can show, so the page is
+    // complete even when the app-server reports a continuation cursor.
+    const page = await this.catalog.listThreads({ pageSize: DISCOVERY_PAGE_SIZE, maxPages: 1 });
+    const records: readonly CodexCatalogRecord[] = page.records;
+    let coverageIncomplete = page.coverageIncomplete === true;
     this.unavailableSourceIds.clear();
     const qualified = this.qualify(records);
     coverageIncomplete ||= qualified.issues.length > 0;

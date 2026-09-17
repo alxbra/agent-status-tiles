@@ -67,9 +67,7 @@ describe('Codex CLI monitor', () => {
       await monitor.start();
       expect(monitor.key).toBe('codex:cli');
       const discovery = await monitor.discover();
-      expect(catalog.listThreads).toHaveBeenCalledWith(
-        expect.objectContaining({ includeArchived: true }),
-      );
+      expect(catalog.listThreads).toHaveBeenCalledWith({ pageSize: 25, maxPages: 1 });
       expect(discovery.sources).toMatchObject([
         {
           nativeSessionId: '22222222-2222-7222-8222-222222222222',
