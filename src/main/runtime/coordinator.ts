@@ -35,7 +35,7 @@ export const MAX_RUNTIME_SOURCES = 512;
 export const MAX_RUNTIME_SOURCE_ID_BYTES = 256;
 export const MAX_RUNTIME_TITLE_BYTES = 256;
 export const DEFAULT_FILE_POLL_INTERVAL_MS = 250;
-export const DEFAULT_CATALOG_POLL_INTERVAL_MS = 1_000;
+export const DEFAULT_CATALOG_POLL_INTERVAL_MS = 2_000;
 export const MAX_RETRY_INTERVAL_MS = 15_000;
 export const MAX_OVERLAY_RUNTIME_SESSIONS = 256;
 export const MAX_RETAINED_RUNTIME_SESSIONS = 1_024;
@@ -111,14 +111,23 @@ export interface RuntimeReadResult {
 }
 
 /**
- * Injection-friendly provider-neutral monitor boundary. A real Codex/Claude
- * adapter is deliberately outside PR2; tests and later adapters implement this
- * interface with sanitized observations.
+ * Injection-friendly provider-neutral monitor boundary. Adapters implement this
+ * interface with sanitized observations; tests inject fakes.
  */
 export interface ProviderSurfaceMonitor {
   readonly key: SurfaceKey;
   start(): void | Promise<void>;
   stop(): void | Promise<void>;
+  /**
+   * Report the newest eligible sessions for this surface, at most
+   * `RECENT_THREAD_DISCOVERY_WINDOW` of them, ordered by recency where the
+   * provider offers it. The result is the complete cohort: on a completed
+   * discovery the coordinator drops every persisted session the surface no
+   * longer reports, whatever its status, and a session reappears when the
+   * provider reports it again. Adapters must not enumerate beyond the window
+   * (for example archived or historical records) to explain an absence; they
+   * report what the dock can show and leave removal to the coordinator.
+   */
   discover(): Promise<RuntimeDiscoveryResult>;
   /** Optional fixed-EOF capture hook. If absent, discovery's sources are used. */
   capture?(
@@ -849,7 +858,7 @@ export function createRuntimeCoordinator(options: RuntimeCoordinatorOptions): Ru
     read: RuntimeReadResult,
     expectedGeneration: number,
     expectedSurfaceGeneration: number,
-    pruneIdle: boolean,
+    pruneUnobserved: boolean,
   ): Promise<void> => {
     await withCommitLock(async () => {
       if (
@@ -887,7 +896,11 @@ export function createRuntimeCoordinator(options: RuntimeCoordinatorOptions): Ru
         const id = makeSessionId(provider, source.nativeSessionId);
         (candidate.owners as Record<string, SurfaceKey>)[id] = key;
       }
-      if (pruneIdle) {
+      if (pruneUnobserved) {
+        // A completed catalog is the newest live page and is authoritative for
+        // the surface cohort. Anything it no longer reports, whatever its
+        // status, has left that page (archived, deleted, or aged out) and is
+        // dropped; it reappears when the thread is updated again.
         const observedIds = new Set(
           sources.map((source) => makeSessionId(provider, source.nativeSessionId)),
         );
@@ -895,8 +908,7 @@ export function createRuntimeCoordinator(options: RuntimeCoordinatorOptions): Ru
         const order: string[] = [];
         for (const id of nextState.order) {
           const record = own(nextState.sessions, id);
-          if (record === undefined) continue;
-          if (!observedIds.has(id) && record.status === 'idle') continue;
+          if (record === undefined || !observedIds.has(id)) continue;
           sessions[id] = record;
           order.push(id);
         }
@@ -919,10 +931,9 @@ export function createRuntimeCoordinator(options: RuntimeCoordinatorOptions): Ru
       }
       partition.sessions = { ...nextState.sessions };
       partition.order = [...nextState.order];
-      // A completed catalog is authoritative for the source cohort. Drop
-      // cursors for sources no longer discovered so churn cannot exhaust the
-      // bounded persisted cursor map.
-      partition.cursors = pruneIdle
+      // Drop cursors for sources no longer discovered so churn cannot exhaust
+      // the bounded persisted cursor map.
+      partition.cursors = pruneUnobserved
         ? { ...read.cursors }
         : { ...partition.cursors, ...read.cursors };
       const baseline = partition.baseline.status === 'pending';

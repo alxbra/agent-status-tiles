@@ -4,6 +4,18 @@ export const PRIMARY_DISPLAY_ID = 'primary';
 export const DESKTOP_PREFERENCES_SCHEMA_VERSION = 2 as const;
 export const DEFAULT_RECENT_THREAD_LIMIT = 5;
 export const MAX_RECENT_THREAD_LIMIT = 10;
+/**
+ * How many of the newest eligible sessions a provider monitor reports per
+ * discovery, for every provider and surface. It covers the largest recent
+ * thread limit plus headroom for records the surface qualifier excludes (the
+ * other surface's threads, child tasks, ephemeral or unproven records) and for
+ * noticing a replaced or newly archived thread. The coordinator treats the
+ * reported window as the complete cohort; anything outside it is dropped and
+ * reappears when the session is updated again.
+ */
+export const RECENT_THREAD_DISCOVERY_MARGIN = 15;
+export const RECENT_THREAD_DISCOVERY_WINDOW =
+  MAX_RECENT_THREAD_LIMIT + RECENT_THREAD_DISCOVERY_MARGIN;
 export const MAX_SETTINGS_DISPLAYS = 32;
 export const MAX_DISPLAY_LABEL_BYTES = 256;
 

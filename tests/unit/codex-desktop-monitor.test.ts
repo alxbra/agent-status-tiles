@@ -3,6 +3,7 @@ import { appendFile, mkdir, mkdtemp, rename, rm, writeFile } from 'node:fs/promi
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { CodexDesktopMonitor } from '../../src/main/providers/codex/desktop-monitor';
+import { RECENT_THREAD_DISCOVERY_WINDOW } from '../../src/shared/settings';
 import type {
   CodexCatalogRecord,
   CodexListThreadsResult,
@@ -271,9 +272,7 @@ describe('Codex Desktop monitor', () => {
     try {
       await monitor.start();
       const discovered = await monitor.discover();
-      expect(catalog.listThreads).toHaveBeenCalledWith(
-        expect.objectContaining({ includeArchived: true }),
-      );
+      expect(catalog.listThreads).toHaveBeenCalledWith({ pageSize: 25, maxPages: 1 });
       expect(discovered.sources).toMatchObject([
         {
           nativeSessionId: catalogId,
@@ -332,17 +331,10 @@ describe('Codex Desktop monitor', () => {
     }
   });
 
-  it('fails closed on an incomplete catalog and quarantines unmatched rollout identity', async () => {
+  it('quarantines unmatched rollout identity as incomplete coverage', async () => {
     const { monitor, catalog, record } = await fixture();
     try {
       await monitor.start();
-      catalog.listThreads.mockResolvedValueOnce({
-        records: [record],
-        nextCursor: null,
-        pagesRead: 16,
-        complete: false,
-      });
-      await expect(monitor.discover()).rejects.toThrow('desktop-catalog-incomplete');
       catalog.listThreads.mockResolvedValueOnce({
         records: [{ ...record, nativeId: catalogId, sessionId: catalogId }],
         nextCursor: null,
@@ -357,29 +349,38 @@ describe('Codex Desktop monitor', () => {
     }
   });
 
-  it('follows catalog continuation before declaring Desktop coverage complete', async () => {
+  it('issues one live request for the newest threads and treats the page as complete', async () => {
     const { monitor, catalog, record } = await fixture();
-    catalog.listThreads
-      .mockResolvedValueOnce({
-        records: [],
-        nextCursor: 'next-page',
-        pagesRead: 16,
-        complete: false,
-      })
-      .mockResolvedValueOnce({
-        records: [record],
-        nextCursor: null,
-        pagesRead: 1,
-        complete: true,
-      });
+    // The app-server reports more (older) threads beyond the page; discovery
+    // must neither follow the cursor nor fail closed, because nothing beyond
+    // the newest page can be shown.
+    catalog.listThreads.mockResolvedValue({
+      records: [record],
+      nextCursor: 'older-threads',
+      pagesRead: 1,
+      complete: false,
+      incompleteReason: 'page-cap',
+    });
     try {
       await monitor.start();
       const discovery = await monitor.discover();
-      expect(discovery.sources).toHaveLength(1);
-      expect(catalog.listThreads).toHaveBeenNthCalledWith(
-        2,
-        expect.objectContaining({ cursor: 'next-page', includeArchived: true }),
-      );
+      expect(discovery.complete).toBe(true);
+      expect(discovery.coverageIncomplete).toBeUndefined();
+      expect(discovery.sources).toMatchObject([{ nativeSessionId: record.nativeId }]);
+      expect(RECENT_THREAD_DISCOVERY_WINDOW).toBe(25);
+      expect(catalog.listThreads).toHaveBeenCalledTimes(1);
+      expect(catalog.listThreads).toHaveBeenCalledWith({ pageSize: 25, maxPages: 1 });
+      const request = (catalog.listThreads.mock.calls[0] as unknown[])[0] as Record<
+        string,
+        unknown
+      >;
+      expect(request).not.toHaveProperty('includeArchived');
+      expect(request).not.toHaveProperty('archived');
+      expect(request).not.toHaveProperty('cursor');
+      // A second discovery starts from the newest page again rather than continuing.
+      await monitor.discover();
+      expect(catalog.listThreads).toHaveBeenCalledTimes(2);
+      expect(catalog.listThreads).toHaveBeenLastCalledWith({ pageSize: 25, maxPages: 1 });
     } finally {
       await monitor.stop();
     }

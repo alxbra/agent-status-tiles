@@ -5,6 +5,8 @@ import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
+  DEFAULT_CATALOG_POLL_INTERVAL_MS,
+  DEFAULT_FILE_POLL_INTERVAL_MS,
   createRuntimeCoordinator,
   type ProviderSurfaceMonitor,
   type RuntimeMonitorSource,
@@ -278,7 +280,7 @@ describe('runtime coordinator', () => {
     await runtime.stop();
   });
 
-  it('shows confirmed work during partial coverage and marks lost observations unavailable', async () => {
+  it('shows confirmed work during partial coverage and drops observations a later catalog omits', async () => {
     const dataPath = await appDataPath();
     const item = source('confirmed');
     let clock = 100;
@@ -335,10 +337,13 @@ describe('runtime coordinator', () => {
     expect(runtime.getOverlayState().sessions).toMatchObject([{ status: 'working' }]);
     clock = 111;
     scheduled.at(-1)?.();
-    await vi.waitFor(() =>
-      expect(runtime.getOverlayState().sessions).toMatchObject([{ status: 'unavailable' }]),
-    );
+    await vi.waitFor(() => expect(runtime.getOverlayState().sessions).toEqual([]));
+    expect(runtime.getMonitoringState().partitions['codex:desktop'].sessions).toEqual({});
     expect(runtime.getMonitoringState().partitions['codex:desktop'].baseline.status).toBe('ready');
+    expect(runtime.getHealth()['codex:desktop']).toMatchObject({
+      status: 'available',
+      coverageIncomplete: true,
+    });
     await runtime.stop();
   });
 
@@ -894,6 +899,251 @@ describe('runtime coordinator', () => {
     expect(testMonitor.stop).toHaveBeenCalled();
     expect(runtime.getMonitoringState().partitions['codex:desktop'].enabled).toBe(false);
     expect(read).not.toHaveBeenCalled();
+    await runtime.stop();
+  });
+  it('polls the catalog every two seconds by default while files poll continuously', async () => {
+    expect(DEFAULT_CATALOG_POLL_INTERVAL_MS).toBe(2_000);
+    expect(DEFAULT_FILE_POLL_INTERVAL_MS).toBe(250);
+    const dataPath = await appDataPath();
+    const item = source('steady');
+    let clock = 100;
+    const scheduled: Array<() => void> = [];
+    const read = vi.fn(async (request: RuntimeReadRequest) => ({
+      events: [],
+      cursors: Object.fromEntries(
+        request.sources.map((entry) => [
+          entry.id,
+          { identity: 'fixture', offset: entry.endOffset ?? 0 },
+        ]),
+      ),
+      complete: true,
+    }));
+    const testMonitor = monitor('codex:desktop', [item], read);
+    const runtime = createRuntimeCoordinator({
+      appDataPath: dataPath,
+      monitors: [testMonitor],
+      now: () => clock,
+      setTimeout: (callback) => {
+        scheduled.push(callback);
+        return scheduled.length as unknown as ReturnType<typeof setTimeout>;
+      },
+      clearTimeout: () => undefined,
+    });
+
+    await runtime.start();
+    await runtime.connect('codex', 'desktop');
+    // Connect forces a catalog read.
+    expect(testMonitor.discover).toHaveBeenCalledTimes(1);
+    expect(read).toHaveBeenCalledTimes(1);
+
+    // Each completed run schedules the next file poll; fire it once it exists.
+    const firePendingPoll = async (): Promise<void> => {
+      const pending = scheduled.length;
+      scheduled.at(-1)?.();
+      await vi.waitFor(() => expect(scheduled.length).toBeGreaterThan(pending));
+    };
+
+    // File polls between listings carry live status without a catalog read.
+    for (const step of [1, 2, 3]) {
+      clock = 100 + step * DEFAULT_FILE_POLL_INTERVAL_MS;
+      await firePendingPoll();
+      expect(read).toHaveBeenCalledTimes(1 + step);
+      expect(testMonitor.discover).toHaveBeenCalledTimes(1);
+    }
+
+    clock = 100 + DEFAULT_CATALOG_POLL_INTERVAL_MS;
+    await firePendingPoll();
+    expect(testMonitor.discover).toHaveBeenCalledTimes(2);
+
+    // Resume also forces a catalog read regardless of elapsed time.
+    await runtime.suspend();
+    await runtime.resume();
+    expect(testMonitor.discover).toHaveBeenCalledTimes(3);
+    await runtime.stop();
+  });
+
+  it('drops a stale archived session that discovery no longer reports', async () => {
+    const dataPath = await appDataPath();
+    const archivedId = makeSessionId('codex', 'archived-thread');
+    const live = source('live-thread');
+    const liveId = makeSessionId('codex', live.nativeSessionId);
+    const savedState = reduceSessionState(createInitialSessionState(), {
+      type: 'upsert',
+      provider: 'codex',
+      surface: 'desktop',
+      nativeSessionId: 'archived-thread',
+      title: 'Archived earlier',
+      isTopLevel: true,
+      isArchived: true,
+      canOpen: false,
+      updatedAt: 1,
+    });
+    const saved = createInitialMonitoringState();
+    const partition = saved.partitions['codex:desktop'];
+    partition.enabled = true;
+    partition.baseline = { status: 'ready', cutoff: 2 };
+    partition.sessions = savedState.sessions;
+    partition.order = [archivedId];
+    saved.globalOrder = [archivedId];
+    saved.owners = { [archivedId]: 'codex:desktop' };
+    await saveSessionState(dataPath, saved);
+    const runtime = createRuntimeCoordinator({
+      appDataPath: dataPath,
+      monitors: [
+        monitor('codex:desktop', [live], async (request) => ({
+          events: [],
+          cursors: Object.fromEntries(
+            request.sources.map((entry) => [
+              entry.id,
+              { identity: 'fixture', offset: entry.endOffset ?? 0 },
+            ]),
+          ),
+          complete: true,
+        })),
+      ],
+    });
+
+    await runtime.start();
+    await vi.waitFor(() =>
+      expect(
+        runtime.getMonitoringState().partitions['codex:desktop'].sessions[liveId],
+      ).toBeDefined(),
+    );
+    const partitionAfter = runtime.getMonitoringState().partitions['codex:desktop'];
+    expect(partitionAfter.sessions[archivedId]).toBeUndefined();
+    expect(partitionAfter.order).toEqual([liveId]);
+    expect(runtime.getMonitoringState().globalOrder).toEqual([liveId]);
+    expect(runtime.getMonitoringState().owners[archivedId]).toBeUndefined();
+    expect(runtime.getOverlayState().sessions.map((session) => session.id)).toEqual([liveId]);
+    const persisted = (await loadSessionState(dataPath)).monitoring;
+    expect(persisted.partitions['codex:desktop'].sessions[archivedId]).toBeUndefined();
+    expect(persisted.globalOrder).toEqual([liveId]);
+    await runtime.stop();
+  });
+
+  it('removes a visible thread on the next discovery once it is archived', async () => {
+    const dataPath = await appDataPath();
+    const item = source('archived-later');
+    const sessionId = makeSessionId('codex', item.nativeSessionId);
+    let clock = 100;
+    const scheduled: Array<() => void> = [];
+    const testMonitor = monitor('codex:desktop', [item], async (request) => ({
+      events: [],
+      cursors: Object.fromEntries(
+        request.sources.map((entry) => [
+          entry.id,
+          { identity: 'fixture', offset: entry.endOffset ?? 0 },
+        ]),
+      ),
+      complete: true,
+    }));
+    // Archiving moves the thread off the live page, so the adapter simply
+    // stops reporting it; no archived listing is involved.
+    testMonitor.discover = vi
+      .fn()
+      .mockResolvedValueOnce({ complete: true, capturedAt: 100, sources: [item] })
+      .mockResolvedValue({ complete: true, capturedAt: 200, sources: [] });
+    const runtime = createRuntimeCoordinator({
+      appDataPath: dataPath,
+      monitors: [testMonitor],
+      now: () => clock,
+      filePollIntervalMs: 10,
+      catalogPollIntervalMs: 10,
+      setTimeout: (callback) => {
+        scheduled.push(callback);
+        return scheduled.length as unknown as ReturnType<typeof setTimeout>;
+      },
+      clearTimeout: () => undefined,
+    });
+
+    await runtime.start();
+    await runtime.connect('codex', 'desktop');
+    expect(runtime.getOverlayState().sessions).toMatchObject([{ id: sessionId, status: 'idle' }]);
+
+    clock = 200;
+    scheduled.at(-1)?.();
+    await vi.waitFor(() => expect(runtime.getOverlayState().sessions).toEqual([]));
+    expect(testMonitor.discover).toHaveBeenCalledTimes(2);
+    const partition = runtime.getMonitoringState().partitions['codex:desktop'];
+    expect(partition.sessions[sessionId]).toBeUndefined();
+    expect(partition.order).toEqual([]);
+    expect(partition.cursors[item.id]).toBeUndefined();
+    expect(runtime.getMonitoringState().globalOrder).toEqual([]);
+    expect(runtime.getHealth()['codex:desktop'].status).toBe('available');
+    await runtime.stop();
+  });
+  it('drops an unread thread once a completed catalog no longer reports it', async () => {
+    const dataPath = await appDataPath();
+    const item = source('completed-then-gone');
+    const sessionId = makeSessionId('codex', item.nativeSessionId);
+    let clock = 100;
+    const scheduled: Array<() => void> = [];
+    let reads = 0;
+    const testMonitor = monitor('codex:desktop', [item], async (request) => {
+      reads += 1;
+      return {
+        // The second read (first live file poll) reports a completed turn.
+        events:
+          reads === 2
+            ? [
+                { type: 'turn-started' as const, sessionId, turnId: 'turn-1', timestamp: 120 },
+                {
+                  type: 'turn-completed' as const,
+                  sessionId,
+                  turnId: 'turn-1',
+                  completionId: 'completion-1',
+                  timestamp: 121,
+                },
+              ]
+            : [],
+        cursors: Object.fromEntries(
+          request.sources.map((entry) => [
+            entry.id,
+            { identity: 'fixture', offset: (entry.endOffset ?? 0) + reads },
+          ]),
+        ),
+        complete: true,
+      };
+    });
+    testMonitor.discover = vi
+      .fn()
+      .mockResolvedValueOnce({ complete: true, capturedAt: 100, sources: [item] })
+      .mockResolvedValue({ complete: true, capturedAt: 300, sources: [] });
+    const runtime = createRuntimeCoordinator({
+      appDataPath: dataPath,
+      monitors: [testMonitor],
+      now: () => clock,
+      filePollIntervalMs: 10,
+      catalogPollIntervalMs: 100,
+      setTimeout: (callback) => {
+        scheduled.push(callback);
+        return scheduled.length as unknown as ReturnType<typeof setTimeout>;
+      },
+      clearTimeout: () => undefined,
+    });
+
+    await runtime.start();
+    await runtime.connect('codex', 'desktop');
+    expect(runtime.getOverlayState().sessions).toMatchObject([{ id: sessionId, status: 'idle' }]);
+
+    // A file poll (no catalog) turns the thread unread.
+    clock = 120;
+    scheduled.at(-1)?.();
+    await vi.waitFor(() =>
+      expect(runtime.getOverlayState().sessions).toMatchObject([{ status: 'unread' }]),
+    );
+    expect(testMonitor.discover).toHaveBeenCalledTimes(1);
+
+    // The next catalog omits the thread; unread state does not keep it visible.
+    clock = 300;
+    scheduled.at(-1)?.();
+    await vi.waitFor(() => expect(runtime.getOverlayState().sessions).toEqual([]));
+    expect(testMonitor.discover).toHaveBeenCalledTimes(2);
+    expect(runtime.getMonitoringState().partitions['codex:desktop'].sessions).toEqual({});
+    expect(runtime.getMonitoringState().globalOrder).toEqual([]);
+    expect(
+      (await loadSessionState(dataPath)).monitoring.partitions['codex:desktop'].sessions,
+    ).toEqual({});
     await runtime.stop();
   });
 });
