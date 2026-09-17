@@ -284,7 +284,7 @@ export function verifyClaudeHooks(
 
 /** The `code` of a Node filesystem error, or undefined for anything else. */
 export function errorCode(error: unknown): unknown {
-  return (error as { code?: unknown }).code;
+  return (error as { code?: unknown } | null | undefined)?.code;
 }
 
 function snapshotOf(target: string, metadata: BigIntStats): SettingsSnapshot {

@@ -9,6 +9,7 @@ import {
   MAX_MANAGED_DROP_INS,
   defaultClaudeManagedLocations,
   inspectClaudeManagedHooks,
+  type ClaudeManagedHookSetting,
   type ClaudeManagedLocations,
 } from '../../src/main/providers/claude/managed-settings';
 
@@ -18,10 +19,16 @@ afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
 
-async function locations(): Promise<ClaudeManagedLocations & { root: string }> {
+interface ManagedFixture extends ClaudeManagedLocations {
+  root: string;
+  dropIns: string;
+}
+
+async function locations(): Promise<ManagedFixture> {
   const root = await mkdtemp(join(tmpdir(), 'agent-status-tiles-claude-managed-'));
   roots.push(root);
-  return { root, directory: join(root, 'ClaudeCode'), preferencesPaths: [] };
+  const directory = join(root, 'ClaudeCode');
+  return { root, directory, dropIns: join(directory, 'managed-settings.d'), preferencesPaths: [] };
 }
 
 async function writeManaged(directory: string, name: string, content: unknown): Promise<void> {
@@ -30,11 +37,28 @@ async function writeManaged(directory: string, name: string, content: unknown): 
   await writeFile(path, typeof content === 'string' ? content : JSON.stringify(content));
 }
 
+/** Write the main file and drop-ins in one call; drop-in names sort in the given order. */
+async function writeSequence(
+  managed: ManagedFixture,
+  main: unknown | undefined,
+  dropIns: readonly unknown[],
+): Promise<void> {
+  await rm(managed.directory, { recursive: true, force: true });
+  if (main !== undefined) await writeManaged(managed.directory, 'managed-settings.json', main);
+  for (const [index, content] of dropIns.entries()) {
+    await writeManaged(managed.dropIns, `${String(index).padStart(2, '0')}.json`, content);
+  }
+}
+
+const restricted = (setting: ClaudeManagedHookSetting) => ({ status: 'restricted', setting });
+const unrestricted = { status: 'unrestricted' };
+const unknown = { status: 'unknown' };
+
 describe('claude managed settings', () => {
   it('points at the macOS system directory and the MDM domain by default', () => {
     const defaults = defaultClaudeManagedLocations();
     expect(defaults.directory).toBe(CLAUDE_MANAGED_DIRECTORY);
-    expect(defaults.directory).toBe('/Library/Application Support/ClaudeCode');
+    expect(CLAUDE_MANAGED_DIRECTORY).toBe('/Library/Application Support/ClaudeCode');
     expect(defaults.preferencesPaths[0]).toBe(
       '/Library/Managed Preferences/com.anthropic.claudecode.plist',
     );
@@ -47,26 +71,27 @@ describe('claude managed settings', () => {
 
   it('reports no restriction when nothing managed exists or the keys are off', async () => {
     const managed = await locations();
-    expect(await inspectClaudeManagedHooks(managed)).toEqual({ status: 'unrestricted' });
+    expect(await inspectClaudeManagedHooks(managed)).toEqual(unrestricted);
     await writeManaged(managed.directory, 'managed-settings.json', {
       disableAllHooks: false,
       allowManagedHooksOnly: false,
       strictPluginOnlyCustomization: ['skills', 'agents'],
       permissions: { deny: ['Bash(rm:*)'] },
     });
-    expect(await inspectClaudeManagedHooks(managed)).toEqual({ status: 'unrestricted' });
+    expect(await inspectClaudeManagedHooks(managed)).toEqual(unrestricted);
     // An empty file is a missing policy, not a broken one.
     await writeManaged(managed.directory, 'managed-settings.json', '\n');
-    expect(await inspectClaudeManagedHooks(managed)).toEqual({ status: 'unrestricted' });
+    expect(await inspectClaudeManagedHooks(managed)).toEqual(unrestricted);
   });
 
   it('names the managed key that keeps user hooks from running', async () => {
     const managed = await locations();
-    const cases: [unknown, string][] = [
+    const cases: [unknown, ClaudeManagedHookSetting][] = [
       [{ disableAllHooks: true }, 'disableAllHooks'],
       [{ allowManagedHooksOnly: true }, 'allowManagedHooksOnly'],
       // Claude Code treats an invalid value as true until it is fixed.
       [{ allowManagedHooksOnly: 'yes' }, 'allowManagedHooksOnly'],
+      [{ allowManagedHooksOnly: null }, 'allowManagedHooksOnly'],
       [{ strictPluginOnlyCustomization: true }, 'strictPluginOnlyCustomization'],
       [{ strictPluginOnlyCustomization: ['mcp', 'hooks'] }, 'strictPluginOnlyCustomization'],
       // The most sweeping key names the reason when several apply.
@@ -74,108 +99,124 @@ describe('claude managed settings', () => {
     ];
     for (const [content, setting] of cases) {
       await writeManaged(managed.directory, 'managed-settings.json', content);
-      expect(await inspectClaudeManagedHooks(managed)).toEqual({ status: 'restricted', setting });
+      expect(await inspectClaudeManagedHooks(managed)).toEqual(restricted(setting));
+    }
+    // Only a literal true disables; anything else leaves hooks on.
+    for (const value of [null, 'true', 1]) {
+      await writeManaged(managed.directory, 'managed-settings.json', { disableAllHooks: value });
+      expect(await inspectClaudeManagedHooks(managed)).toEqual(unrestricted);
     }
   });
 
-  it('merges drop-ins after the main file in alphabetical order, ignoring hidden and non-JSON files', async () => {
+  it('lets a later single value replace an earlier one across the main file and drop-ins', async () => {
     const managed = await locations();
-    const dropIns = join(managed.directory, 'managed-settings.d');
-    await writeManaged(managed.directory, 'managed-settings.json', { disableAllHooks: true });
-    await writeManaged(dropIns, '10-hooks.json', { disableAllHooks: false });
-    expect(await inspectClaudeManagedHooks(managed)).toEqual({ status: 'unrestricted' });
+    await writeSequence(managed, { disableAllHooks: true }, [{ disableAllHooks: false }]);
+    expect(await inspectClaudeManagedHooks(managed)).toEqual(unrestricted);
+    await writeSequence(managed, { disableAllHooks: false }, [
+      { disableAllHooks: true },
+      { disableAllHooks: false },
+      { disableAllHooks: true },
+    ]);
+    expect(await inspectClaudeManagedHooks(managed)).toEqual(restricted('disableAllHooks'));
+    // A later false lifts an accumulated lock; a later value that is not a
+    // documented one replaces it as well rather than raising an alarm.
+    await writeSequence(managed, { strictPluginOnlyCustomization: true }, [
+      { strictPluginOnlyCustomization: false },
+    ]);
+    expect(await inspectClaudeManagedHooks(managed)).toEqual(unrestricted);
+    await writeSequence(managed, { strictPluginOnlyCustomization: ['hooks'] }, [
+      { strictPluginOnlyCustomization: false },
+    ]);
+    expect(await inspectClaudeManagedHooks(managed)).toEqual(unrestricted);
+    await writeSequence(managed, { strictPluginOnlyCustomization: true }, [
+      { strictPluginOnlyCustomization: null },
+    ]);
+    expect(await inspectClaudeManagedHooks(managed)).toEqual(unrestricted);
+    // Drop-ins alone, without the main file, are still read.
+    await writeSequence(managed, undefined, [{ allowManagedHooksOnly: true }]);
+    expect(await inspectClaudeManagedHooks(managed)).toEqual(restricted('allowManagedHooksOnly'));
+  });
 
-    await writeManaged(dropIns, '20-security.json', { disableAllHooks: true });
-    expect(await inspectClaudeManagedHooks(managed)).toEqual({
-      status: 'restricted',
-      setting: 'disableAllHooks',
-    });
-    await writeManaged(dropIns, '30-relax.json', { disableAllHooks: false });
-    expect(await inspectClaudeManagedHooks(managed)).toEqual({ status: 'unrestricted' });
+  it('combines lists across files but lets a single value cut the chain', async () => {
+    const managed = await locations();
+    await writeSequence(managed, { strictPluginOnlyCustomization: ['hooks'] }, [
+      { strictPluginOnlyCustomization: ['skills'] },
+    ]);
+    expect(await inspectClaudeManagedHooks(managed)).toEqual(
+      restricted('strictPluginOnlyCustomization'),
+    );
+    await writeSequence(managed, { strictPluginOnlyCustomization: ['skills'] }, [
+      { strictPluginOnlyCustomization: ['hooks'] },
+    ]);
+    expect(await inspectClaudeManagedHooks(managed)).toEqual(
+      restricted('strictPluginOnlyCustomization'),
+    );
+    // An array after true names the locks anew, and an earlier list does not
+    // survive the true in between.
+    await writeSequence(managed, { strictPluginOnlyCustomization: true }, [
+      { strictPluginOnlyCustomization: ['skills'] },
+    ]);
+    expect(await inspectClaudeManagedHooks(managed)).toEqual(unrestricted);
+    await writeSequence(managed, { strictPluginOnlyCustomization: ['hooks'] }, [
+      { strictPluginOnlyCustomization: true },
+      { strictPluginOnlyCustomization: ['skills'] },
+    ]);
+    expect(await inspectClaudeManagedHooks(managed)).toEqual(unrestricted);
+    await writeSequence(managed, { strictPluginOnlyCustomization: ['skills'] }, [
+      { strictPluginOnlyCustomization: true },
+    ]);
+    expect(await inspectClaudeManagedHooks(managed)).toEqual(
+      restricted('strictPluginOnlyCustomization'),
+    );
+  });
 
-    // Lists combine across files, so a lock named anywhere holds.
-    await writeManaged(dropIns, '05-lock.json', { strictPluginOnlyCustomization: ['hooks'] });
-    await writeManaged(dropIns, '40-other.json', { strictPluginOnlyCustomization: ['skills'] });
-    expect(await inspectClaudeManagedHooks(managed)).toEqual({
-      status: 'restricted',
-      setting: 'strictPluginOnlyCustomization',
-    });
+  it('reads drop-ins in alphabetical order and ignores hidden and non-JSON entries', async () => {
+    const managed = await locations();
+    await writeSequence(managed, { disableAllHooks: false }, []);
+    // Alphabetical, not creation order: the later name wins.
+    await writeManaged(managed.dropIns, '20-on.json', { disableAllHooks: true });
+    await writeManaged(managed.dropIns, '10-off.json', { disableAllHooks: false });
+    expect(await inspectClaudeManagedHooks(managed)).toEqual(restricted('disableAllHooks'));
+    await writeManaged(managed.dropIns, '30-off.json', { disableAllHooks: false });
+    expect(await inspectClaudeManagedHooks(managed)).toEqual(unrestricted);
 
-    // A later `false` replaces the accumulated lock; a later array locks again.
-    await writeManaged(dropIns, '45-unlock.json', { strictPluginOnlyCustomization: false });
-    expect(await inspectClaudeManagedHooks(managed)).toEqual({ status: 'unrestricted' });
-    await writeManaged(dropIns, '46-relock.json', { strictPluginOnlyCustomization: ['hooks'] });
-    expect(await inspectClaudeManagedHooks(managed)).toEqual({
-      status: 'restricted',
-      setting: 'strictPluginOnlyCustomization',
-    });
-    await writeManaged(managed.directory, 'managed-settings.json', {
-      strictPluginOnlyCustomization: true,
-    });
-    await writeManaged(dropIns, '47-unlock-all.json', { strictPluginOnlyCustomization: false });
-    expect(await inspectClaudeManagedHooks(managed)).toEqual({ status: 'unrestricted' });
-    // A later array replaces an earlier `true` and names the locks anew,
-    // with no earlier list left to combine with.
-    for (const name of ['05-lock', '45-unlock', '46-relock']) {
-      await rm(join(dropIns, `${name}.json`));
-    }
-    await writeManaged(dropIns, '47-unlock-all.json', {
-      strictPluginOnlyCustomization: ['skills'],
-    });
-    expect(await inspectClaudeManagedHooks(managed)).toEqual({ status: 'unrestricted' });
-    await writeManaged(dropIns, '48-lock-all.json', { strictPluginOnlyCustomization: true });
-    expect(await inspectClaudeManagedHooks(managed)).toEqual({
-      status: 'restricted',
-      setting: 'strictPluginOnlyCustomization',
-    });
-    await writeManaged(managed.directory, 'managed-settings.json', { disableAllHooks: true });
-    await rm(join(dropIns, '47-unlock-all.json'));
-    await rm(join(dropIns, '48-lock-all.json'));
-
-    // Surviving files: managed-settings.json (true), 10 (false), 20 (true),
-    // 30 (false), 40 (skills only); the result is unrestricted, and each
-    // ignored file below would flip it to restricted if it were read, since
-    // a named lock survives every later single-value replacement.
-    await writeManaged(dropIns, '.hidden.json', { strictPluginOnlyCustomization: ['hooks'] });
-    await writeManaged(dropIns, 'notes.txt', '{ "strictPluginOnlyCustomization": ["hooks"] }');
-    await writeManaged(dropIns, 'README.json.bak', { strictPluginOnlyCustomization: ['hooks'] });
-    expect(await inspectClaudeManagedHooks(managed)).toEqual({ status: 'unrestricted' });
-
-    // A drop-in directory alone, without the main file, is still read.
-    await rm(join(managed.directory, 'managed-settings.json'));
-    await writeManaged(dropIns, '50-hooks.json', { allowManagedHooksOnly: true });
-    expect(await inspectClaudeManagedHooks(managed)).toEqual({
-      status: 'restricted',
-      setting: 'allowManagedHooksOnly',
-    });
+    // Positive control: this body flips the result when it is in a visible file.
+    const lock = { strictPluginOnlyCustomization: ['hooks'] };
+    await writeManaged(managed.dropIns, '40-lock.json', lock);
+    expect(await inspectClaudeManagedHooks(managed)).toEqual(
+      restricted('strictPluginOnlyCustomization'),
+    );
+    await rm(join(managed.dropIns, '40-lock.json'));
+    await writeManaged(managed.dropIns, '.hidden.json', lock);
+    await writeManaged(managed.dropIns, 'notes.txt', JSON.stringify(lock));
+    await writeManaged(managed.dropIns, 'README.json.bak', lock);
+    expect(await inspectClaudeManagedHooks(managed)).toEqual(unrestricted);
   });
 
   it('answers unknown rather than guessing when the managed tier cannot be read', async () => {
     const managed = await locations();
     for (const content of ['{ not json', '[]', '"text"']) {
       await writeManaged(managed.directory, 'managed-settings.json', content);
-      expect(await inspectClaudeManagedHooks(managed)).toEqual({ status: 'unknown' });
+      expect(await inspectClaudeManagedHooks(managed)).toEqual(unknown);
     }
-    await writeManaged(managed.directory, 'managed-settings.json', { disableAllHooks: false });
-    await writeManaged(managed.directory, 'managed-settings.d/10-broken.json', '{');
-    expect(await inspectClaudeManagedHooks(managed)).toEqual({ status: 'unknown' });
-    await rm(join(managed.directory, 'managed-settings.d'), { recursive: true });
+    await writeSequence(managed, { disableAllHooks: false }, ['{']);
+    expect(await inspectClaudeManagedHooks(managed)).toEqual(unknown);
 
     // An unreadable drop-in directory hides an unknown number of files.
-    const dropIns = join(managed.directory, 'managed-settings.d');
-    await mkdir(dropIns);
-    await chmod(dropIns, 0o000);
+    await writeSequence(managed, { disableAllHooks: false }, []);
+    await mkdir(managed.dropIns);
+    await chmod(managed.dropIns, 0o000);
     try {
-      expect(await inspectClaudeManagedHooks(managed)).toEqual({ status: 'unknown' });
+      expect(await inspectClaudeManagedHooks(managed)).toEqual(unknown);
     } finally {
-      await chmod(dropIns, 0o700);
+      await chmod(managed.dropIns, 0o700);
     }
-    await Promise.all(
-      Array.from({ length: MAX_MANAGED_DROP_INS + 1 }, (_, index) =>
-        writeManaged(dropIns, `${String(index).padStart(3, '0')}.json`, {}),
-      ),
+    await writeSequence(
+      managed,
+      { disableAllHooks: false },
+      Array.from({ length: MAX_MANAGED_DROP_INS + 1 }, () => ({})),
     );
-    expect(await inspectClaudeManagedHooks(managed)).toEqual({ status: 'unknown' });
+    expect(await inspectClaudeManagedHooks(managed)).toEqual(unknown);
   });
 
   it('defers to a present MDM profile instead of reading the files', async () => {
@@ -186,12 +227,9 @@ describe('claude managed settings', () => {
       ...managed,
       preferencesPaths: [join(managed.root, 'absent.plist'), plist],
     };
-    expect(await inspectClaudeManagedHooks(withProfile)).toEqual({
-      status: 'restricted',
-      setting: 'disableAllHooks',
-    });
+    expect(await inspectClaudeManagedHooks(withProfile)).toEqual(restricted('disableAllHooks'));
     await writeFile(plist, 'not parsed');
-    expect(await inspectClaudeManagedHooks(withProfile)).toEqual({ status: 'unknown' });
+    expect(await inspectClaudeManagedHooks(withProfile)).toEqual(unknown);
 
     // A profile that cannot even be stat'ed may still exist, so it counts as present.
     const locked = join(managed.root, 'locked');
@@ -203,7 +241,7 @@ describe('claude managed settings', () => {
           ...managed,
           preferencesPaths: [join(locked, 'com.anthropic.claudecode.plist')],
         }),
-      ).toEqual({ status: 'unknown' });
+      ).toEqual(unknown);
     } finally {
       await chmod(locked, 0o700);
     }

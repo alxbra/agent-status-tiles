@@ -98,37 +98,25 @@ async function readManagedFile(path: string): Promise<JsonObject | undefined> {
   return snapshot === undefined ? undefined : settings;
 }
 
-/**
- * The merged value of the three keys that decide whether hooks from the
- * user settings file run, following Claude Code's drop-in rules: a later
- * single value replaces an earlier one and lists combine.
- */
-interface MergedHookPolicy {
-  disableAllHooks: unknown;
-  allowManagedHooksOnly: unknown;
-  /** True once any file locks every surface; the array collects named surfaces. */
-  lockAllSurfaces: boolean;
-  lockedSurfaces: Set<unknown>;
-}
+/** The keys that decide whether hooks from the user settings file run. */
+const HOOK_POLICY_KEYS = [
+  'disableAllHooks',
+  'allowManagedHooksOnly',
+  'strictPluginOnlyCustomization',
+] as const;
 
+type MergedHookPolicy = Partial<Record<(typeof HOOK_POLICY_KEYS)[number], unknown>>;
+
+/**
+ * Fold one file into the merged policy following Claude Code's drop-in
+ * rules: two lists combine, and any single value replaces what came before.
+ */
 function mergeHookPolicy(policy: MergedHookPolicy, settings: JsonObject): void {
-  if (Object.hasOwn(settings, 'disableAllHooks')) policy.disableAllHooks = settings.disableAllHooks;
-  if (Object.hasOwn(settings, 'allowManagedHooksOnly')) {
-    policy.allowManagedHooksOnly = settings.allowManagedHooksOnly;
-  }
-  const strict = settings.strictPluginOnlyCustomization;
-  if (strict === true) {
-    policy.lockAllSurfaces = true;
-  } else if (Array.isArray(strict)) {
-    // Lists combine with an earlier list, but a later value replaces an
-    // earlier single value, so an array after `true` names the locks anew.
-    policy.lockAllSurfaces = false;
-    for (const surface of strict) policy.lockedSurfaces.add(surface);
-  } else if (strict === false) {
-    // A later single value replaces the earlier one, so an explicit `false`
-    // lifts every lock a previous file set.
-    policy.lockAllSurfaces = false;
-    policy.lockedSurfaces.clear();
+  for (const key of HOOK_POLICY_KEYS) {
+    if (!Object.hasOwn(settings, key)) continue;
+    const next = settings[key];
+    const previous = policy[key];
+    policy[key] = Array.isArray(next) && Array.isArray(previous) ? [...previous, ...next] : next;
   }
 }
 
@@ -138,7 +126,8 @@ function restrictingSetting(policy: MergedHookPolicy): ClaudeManagedHookSetting 
   if (policy.allowManagedHooksOnly !== undefined && policy.allowManagedHooksOnly !== false) {
     return 'allowManagedHooksOnly';
   }
-  if (policy.lockAllSurfaces || policy.lockedSurfaces.has('hooks')) {
+  const strict = policy.strictPluginOnlyCustomization;
+  if (strict === true || (Array.isArray(strict) && strict.includes('hooks'))) {
     return 'strictPluginOnlyCustomization';
   }
   return undefined;
@@ -159,12 +148,7 @@ export async function inspectClaudeManagedHooks(
   if (await hasManagedPreferences(locations.preferencesPaths)) return { status: 'unknown' };
   const dropIns = await listDropIns(join(locations.directory, MANAGED_DROP_IN_DIRECTORY));
   if (dropIns === undefined) return { status: 'unknown' };
-  const policy: MergedHookPolicy = {
-    disableAllHooks: undefined,
-    allowManagedHooksOnly: undefined,
-    lockAllSurfaces: false,
-    lockedSurfaces: new Set(),
-  };
+  const policy: MergedHookPolicy = {};
   try {
     for (const path of [join(locations.directory, MANAGED_SETTINGS_FILE), ...dropIns]) {
       const settings = await readManagedFile(path);

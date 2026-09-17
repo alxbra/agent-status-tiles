@@ -166,8 +166,8 @@ invalid value), and reports
 administrator and promises that the connection resumes on its own, which the
 coordinator's retry delivers once the policy is lifted. That read is bounded
 to the same 1 MiB per file as the user settings file and at most 64
-drop-ins, follows Claude Code's own directory, and never journals or displays
-a path.
+drop-ins, touches only Claude Code's own managed directory, and never
+journals or displays a path.
 
 The check never guesses. Claude Code applies only the highest-ranked managed
 source by default, so when an MDM configuration profile for the
@@ -175,9 +175,9 @@ source by default, so when an MDM configuration profile for the
 the files may not apply at all, and the check reports nothing rather than a
 possible false alarm; the profile itself, server-managed settings fetched
 from claude.ai, and settings an embedding host passes are not read. Whether
-server-managed settings apply cannot be established locally (their cache is
-undocumented and lives under `~/.claude`, which this module never reads), so
-the one residual false-alarm case is an organization that deploys hook
+server-managed settings apply cannot be established locally (where Claude
+Code caches them is not documented, and this module never reads `~/.claude`),
+so the one residual false-alarm case is an organization that deploys hook
 restrictions in a managed file while its server-managed policy, which
 outranks the file, leaves hooks alone; both come from the same administrator
 and the sentence still names the right person. A managed file that cannot be
