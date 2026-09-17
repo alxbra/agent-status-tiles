@@ -244,6 +244,19 @@ test('keeps the dock open while moving between rows inside the reach zone', asyn
   await expect(tabs.nth(0)).toHaveAttribute('data-extended', 'false');
   await expect.poll(() => visibleWidths(page)).toEqual([TAB_PEEK_DOCK, widths[1], TAB_PEEK_DOCK]);
 
+  // Toggling native passthrough reports a window leave while the cursor is
+  // still inside the zone; that must not fold the dock.
+  await page.evaluate(
+    ([x, y]) => {
+      document.documentElement.dispatchEvent(
+        new PointerEvent('pointerleave', { clientX: x, clientY: y, bubbles: false }),
+      );
+    },
+    [VIEWPORT.width - 150, rows[1]!] as const,
+  );
+  await page.waitForTimeout(100);
+  await expect(tabs.nth(1)).toHaveAttribute('data-extended', 'true');
+
   // The gap between rows belongs to the nearest tab instead of folding.
   await page.mouse.move(VIEWPORT.width - 150, boxes[2]!.y - 1);
   await expect(tabs.nth(2)).toHaveAttribute('data-extended', 'true');

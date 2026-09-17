@@ -408,8 +408,12 @@ export function StatusTiles({
         leavePointerFromRef();
       }
     };
-    const handlePointerExit = (): void => {
+    const handlePointerExit = (event: globalThis.PointerEvent): void => {
       if (!pointerInsideRef.current) return;
+      // Toggling native mouse passthrough emits a window leave while the
+      // cursor is still over the dock, so only a leave reported outside the
+      // hover zone counts as the cursor actually going away.
+      if (pointStillInsideDock(event.clientX, event.clientY)) return;
       pointerInsideRef.current = false;
       leavePointerFromRef();
     };
@@ -451,6 +455,22 @@ export function StatusTiles({
     setScrollOffset(0);
     setFocusedIndex(0);
   }, [keyboardEntryRevision, layout.slots]);
+
+  /** Whether a viewport point keeps the dock revealed in its current mode. */
+  function pointStillInsideDock(clientX: number, clientY: number): boolean {
+    const root = rootRef.current;
+    if (root === null) return false;
+    const bounds = root.getBoundingClientRect();
+    return resolveHover(
+      layoutRef.current,
+      { x: clientX - bounds.left, y: clientY - bounds.top },
+      {
+        stripWidth: bounds.width,
+        extended: hoveredSessionIdRef.current !== null,
+        reachWidth: reachWidthRef.current,
+      },
+    ).inside;
+  }
 
   function setHoveredSessionId(sessionId: string | null): void {
     hoveredSessionIdRef.current = sessionId;
@@ -497,20 +517,12 @@ export function StatusTiles({
     event: PointerEvent<HTMLButtonElement>,
     session: SessionSnapshot,
   ): void {
-    const root = rootRef.current;
     const next = event.relatedTarget;
     const overTab = next instanceof Element && next.closest(TAB_SELECTOR) !== null;
     if (overTab) return;
-    if (root !== null && next instanceof Node && root.contains(next)) {
-      const bounds = root.getBoundingClientRect();
-      const resolution = resolveHover(
-        layoutRef.current,
-        { x: event.clientX - bounds.left, y: event.clientY - bounds.top },
-        { stripWidth: bounds.width, extended: true, reachWidth: reachWidthRef.current },
-      );
-      // Still inside the reach zone: the following pointer move picks the row.
-      if (resolution.inside) return;
-    }
+    // Still inside the reach zone (including the spurious leave that native
+    // passthrough toggling emits): the following pointer move picks the row.
+    if (pointStillInsideDock(event.clientX, event.clientY)) return;
     if (hoveredSessionIdRef.current === session.id) setHoveredSessionId(null);
     // The cursor left the window or jumped far away; fold everything back.
     pointerInsideRef.current = false;
