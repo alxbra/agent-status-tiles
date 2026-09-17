@@ -125,10 +125,14 @@ partitions and then removes only the owned hooks, even when a partition
 failed to disable, and its confirmation says exactly that. Repair reinstalls
 the hooks and restarts the enabled surfaces through the coordinator's
 connect, which re-baselines them so nothing historical turns unread. A
-Connect or Repair that fails for a known reason (the helper cannot be found
-or used, the settings file cannot be read or updated, or it changed
-underneath the write) leaves the row disconnected and shows that reason as
-one sentence until the next action.
+Connect, Repair, or Disconnect that fails for a known reason (the helper
+cannot be found or used, the settings file cannot be read or updated, or it
+changed underneath the write) leaves the row as it was (disconnected after
+Connect, connected after Repair, disconnected with the hooks still present
+after Disconnect) and shows that reason as one sentence, naming an action the
+row offers in that state, until the row's next action. Settings shows one
+sentence per row: a failed action's reason takes the place of the live health
+sentence until the next action.
 
 Each monitor verifies readiness when it starts: the bundled helper must
 resolve and the hooks must be installed with the current helper path and not

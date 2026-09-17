@@ -160,9 +160,7 @@ test('confirms the settings change before connecting Claude Code', async ({ page
   await expect(claude).toContainText('Connected');
 });
 
-test('runs Repair from the action menu once per click and blocks it while pending', async ({
-  page,
-}) => {
+test('runs Repair from the action menu once per click', async ({ page }) => {
   await openFixture(page);
   await page.evaluate(() => {
     (

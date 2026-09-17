@@ -25,6 +25,11 @@ export interface ProviderSetup {
   remove?: () => Promise<void>;
   /** A provider-specific issue sentence that beats the generic health sentence. */
   issue?: () => string | undefined;
+  /** One sentence for an action that failed for a reason the provider recognises. */
+  failureSentence?: (
+    error: unknown,
+    action: 'connect' | 'repair' | 'disconnect',
+  ) => string | undefined;
 }
 
 export type ProviderSetupMap = Readonly<Partial<Record<SettingsConnectionKey, ProviderSetup>>>;

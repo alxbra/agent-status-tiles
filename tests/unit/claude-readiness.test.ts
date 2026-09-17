@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { ClaudeHookSettingsError } from '../../src/main/providers/claude/hook-installer';
 import {
   ClaudeHelperError,
-  claudeInstallFailureSentence,
+  claudeActionFailureSentence,
   claudeIssueSentence,
   readinessOf,
 } from '../../src/main/providers/claude/readiness';
@@ -41,6 +41,7 @@ describe('claude readiness', () => {
     ).toEqual({ status: 'issue', issue: 'helper-translocated' });
     for (const code of [
       'unsupported-architecture',
+      'helper-not-regular',
       'helper-not-executable',
       'resolver-failed',
     ] as const) {
@@ -51,19 +52,29 @@ describe('claude readiness', () => {
     }
   });
 
-  it('turns a known install failure into a sentence and leaves the rest to the generic retry', () => {
-    expect(claudeInstallFailureSentence(new ClaudeHookSettingsError('settings-changed'))).toBe(
-      'Claude Code settings changed while connecting. Connect again.',
+  it('turns a known action failure into a sentence naming an action the row offers', () => {
+    const changed = new ClaudeHookSettingsError('settings-changed');
+    expect(claudeActionFailureSentence(changed, 'connect')).toBe(
+      'Claude Code settings changed during the update. Connect again.',
     );
-    expect(claudeInstallFailureSentence(new ClaudeHookSettingsError('settings-not-json'))).toBe(
+    expect(claudeActionFailureSentence(changed, 'repair')).toBe(
+      'Claude Code settings changed during the update. Use Repair.',
+    );
+    expect(claudeActionFailureSentence(changed, 'disconnect')).toBe(
+      "Claude Code settings changed during the update, so this app's hooks remain. Connect and disconnect again.",
+    );
+    expect(
+      claudeActionFailureSentence(new ClaudeHookSettingsError('settings-not-json'), 'connect'),
+    ).toBe(
       'The Claude Code settings file could not be read or updated. Fix it, then connect again.',
     );
     expect(
-      claudeInstallFailureSentence(
+      claudeActionFailureSentence(
         new ClaudeHelperError({ ok: false, code: 'helper-translocated' }),
+        'connect',
       ),
-    ).toBe(claudeIssueSentence('helper-translocated'));
-    expect(claudeInstallFailureSentence(new Error('checkpoint failed'))).toBeUndefined();
+    ).toBe('Move Agent Status Tiles to the Applications folder and reopen it, then connect again.');
+    expect(claudeActionFailureSentence(new Error('checkpoint failed'), 'connect')).toBeUndefined();
   });
 
   it('phrases every issue as one actionable sentence without paths', () => {

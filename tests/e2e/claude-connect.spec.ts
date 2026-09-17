@@ -72,6 +72,8 @@ test("connecting Claude Code installs owned hooks beside the user's own and disc
     const persisted = await loadSessionState(userDataDir);
     expect(persisted.monitoring.partitions['claude:desktop'].enabled).toBe(true);
     expect(persisted.monitoring.partitions['claude:cli'].enabled).toBe(true);
+    // Both surfaces started and verified the hooks; no health sentence appeared.
+    await expect(settings.getByRole('alert')).toHaveCount(0);
 
     // Repair restores a tampered owned entry byte for byte and keeps the row connected.
     const before = await readFile(settingsPath, 'utf8');

@@ -93,8 +93,8 @@ with the exact written shape in a matcher-less group), `missing`, `stale` (an
 owned entry is absent, duplicated, matcher-scoped, or differs in any field),
 `disabled` when `disableAllHooks` is set in the same file, or `unreadable`
 with one of the read codes above (`settings-changed` and `settings-unwritable`
-only arise from a write). Connecting the Claude row and surfacing these
-states in Settings belong to later slices.
+only arise from a write). The Connecting section of `docs/claude-monitor.md`
+describes how the Settings row drives installation, removal, and Repair.
 
 ## Input and privacy
 

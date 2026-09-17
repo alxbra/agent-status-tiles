@@ -44,8 +44,9 @@ import {
 } from './providers/claude/hook-installer';
 import {
   ClaudeHelperError,
-  claudeInstallFailureSentence,
+  claudeActionFailureSentence,
   claudeIssueSentence,
+  helperReadiness,
   readinessOf,
   type ClaudeReadiness,
 } from './providers/claude/readiness';
@@ -84,8 +85,8 @@ interface ClaudeIntegration {
   configDirectory: string | undefined;
   dataDirectory: string;
 }
-/** The last Connect or Repair failure with a known cause, shown until the next action. */
-let providerActionIssue: string | undefined;
+/** Per row, the last action failure with a known cause, shown until that row's next action. */
+const providerActionIssues = new Map<SettingsConnectionKey, string>();
 
 /**
  * Where the Claude hooks point and where they are installed. A test run
@@ -182,15 +183,14 @@ function getSettingsState(): SettingsState {
       ? { enabled: false }
       : evaluateLoginItemSettings(loginSettings, requestedLoginItemState);
   if (loginItemState.error === undefined) requestedLoginItemState = undefined;
-  const connectionIssues = CONNECTABLE_CONNECTIONS.map((connection) =>
-    connectionIssue(runtimeCoordinator, connection, providerSetups[connection]),
+  // One sentence per row: a failed action explains itself until the row's
+  // next action; otherwise the live health sentence, if any.
+  const connectionIssues = CONNECTABLE_CONNECTIONS.map(
+    (connection) =>
+      providerActionIssues.get(connection) ??
+      connectionIssue(runtimeCoordinator, connection, providerSetups[connection]),
   );
-  const settingsError = [
-    loginItemState.error,
-    monitoringCoverageWarning,
-    providerActionIssue,
-    ...connectionIssues,
-  ]
+  const settingsError = [loginItemState.error, monitoringCoverageWarning, ...connectionIssues]
     .filter((message): message is string => message !== undefined)
     .join(' ');
   return {
@@ -318,7 +318,8 @@ if (!hasSingleInstanceLock) {
         : (): Promise<ClaudeReadiness> => {
             readinessInFlight ??= (async () => {
               const helper = claude.helper();
-              if (!helper.ok) return readinessOf(helper, { status: 'missing' });
+              const fromHelper = helperReadiness(helper);
+              if (fromHelper !== undefined || !helper.ok) return fromHelper!;
               const verification = await inspectClaudeHooks({
                 configDirectory: claude.configDirectory,
                 helperPath: helper.path,
@@ -346,6 +347,9 @@ if (!hasSingleInstanceLock) {
         : {
             claude: {
               install: async () => {
+                // A check in flight may predate this install; do not let a
+                // restarted surface inherit its answer.
+                readinessInFlight = undefined;
                 const helper = claude.helper();
                 if (!helper.ok) throw new ClaudeHelperError(helper);
                 await installClaudeHooks({
@@ -361,6 +365,7 @@ if (!hasSingleInstanceLock) {
                 const issue = claudeDesktopMonitor.lastIssue ?? claudeCliMonitor.lastIssue;
                 return issue === undefined ? undefined : claudeIssueSentence(issue);
               },
+              failureSentence: claudeActionFailureSentence,
             },
           };
     runtimeCoordinator = createRuntimeCoordinator({
@@ -462,15 +467,15 @@ if (!hasSingleInstanceLock) {
           throw new Error('Connection is already enabled');
         }
         pendingConnectionActions.add(connection);
-        providerActionIssue = undefined;
+        providerActionIssues.delete(connection);
         try {
           await connectProvider(coordinator, connection, providerSetups[connection]);
         } catch (error) {
           // A failure with a known cause is reported as one sentence in the
           // state; the row stays disconnected. Anything else is a retryable error.
-          const sentence = claudeInstallFailureSentence(error);
+          const sentence = providerSetups[connection]?.failureSentence?.(error, 'connect');
           if (sentence === undefined) throw error;
-          providerActionIssue = sentence;
+          providerActionIssues.set(connection, sentence);
         } finally {
           pendingConnectionActions.delete(connection);
         }
@@ -489,13 +494,13 @@ if (!hasSingleInstanceLock) {
           throw new Error('Connection is not enabled');
         }
         pendingConnectionActions.add(connection);
-        providerActionIssue = undefined;
+        providerActionIssues.delete(connection);
         try {
           await repairProvider(coordinator, connection, providerSetups[connection]);
         } catch (error) {
-          const sentence = claudeInstallFailureSentence(error);
+          const sentence = providerSetups[connection]?.failureSentence?.(error, 'repair');
           if (sentence === undefined) throw error;
-          providerActionIssue = sentence;
+          providerActionIssues.set(connection, sentence);
         } finally {
           pendingConnectionActions.delete(connection);
         }
@@ -513,15 +518,21 @@ if (!hasSingleInstanceLock) {
           throw new Error('Connection is not enabled');
         }
         pendingConnectionActions.add(connection);
-        providerActionIssue = undefined;
+        providerActionIssues.delete(connection);
         try {
           await disconnectProvider(coordinator, connection, providerSetups[connection]);
-          const state = getSettingsState();
-          publishSettingsState(getSettingsWindow(), state);
-          return state;
+        } catch (error) {
+          // The partitions are already off; a removal that failed for a known
+          // reason says what remains and what to do about it.
+          const sentence = providerSetups[connection]?.failureSentence?.(error, 'disconnect');
+          if (sentence === undefined) throw error;
+          providerActionIssues.set(connection, sentence);
         } finally {
           pendingConnectionActions.delete(connection);
         }
+        const state = getSettingsState();
+        publishSettingsState(getSettingsWindow(), state);
+        return state;
       },
     });
     const startedCoordinator = runtimeCoordinator;
