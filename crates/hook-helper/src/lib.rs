@@ -20,6 +20,17 @@ const MAX_PROJECT_BYTES: usize = 256;
 const MAX_NAVIGATION_BYTES: usize = 64;
 const LOCK_TIMEOUT: Duration = Duration::from_millis(500);
 const LOCK_WAIT: Duration = Duration::from_millis(5);
+/// Launching applications recognised from `__CFBundleIdentifier`.
+const HOSTS: [(&str, &str); 5] = [
+    ("com.anthropic.claudefordesktop", "claude-desktop"),
+    ("com.apple.Terminal", "terminal"),
+    ("com.googlecode.iterm2", "iterm2"),
+    ("com.mitchellh.ghostty", "ghostty"),
+    ("dev.warp.Warp-Stable", "warp"),
+];
+const ENTRYPOINTS: [&str; 2] = ["claude-desktop", "cli"];
+const SESSION_SOURCES: [&str; 5] = ["startup", "resume", "clear", "compact", "fork"];
+const END_REASONS: [&str; 5] = ["clear", "resume", "logout", "prompt_input_exit", "other"];
 
 #[derive(Debug)]
 pub enum HelperError {
@@ -59,12 +70,35 @@ struct ReducedEvent {
     notification_type: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     stop_hook_active: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    host: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    entrypoint: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    is_subagent: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    session_source: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    end_reason: Option<String>,
 }
+
+/// Environment lookup injected so the reduction stays testable in-process.
+pub type EnvLookup<'a> = &'a dyn Fn(&str) -> Option<String>;
 
 /// Parse, reduce, and append one hook payload. Errors are intentionally returned
 /// only for tests and callers that want observability; the binary suppresses all
 /// errors and exits successfully.
-pub fn run<I, R>(args: I, mut input: R) -> Result<(), HelperError>
+pub fn run<I, R>(args: I, input: R) -> Result<(), HelperError>
+where
+    I: IntoIterator<Item = String>,
+    R: Read,
+{
+    run_with_env(args, input, &|name: &str| std::env::var(name).ok())
+}
+
+/// Like `run`, with the process environment supplied by the caller. Only two
+/// allowlisted variables are ever consulted; see `host_identity`.
+pub fn run_with_env<I, R>(args: I, mut input: R, env: EnvLookup<'_>) -> Result<(), HelperError>
 where
     I: IntoIterator<Item = String>,
     R: Read,
@@ -72,7 +106,7 @@ where
     let args = parse_arguments(args)?;
     let payload = read_bounded(&mut input)?;
     let value: Value = serde_json::from_slice(&payload).map_err(|_| HelperError::InvalidInput)?;
-    let event = reduce_event(&args.provider, &value).ok_or(HelperError::InvalidInput)?;
+    let event = reduce_event(&args.provider, &value, env).ok_or(HelperError::InvalidInput)?;
     append_event(&args.data_dir, &event).map_err(|_| HelperError::Io)
 }
 
@@ -111,7 +145,7 @@ fn read_bounded<R: Read>(input: &mut R) -> Result<Vec<u8>, HelperError> {
     Ok(bytes)
 }
 
-fn reduce_event(provider: &str, value: &Value) -> Option<ReducedEvent> {
+fn reduce_event(provider: &str, value: &Value, env: EnvLookup<'_>) -> Option<ReducedEvent> {
     let object = value.as_object()?;
     let event_name = string_field(object, "hook_event_name", MAX_EVENT_BYTES)?;
     if !is_allowed_event(&event_name) {
@@ -149,6 +183,20 @@ fn reduce_event(provider: &str, value: &Value) -> Option<ReducedEvent> {
             )
         });
     let stop_hook_active = object.get("stop_hook_active").and_then(Value::as_bool);
+    let (host, entrypoint) = host_identity(env);
+    // Subagent hooks reuse the parent session ID and add an agent ID. Only the
+    // fact that one is present is kept, never the ID itself.
+    let is_subagent = string_field(object, "agent_id", MAX_ID_BYTES)
+        .is_some()
+        .then_some(true);
+    let session_source = (event_name == "SessionStart")
+        .then(|| string_field(object, "source", MAX_NAVIGATION_BYTES))
+        .flatten()
+        .filter(|value| SESSION_SOURCES.contains(&value.as_str()));
+    let end_reason = (event_name == "SessionEnd")
+        .then(|| string_field(object, "reason", MAX_NAVIGATION_BYTES))
+        .flatten()
+        .filter(|value| END_REASONS.contains(&value.as_str()));
 
     Some(ReducedEvent {
         schema_version: 1,
@@ -165,7 +213,28 @@ fn reduce_event(provider: &str, value: &Value) -> Option<ReducedEvent> {
         project_id,
         notification_type,
         stop_hook_active,
+        host,
+        entrypoint,
+        is_subagent,
+        session_source,
+        end_reason,
     })
+}
+
+/// Hook processes inherit the launching application's environment. Two
+/// variables identify the host: macOS sets `__CFBundleIdentifier` for
+/// GUI-launched processes, and Claude Code sets `CLAUDE_CODE_ENTRYPOINT`. Only
+/// exact allowlisted values produce a field; anything else, including an
+/// unknown terminal or an IDE, is omitted rather than recorded.
+fn host_identity(env: EnvLookup<'_>) -> (Option<String>, Option<String>) {
+    let host = env("__CFBundleIdentifier")
+        .and_then(|value| bounded_text(&value, MAX_PROJECT_BYTES))
+        .and_then(|value| HOSTS.iter().find(|(bundle, _)| *bundle == value))
+        .map(|(_, host)| (*host).to_owned());
+    let entrypoint = env("CLAUDE_CODE_ENTRYPOINT")
+        .and_then(|value| bounded_text(&value, MAX_NAVIGATION_BYTES))
+        .filter(|value| ENTRYPOINTS.contains(&value.as_str()));
+    (host, entrypoint)
 }
 
 fn string_field(

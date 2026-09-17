@@ -557,6 +557,48 @@ describe('HookJournalReader', () => {
     expect(MAX_RECORD_BYTES).toBe(4 * 1024);
   });
 
+  it('projects allowlisted host identity and lifecycle fields and rejects others', async () => {
+    const root = await createIsolatedJournalRoot();
+    const journalTarget = createTarget();
+    await writeFile(
+      getActivePath(root, journalTarget),
+      [
+        serializeRecord({
+          host: 'claude-desktop',
+          entrypoint: 'claude-desktop',
+          is_subagent: true,
+          session_source: 'resume',
+        }),
+        serializeRecord({ event_name: 'SessionEnd', host: 'ghostty', end_reason: 'logout' }),
+        serializeRecord({ event_name: 'Stop', host: 'com.microsoft.VSCode' }),
+        serializeRecord({ event_name: 'Stop', entrypoint: 'sdk-ts' }),
+        serializeRecord({ event_name: 'Stop', is_subagent: false }),
+        serializeRecord({ event_name: 'Stop', session_source: 'resume' }),
+        serializeRecord({ event_name: 'SessionStart', end_reason: 'logout' }),
+        serializeRecord({ event_name: 'SessionEnd', end_reason: 'PRIVATE_REASON' }),
+      ].join(''),
+    );
+
+    const result = await new HookJournalReader({ appDataPath: root }).read([journalTarget]);
+
+    expect(result.events).toEqual([
+      expect.objectContaining({
+        eventName: 'SessionStart',
+        host: 'claude-desktop',
+        entrypoint: 'claude-desktop',
+        isSubagent: true,
+        sessionSource: 'resume',
+      }),
+      expect.objectContaining({ eventName: 'SessionEnd', host: 'ghostty', endReason: 'logout' }),
+    ]);
+    expect(result.events[1]).not.toHaveProperty('entrypoint');
+    expect(result.events[1]).not.toHaveProperty('isSubagent');
+    expect(JSON.stringify(result.events)).not.toMatch(/VSCode|sdk-ts|PRIVATE_/u);
+    expect(result.diagnostics.map((diagnostic) => diagnostic.code)).toEqual(
+      Array.from({ length: 6 }, () => 'record-malformed'),
+    );
+  });
+
   it('validates provider/session ownership and preserves no unknown fields', async () => {
     const root = await createIsolatedJournalRoot();
     const journalTarget = createTarget();

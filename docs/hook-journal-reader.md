@@ -15,8 +15,11 @@ advance.
 
 Each returned event is a reduced allowlist projection of helper schema version 1.
 It contains lifecycle identity, bounded correlation IDs, receipt timestamp,
-   approved project metadata, approved notification/tool names, and
-   `stopHookActive` when present. Unknown keys, prompts, answers, transcript/tool
+approved project metadata, approved notification/tool names, `stopHookActive`
+when present, and the helper's allowlisted host identity and lifecycle fields
+(`host`, `entrypoint`, `isSubagent`, `sessionSource` on `SessionStart` only,
+`endReason` on `SessionEnd` only). A record whose value for any of these is
+outside the allowlist, or on the wrong event, is rejected as malformed. Unknown keys, prompts, answers, transcript/tool
    bodies, credentials, and raw paths are never returned. `Stop` remains a raw
    candidate; completion and failure policy belong to the later coordinator.
 
