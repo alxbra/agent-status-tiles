@@ -200,7 +200,11 @@ the oldest `.3`; at most three archives plus the active file are retained.
 Rotation and append happen while a per-session advisory lock is held, so
 concurrent hook processes produce complete, replayable lines. The lock file is
 kept as a private coordination inode and the operating system releases its
-lock if a helper crashes; no stale-lock deletion race is possible. The app can
+lock if a helper crashes; no stale-lock deletion race is possible. The app
+removes the journals of ended sessions after a retention window but never a
+lock file, because the lock is not re-checked against its inode after it is
+taken; letting the app collect stale lock files starts with adding that check
+here (see the collection section of `docs/claude-monitor.md`). The app can
 replay archives oldest-to-newest and then tail the active file; records have no
 helper-side state mapping, so the app owns lifecycle reduction, deduplication,
 and cursor persistence. `Stop` is a raw completion candidate;

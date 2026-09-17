@@ -22,7 +22,8 @@ const MAX_SNAPSHOT_ATTEMPTS = 3;
 const NO_FOLLOW = constants.O_NOFOLLOW ?? 0;
 const NONBLOCK = constants.O_NONBLOCK ?? 0;
 
-const JOURNAL_SUFFIXES = ['.jsonl.3', '.jsonl.2', '.jsonl.1', '.jsonl'] as const;
+/** Every file of one journal, oldest archive first and the active file last; shared with collection. */
+export const JOURNAL_SUFFIXES = ['.jsonl.3', '.jsonl.2', '.jsonl.1', '.jsonl'] as const;
 const EVENT_NAMES = new Set([
   'SessionStart',
   'SessionEnd',

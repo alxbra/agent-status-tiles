@@ -18,6 +18,7 @@ import {
 import { MAX_INPUT_REQUESTS } from '../../sessions/persistence';
 import { normalizeClaudeEvents } from './events';
 import type { ClaudeIssue, ClaudeReadiness } from './readiness';
+import type { ClaudeJournalCollector } from './journal-collector';
 import {
   ClaudeJournalDiscovery,
   selectCohort,
@@ -32,6 +33,11 @@ export interface ClaudeMonitorOptions {
    * seed journals directly; production wires the installer's inspection.
    */
   checkReadiness?: () => Promise<ClaudeReadiness>;
+  /**
+   * Garbage collection of ended journals, shared by both surfaces and asked
+   * to sweep after every discovery; it throttles itself and never fails a pass.
+   */
+  collector?: Pick<ClaudeJournalCollector, 'sweep'>;
   /** Test injection. */
   reader?: Pick<HookJournalReader, 'read'>;
   discovery?: Pick<ClaudeJournalDiscovery, 'list' | 'truncated'>;
@@ -84,6 +90,7 @@ export class ClaudeSurfaceMonitor implements ProviderSurfaceMonitor {
   private readonly surface: Surface;
   private readonly reader: Pick<HookJournalReader, 'read'>;
   private readonly discovery: Pick<ClaudeJournalDiscovery, 'list' | 'truncated'>;
+  private readonly collector: Pick<ClaudeJournalCollector, 'sweep'> | undefined;
   private readonly checkReadiness: (() => Promise<ClaudeReadiness>) | undefined;
   private issue: ClaudeIssue | undefined;
   private journals = new Map<string, ClaudeJournalSummary>();
@@ -96,7 +103,13 @@ export class ClaudeSurfaceMonitor implements ProviderSurfaceMonitor {
     this.reader = options.reader ?? new HookJournalReader({ appDataPath: options.appDataPath });
     this.discovery =
       options.discovery ?? new ClaudeJournalDiscovery({ appDataPath: options.appDataPath });
+    this.collector = options.collector;
     this.checkReadiness = options.checkReadiness;
+  }
+
+  /** Base names of the journals in this surface's current cohort; the collector keeps them. */
+  get cohort(): ReadonlySet<string> {
+    return new Set(this.journals.keys());
   }
 
   /** The reason the last start failed, for the Settings sentence; undefined once healthy. */
@@ -144,6 +157,12 @@ export class ClaudeSurfaceMonitor implements ProviderSurfaceMonitor {
     }
     this.journals = journals;
     this.unavailableSourceIds.clear();
+    // The collector reads the cohort just set; a sweep never fails discovery.
+    try {
+      await this.collector?.sweep();
+    } catch {
+      // Collection is best effort; the pass reports the cohort regardless.
+    }
     return {
       complete: true,
       capturedAt: Date.now(),
