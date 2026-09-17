@@ -4,21 +4,31 @@
 
 | Plan PR | Delivered as | Merge |
 | --- | --- | --- |
-| Bundle provider rows | [#35](https://github.com/alxbra/agent-status-tiles/pull/35) | `e038791` |
 | 1 hook identity | [#36](https://github.com/alxbra/agent-status-tiles/pull/36) | `6faaad2` |
 | 2 hook installer | [#37](https://github.com/alxbra/agent-status-tiles/pull/37) | `a6778ad` |
+| 3 bundle provider rows | [#35](https://github.com/alxbra/agent-status-tiles/pull/35) | `e038791` |
 | 4 observation | [#38](https://github.com/alxbra/agent-status-tiles/pull/38) | `a7044a7` |
 | 5 connect | [#39](https://github.com/alxbra/agent-status-tiles/pull/39) | `a66f805` |
 | 6 binary override | deferred | |
+| 7 evidence | [#40](https://github.com/alxbra/agent-status-tiles/pull/40): merge record and this status; the live validation record is still pending | |
 
 Still open after these merges: the live verification matrix in section 5
 (real Claude Desktop and terminal sessions, hook coexistence, restart, uninstall,
 no Node/Python dependence), journal garbage collection for ended sessions
 (`docs/claude-monitor.md`), `disableAllHooks` detection beyond the user-level
 settings file (section 3.4), navigation (section 3.7), and the deferred
-override. Sections 1 and 4 below are the pre-merge baseline this plan was
-written against and are kept as written. Development runs need `build/hook-helper/<arch>/hook-helper`, which
+override. Development runs need `build/hook-helper/<arch>/hook-helper`, which
 requires a Rust toolchain; packaged builds carry it.
+
+Sections 1 to 5 below are the plan as approved on 2026-09-17, kept as written
+except where a later note says otherwise; the status table above,
+`docs/claude-monitor.md`, and `docs/hook-helper.md` are authoritative for what
+shipped. Two details changed in implementation: turns are keyed by the receipt
+time of the `UserPromptSubmit` record rather than by `prompt_id`, with the
+completion ID derived from that turn key and the `Stop` receipt time, and the
+readiness issues are the six `ClaudeIssue` codes in `readiness.ts`
+(`helper-missing`, `helper-translocated`, `helper-unusable`, `hooks-missing`,
+`hooks-disabled`, `settings-unreadable`).
 
 Draft for review. Scope: finish MVP Epic 5 (Claude Code Desktop and CLI),
 return Settings to one row per provider that bundles its Desktop and CLI
@@ -59,7 +69,8 @@ Existing and reused as-is:
   a candidate with `realpath`, requires a regular file, and checks file and
   directory modes; the monitors take a `resolveBinary` injection point.
 
-Missing at the time of writing (the pre-merge baseline; see the status table above for what has since landed):
+Missing at the time of writing (the pre-merge baseline; see the status table
+above for what has since landed):
 
 1. Runtime resolution of the packaged helper path (nothing in `src/` finds
    `Contents/Resources/hook-helper/<arch>/hook-helper` today).
@@ -161,8 +172,8 @@ confirmed surface, and the old surface drops it on its next discovery.
 ### 3.3 Event normalization
 
 `journal event -> SessionEvent`, keyed by `sessionId = claude:<session_id>` and
-`turnId = prompt_id` (fallback: synthesized from the last `UserPromptSubmit`
-receipt time for the session):
+a turn key (implemented as the `UserPromptSubmit` receipt time; see the status
+note above):
 
 | Journal event | SessionEvent |
 |---|---|
@@ -171,7 +182,7 @@ receipt time for the session):
 | `PreToolUse` / `PostToolUse` (not `AskUserQuestion`) | `activity` |
 | `PermissionRequest`, `PreToolUse{AskUserQuestion}`, `Elicitation`, `Notification{permission_prompt, elicitation_dialog}` | `input-requested`; `callId` = `tool_call_id`, `elicitation_id`, or a notification-derived id |
 | `PostToolUse{AskUserQuestion}`, `PostToolUse` for a pending call id, `ElicitationResult`, `Notification{elicitation_complete, elicitation_response}`, next `PreToolUse`/`Stop` while a request is open | `input-resolved` |
-| `Stop` with `stop_hook_active` false or absent | `turn-completed`; `completionId` = sha256(session_id, prompt_id, timestamp) |
+| `Stop` with `stop_hook_active` false or absent | `turn-completed`; `completionId` derived from the turn key and the receipt time |
 | `Stop` with `stop_hook_active` true | `activity` |
 | `StopFailure` | `turn-failed` |
 | `PostToolUseFailure` | `activity` (ordinary tool failures never redden the session) |
@@ -248,9 +259,9 @@ arity), `src/main/index.ts`, `src/preload`, `App.tsx`, `SettingsView.tsx`,
 the settings fixture, and `settings-view.spec.ts` (which asserts three rows).
 
 Health: each Claude monitor's `start()` runs the verification in 3.4 and
-throws typed errors (`claude-helper-missing`, `claude-hooks-missing`,
-`claude-hooks-disabled`, `claude-settings-unreadable`), which the coordinator
-turns into surface `error` health with retry. No events yet is healthy.
+throws a typed error carrying one of the `ClaudeIssue` codes (see the status
+note above), which the coordinator turns into surface `error` health with
+retry. No events yet is healthy.
 
 ### 3.6 Advanced: custom Codex CLI binary (deferred)
 
@@ -305,7 +316,7 @@ CodeRabbit pass, two QA passes, evidence row in `MVP_PLAN.md`.
 | 4 | `feat/claude-observation` | Journal discovery honoring the PR #33 cohort contract, event normalizer, `ClaudeSurfaceMonitor` with Desktop and CLI subclasses, coordinator registration, test env override for the journal root, sanitized journal fixtures, native E2E writing journals directly and asserting working, waiting, unread, error, ended-session pruning, restart replay, and baseline suppression | `src/main/providers/claude/{discovery,events,surface-monitor,desktop-monitor,cli-monitor}.ts`, `src/main/index.ts`, `tests/unit/claude-*.test.ts`, `tests/fixtures/claude/`, `tests/e2e/claude-*.spec.ts` |
 | 5 | `feat/claude-connect` | Enable the Claude row: connect installs hooks and both partitions, disconnect removes owned hooks, Repair rewrites them, health-to-sentence mapping, settings E2E | `src/main/index.ts`, `src/main/providers/claude/hook-installer.ts`, `tests/e2e/settings-view.spec.ts`, `tests/unit/settings-connection.test.ts` |
 | 6 (deferred) | `feat/codex-cli-binary-override` | Advanced screen with the `Codex CLI` path field and native picker, preference persistence, override resolver, `codex:cli` restart on change, unit and settings E2E | `src/main/desktop-preferences.ts`, `src/main/providers/codex/configured-binary-resolver.ts`, `src/main/index.ts`, `src/shared/settings.ts`, `src/shared/ipc.ts`, `src/preload/index.ts`, `src/renderer/settings/AdvancedView.tsx`, tests |
-| 7 | `docs/claude-epic-evidence` | Live Desktop and terminal validation record, Epic 5 and 7 checkbox updates | `MVP_PLAN.md` |
+| 7 | `docs/claude-epic-evidence` | Merge record and plan status (PR #40); the live Desktop and terminal validation record and the Epic 5 and 7 checkbox updates follow the live matrix | `MVP_PLAN.md` |
 
 PRs 1, 2, and 3 are independent of each other; 4 needs 1; 5 needs 2, 3, and 4;
 6 needs 3 and can run in parallel with 4 and 5.

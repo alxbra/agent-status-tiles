@@ -546,7 +546,7 @@ collection for ended sessions, and navigation remain pending.
 - [x] Package the native helper as unsigned arm64/x64 application resources (merged PR #9; signing and notarization remain pending).
 - [x] Implement reduced local event journal writing, concurrency handling, bounded rotation, and silent malformed-input behavior in the merged native helper (PR #2).
 - [x] Implement the bounded standalone hook-journal reader (merged PR #12 at `0d4b5ebfaebdca68bb57f27188fb41aec5c27d21`; replay contract, privacy projection, inode rotation, and cursor continuation are verified; coordinator wiring remains pending).
-- [ ] Replay helper journals through companion app state; the app reader/replay path remains pending.
+- [ ] Replay helper journals through companion app state (implemented in PR #38; live verification pending).
 - [ ] Install only owned hooks into shared user settings.
 - [ ] Detect local Desktop and terminal ownership.
 - [ ] Normalize Claude lifecycle events into the shared state model.
@@ -575,8 +575,8 @@ collection for ended sessions, and navigation remain pending.
 Implementation progress (not an acceptance checkoff): PR #10 merged the
 controlled Settings view using stock shadcn controls. PR #16 connected the
 selected-display, launch-at-login, and reduced-motion controls to validated IPC
-and native persistence/effects. Provider startup, hook management, advanced
-paths, and diagnostics remain pending.
+and native persistence/effects. Advanced paths and diagnostics remain pending; provider
+startup and hook management (PRs #23, #24, #35, #39) await live verification.
 
 - [x] Implement the Settings view using stock shadcn controls (PR #10 renderer/browser verified; desktop controls integrated in PR #16).
 - [ ] Add provider connect, disconnect, repair, and hook-removal flows. Implementation progress (not an acceptance checkoff): the Claude connect slice wires the `Claude Code` row to hook installation, readiness health with one sentence per issue, Repair, and hook removal on disconnect; live verification with real Desktop and terminal sessions remains pending.
