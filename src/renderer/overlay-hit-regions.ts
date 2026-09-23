@@ -1,5 +1,4 @@
 import { MAX_OVERLAY_HIT_REGIONS, type OverlayHitRegion } from '../shared/overlay-ipc';
-import type { TileHitRegion } from './tiles/geometry';
 
 export interface OverlayViewport {
   width: number;
@@ -11,19 +10,12 @@ export interface OverlayRootBounds {
   top: number;
 }
 
-export interface OverlayPortalRect {
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-}
-
 function finitePositive(value: number): boolean {
   return Number.isFinite(value) && value > 0;
 }
 
 function clipRectangle(
-  rectangle: OverlayPortalRect,
+  rectangle: OverlayHitRegion,
   viewport: OverlayViewport,
 ): OverlayHitRegion | null {
   if (
@@ -62,45 +54,40 @@ function regionKey(region: OverlayHitRegion): string {
 }
 
 /**
- * Converts the tile renderer's root-local coordinates and portal viewport
- * rectangles into native overlay viewport coordinates. Tiles are inserted
- * first so the bounded region cap never drops a tile for an extra portal.
+ * Converts the island's root-local hit regions into native overlay viewport
+ * coordinates, clipped to the viewport, deduplicated, and bounded by the cap.
  */
 export function translateAndClipHitRegions(
-  tileRegions: readonly TileHitRegion[],
+  regions: readonly OverlayHitRegion[],
   rootBounds: OverlayRootBounds | null,
-  portalRects: readonly OverlayPortalRect[],
   viewport: OverlayViewport,
   maxRegions = MAX_OVERLAY_HIT_REGIONS,
 ): readonly OverlayHitRegion[] {
   if (!finitePositive(viewport.width) || !finitePositive(viewport.height)) return [];
+  if (rootBounds === null || !Number.isFinite(rootBounds.left) || !Number.isFinite(rootBounds.top))
+    return [];
 
   const cap = Number.isSafeInteger(maxRegions) && maxRegions > 0 ? maxRegions : 0;
   if (cap === 0) return [];
 
-  const rectangles: OverlayPortalRect[] = [];
-  if (rootBounds && Number.isFinite(rootBounds.left) && Number.isFinite(rootBounds.top)) {
-    for (const tile of tileRegions) {
-      rectangles.push({
-        x: rootBounds.left + tile.x,
-        y: rootBounds.top + tile.y,
-        width: tile.width,
-        height: tile.height,
-      });
-    }
-  }
-  rectangles.push(...portalRects);
-
-  const regions: OverlayHitRegion[] = [];
+  const translated: OverlayHitRegion[] = [];
   const seen = new Set<string>();
-  for (const rectangle of rectangles) {
-    const clipped = clipRectangle(rectangle, viewport);
+  for (const region of regions) {
+    const clipped = clipRectangle(
+      {
+        x: rootBounds.left + region.x,
+        y: rootBounds.top + region.y,
+        width: region.width,
+        height: region.height,
+      },
+      viewport,
+    );
     if (clipped === null) continue;
     const key = regionKey(clipped);
     if (seen.has(key)) continue;
     seen.add(key);
-    regions.push(clipped);
-    if (regions.length === cap) break;
+    translated.push(clipped);
+    if (translated.length === cap) break;
   }
-  return regions;
+  return translated;
 }

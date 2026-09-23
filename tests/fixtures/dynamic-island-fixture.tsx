@@ -3,7 +3,7 @@ import { createRoot } from 'react-dom/client';
 
 import type { SessionSnapshot, SessionStatus } from '../../src/shared/session';
 import { DynamicIsland } from '../../src/renderer/island/DynamicIsland';
-import type { OpenSessionTarget } from '../../src/renderer/tiles';
+import type { OpenSessionTarget } from '../../src/renderer/island/interaction';
 import './dynamic-island-fixture.css';
 
 declare global {

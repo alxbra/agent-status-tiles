@@ -18,8 +18,8 @@ export const OVERLAY_IPC_CHANNELS = {
 } as const;
 
 export const MAX_OVERLAY_SESSIONS = 256;
-// Twelve tile targets plus one context-menu portal, with one spare kept for
-// compatibility with persisted hit-region tests (tabs show no tooltip).
+// The compact island publishes one region; the cap bounds untrusted renderer
+// input and leaves room for an expanded island.
 export const MAX_OVERLAY_HIT_REGIONS = 14;
 
 export interface OverlayState {

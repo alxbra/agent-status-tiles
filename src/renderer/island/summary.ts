@@ -1,5 +1,5 @@
 import type { Provider, SessionSnapshot, SessionStatus } from '../../shared/session';
-import { visibleTileSessions } from '../tiles/interaction';
+import { visibleIslandSessions } from './interaction';
 
 /** The compact island only speaks in these four tones. */
 export type IslandTone = 'idle' | 'working' | 'unread' | 'needs-input';
@@ -36,7 +36,7 @@ function latestWithStatus(
  * another thread still works keeps a blue dot on its left.
  */
 export function summarizeIsland(sessions: readonly SessionSnapshot[]): IslandSummary {
-  const visible = visibleTileSessions(sessions);
+  const visible = visibleIslandSessions(sessions);
 
   const needsInput = latestWithStatus(visible, 'needs-input');
   if (needsInput !== null) {

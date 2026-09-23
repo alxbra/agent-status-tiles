@@ -15,9 +15,9 @@ The first publishable release targets macOS and supports:
 - Claude Code local sessions in Claude Desktop.
 - Claude Code terminal sessions.
 
-Each eligible top-level thread or task gets one tile. The dock shows the five most recently updated items across connected harnesses by default, configurable from one to ten. Spawned subagents remain represented by their parent.
+Each eligible top-level thread or task is tracked locally. The overlay considers the five most recently updated items across connected harnesses by default, configurable from one to ten. Spawned subagents remain represented by their parent.
 
-The main interface is a vertical stack of document-style tabs folded into the right desktop edge, one per session, colored by status. Moving the pointer to the edge slides every tab out far enough to show its AI lab icon; hovering one tab slides it fully out to show the lab icon, the thread name, and a status icon. Clicking foregrounds the owning harness and selects the specific session where supported. The user authorized this tab dock on 2026-09-17, replacing the earlier rounded-square tiles and Dock-style magnification; the approved mockup is `docs/mockups/tab-dock.html`.
+The main interface is a compact dynamic island: one black, notch-style shape hanging from the top center of the selected display, over the menu bar. It collapses every recent thread into one status dot (two when a done thread shows while another works) and a short monospace label such as `Codex is working`. Clicking foregrounds the owning harness of the labeled thread and selects the specific session where supported. The user authorized this island on 2026-09-23, replacing the document-tab dock of 2026-09-17 (which had itself replaced the rounded-square tiles and Dock-style magnification); the reference states render from `tests/fixtures/dynamic-island.html`. The island does not expand yet.
 
 ### Fixed scope
 
@@ -65,77 +65,73 @@ Use the ambient color feedback and compact interaction model of [Codex Micro](ht
 
 Reuse the exact palette and status meanings from [the existing theme module](/Users/alex/Projects/codex-status-actions/src/theme.ts). Reuse applicable logic and original artwork from that Apache-2.0 project with attribution; do not copy proprietary hardware assets.
 
-| State | Color | Expanded status icon |
+| State | Color | Compact island |
 |---|---|---|
-| Idle / unavailable | `#F1F1ED` | Hollow circle / disconnected icon |
-| Completed, unread | `#8FEA98` | Filled circle |
-| Working | `#8DCEF5` | Animated rounded arc |
-| Waiting for input | `#FF8A3D` | Triangle |
-| Error | `#FF6B73` | Circle with X |
+| Idle / unavailable | `#F1F1ED` | White dot, no label |
+| Completed, unread | `#8FEA98` | Green dot, `<Provider> is done` |
+| Working | `#8DCEF5` | Pulsing blue dot, `<Provider> is working` |
+| Waiting for input | `#FF8A3D` | Orange dot, `<Provider> needs input` |
+| Error | `#FF6B73` | Reads as idle until the island expands |
 
-Use `#111315` for dark glyphs over filled status backgrounds.
+Unavailable status stays distinct from idle in session state and is used when a previously observed item can no longer be observed reliably; the compact island shows both as white. Errors likewise stay in session state and keep their color for the future expanded island.
 
-Idle is visible when its item is within the recent limit. Unavailable status is distinct from idle and is used when a previously observed item can no longer be observed reliably.
+### 2.2 Compact island
 
-### 2.2 Folded tab dock
+- The island is one black (`#000`) shape hanging from the top edge of the selected display, centered horizontally over the menu bar's empty center: **32 CSS px** tall, a flat top with **8 CSS px** concave shoulders on both sides, and a fully rounded bottom (16 px radius).
+- Its width follows its content with **14 CSS px** of horizontal padding and a minimum of **48 CSS px**.
+- The native window is **360 × 56 CSS px** at the display's top edge and sits above the menu bar at the status window level. Transparent space outside the island surface passes mouse events to applications underneath; the island surface is the only native hit region.
+- No title, toolbar, legend, settings button, icon, frosted backdrop, or native vibrancy window.
+- If no sessions qualify, hide the island completely. The menu-bar icon remains available.
 
-- Each session is one document-style tab: **28 CSS px tall**, **4 CSS px** apart, with an **8 CSS px radius** on the left corners and a square right edge that tucks into the display's usable right edge.
-- Tabs are filled with the status color and stacked with the stack's center on the upper-third line of the display work area (one third of the way down), clamped inside it.
-- Folded tabs show only a **12 CSS px** colored sliver: no logos, text, or status glyphs. A folded working tab may breathe with a soft highlight.
-- Each folded tab keeps a **24 px wide** native hit target; transparent space outside interactive targets passes mouse events to applications underneath.
-- No permanently visible title, toolbar, legend, or settings button, and no frosted backdrop or native vibrancy window behind the tabs.
-- If no sessions qualify, hide the dock completely. The menu-bar icon remains available.
+### 2.3 Dots and label
 
-### 2.3 Tab reveal
+Compact mode shows one **8 CSS px** dot chosen in this priority order:
 
-Reveal is a single horizontal slide driven by one transform transition:
+1. Orange when any recent thread needs input.
+2. Green when any recent thread is done and unread.
+3. Blue when any recent thread is working.
+4. White otherwise.
 
-- Pointer within **48 px** of the right edge, beside the stack: every tab slides out to **34 px**, exactly the lab icon plus its gutter. The title starts at the fold, so no text peeks.
-- Pointer over one tab, or keyboard focus on it: that tab slides fully out; the others stay at the icon depth.
-- While a tab is extended by the pointer, a reach zone stretching left as far as the widest visible tab and 24 px above and below the stack keeps the dock open, and the pointer's row (each row owns half of its gaps; the margins belong to the edge tabs) selects which tab is extended, so one tab stays extended until the zone is left. Leaving the reach zone folds everything. The reach zone only affects hover; clicks land on tab surfaces, and the zone is never published as a native hit region.
-- Slide duration **140 ms** with an ease-out curve and an **8 ms** per-tab stagger on dock hover; the hovered or focused tab never waits.
-- The right edge stays anchored throughout; fully extended tabs must remain inside the overlay window.
+When the green dot shows while another thread still works, a blue dot sits on its left, **6 CSS px** apart. Only blue dots pulse (a breathing dot with a soft expanding ring). Errors and unavailable threads read as idle in compact mode.
 
-An extended tab shows, in order:
+The label follows the dots after a **10 CSS px** gap and names the provider (`Codex` or `Claude`) of the most recently updated thread in the shown state:
 
-- One lab icon: OpenAI or Anthropic.
-- The session title, truncated with an ellipsis at **220 px**.
-- One lucide status icon.
-- Nothing else.
+- `<Provider> needs input` for orange.
+- `<Provider> is done` for green, including the blue-and-green pair.
+- `<Provider> is working` for blue.
+- No label for white.
 
-Titles truncate at 220 px with an ellipsis and never show a tooltip; the full title stays in the accessible name (the product owner removed the tooltip on 2026-09-17). For Codex, use a validated catalog `name`, falling back to the project folder name. For Claude Code, use the session's own name from Claude's per-process session registry (conversation-derived or user-set; Claude's folder-based placeholders are ignored), falling back to the project folder name (the repository name for a worktree). The user authorized storing these bounded harness-chosen names locally on 2026-09-17; never derive a title from `preview`, a transcript, a hook payload, or a rollout payload.
+The label uses the bundled Fira Code typeface at weight 500 and 12 px; the provider name is full white (`#F1F1ED`) and the rest is dimmed. Nothing else appears in the island: no thread titles, counts, badges, or decorative copy. Titles, which stay in session state for navigation, remain out of logs and diagnostics.
 
-Keep titles out of logs and diagnostics.
+Motion: the width changes with one **420 ms** spring transition, a new label fades in, and a new dot scales in. Reduced motion stops the pulse and every transition.
+
+The island does not expand yet. An expanded view needs explicit product authorization.
 
 #### Interaction mockup
 
 ```text
-Folded            Dock hovered         One tab hovered
-
-            ▌               ╭─ A▌                ╭─ A▌
-            ▌               ╭─ ⊙▌      ╭─ ⊙ Overlay hit-region clipping ?▌
-            ▌               ╭─ A▌                ╭─ A▌
-   desktop edge │      desktop edge │                    desktop edge │
+          menu bar ─────────╮         ╭───────── menu bar
+                             ╰─ ● ────╯                       idle
+                    ╰─ ◉ Codex is working ─╯                  working
+                   ╰─ ◉ ● Claude is done ─╯                   working + done
+                   ╰─ ● Codex needs input ─╯                  needs input
 ```
 
-The labels above explain the mockup; they must not appear inside actual tabs beyond the lab icon, title, and status icon. The interactive mockup in `docs/mockups/tab-dock.html` is the visual reference.
+The labels to the right explain the mockup; they never appear in the island.
 
-### 2.4 Ordering, overflow, and removal
+### 2.4 Recency, opening, and errors
 
 - Sort eligible items by confirmed provider update or task activity, newest first, with a stable ID tie-break. Local acknowledgement and error dismissal do not change recency.
-- Apply the global Recent threads limit (default five, range one to ten) across connected harnesses, including idle items.
-- Freeze ordering and automatic removals while the pointer is inside the dock.
-- Apply pending list changes after pointer exit.
-- Bind clicks to the session ID captured on pointer-down.
-- Show at most 12 tabs, further limited by available display height.
-- Allow scrolling through overflow while hovering.
-- Show a small directional indicator only when additional sessions exist outside the viewport.
+- Apply the global Recent threads limit (default five, range one to ten) across connected harnesses, including idle items; the island summarizes only those items.
 - Items outside the configured recent limit remain in local state and return when they become recent enough.
+- Bind a click to the labeled session and the completion captured on pointer-down.
 - Successful opening acknowledges the completion that was visible when clicked.
 - A newer completion arriving during navigation must remain unread.
 - Failed navigation must not acknowledge completion.
-- Errors remain until a new turn or explicit dismissal through the tab’s context menu.
-- Dismissal affects only the companion’s display, never the underlying task.
+- Errors remain in session state until a new turn. Explicit dismissal stays available over IPC for the future expanded island; the compact island has no context menu.
+- Dismissal affects only the companion's display, never the underlying task.
+
+Session titles stay in local state for navigation and the future expanded island; the compact island never shows them. For Codex, use a validated catalog `name`, falling back to the project folder name. For Claude Code, use the session's own name from Claude's per-process session registry (conversation-derived or user-set; Claude's folder-based placeholders are ignored), falling back to the project folder name (the repository name for a worktree). The user authorized storing these bounded harness-chosen names locally on 2026-09-17; never derive a title from `preview`, a transcript, a hook payload, or a rollout payload.
 
 ### 2.5 Settings
 
@@ -180,12 +176,11 @@ Rules:
 ### 2.6 Accessibility and desktop behavior
 
 - Hover must not activate the app or steal keyboard focus.
-- Support keyboard entry through the menu-bar action, arrow navigation, Enter to open, and Escape to close.
-- Screen-reader names include session, provider, and status.
-- Keyboard focus slides the selected tab fully out.
+- Support keyboard entry through the menu-bar action, which focuses the island; Enter opens the labeled thread and Escape leaves keyboard mode.
+- The island's accessible name is its label, or `All threads are idle`.
 - Respect system reduced-motion settings; allow explicitly enabling reduced motion.
-- Reduced motion disables the working animation and the animated slide.
-- Display disconnection moves the strip to the primary display; reconnecting restores the selected display.
+- Reduced motion stops the pulse and every island transition.
+- Display disconnection moves the island to the primary display; reconnecting restores the selected display.
 - Sleep/wake must restore monitoring and placement.
 - Test actual macOS window behavior; browser screenshots alone are insufficient. Electron provides the relevant workspace and mouse-passthrough controls, but their combination needs native verification. [Electron window documentation](https://www.electronjs.org/docs/latest/api/base-window)
 
@@ -196,7 +191,7 @@ Rules:
 Use:
 
 - Electron main process for integrations, state, persistence, navigation, and window placement.
-- React renderer for the strip and settings.
+- React renderer for the island and settings.
 - A narrow, typed preload bridge.
 - Vite-based builds.
 - Tailwind and stock shadcn/ui.
@@ -211,7 +206,7 @@ Keep OS-specific navigation and window operations behind explicit interfaces. Im
 
 ```text
 Codex catalog + local events ─┐
-                             ├─ provider adapters ─ session store ─ preload ─ strip
+                             ├─ provider adapters ─ session store ─ preload ─ island
 Claude hook events ──────────┘                          │
                                                       ├─ settings
                                                       └─ macOS navigation
@@ -438,6 +433,12 @@ The synthetic/source-derived Codex rollout fixtures under `tests/fixtures/codex/
 ### Epic 2 — Rounded-square status tiles and Dock magnification
 
 **PRs:** `feat/status-tiles`, `feat/dock-magnification`.
+
+Design history: PR #31 replaced the tiles with the folded tab dock, and
+`feat/dynamic-island` (2026-09-23) replaces the dock with the compact dynamic
+island in section 2. The checked items below record the earlier renderers; the
+unchecked native baseline, passthrough, and E2E acceptance items now apply to
+the island.
 
 Implementation progress (not an acceptance checkoff): PR #8 merged into
 `staging` at `1f3c523465de0cff9eb2cbafb65a04cb347ce301` from final feature head
@@ -791,9 +792,9 @@ Record corrections made after review and the commit used for final validation.
 ### Final acceptance checklist
 
 - [ ] All four local harness surfaces have live validation evidence.
-- [ ] Folded tabs show only a 12 pixel colored sliver of a 28 pixel tall, 8 pixel radius tab.
-- [ ] Dock hover reveals exactly the lab icon (34 pixels); hovering or focusing one tab slides it fully out within 140 ms.
-- [ ] Extended tabs contain only the lab icon, the session title, and one lucide status icon.
+- [ ] The compact island hangs from the top center of the selected display at 32 pixels tall, above the menu bar.
+- [ ] The island shows the priority dot (or the blue-and-green pair) and only the provider status label; blue dots pulse and idle shows no text.
+- [ ] Clicking the island opens the labeled thread; transparent space around it does not block underlying applications.
 - [ ] Settings use stock shadcn without redundant copy.
 - [ ] The configured number of recent eligible items appears, including idle and acknowledged items.
 - [ ] Clicks foreground the correct owning app.

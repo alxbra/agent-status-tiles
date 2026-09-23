@@ -12,29 +12,32 @@ Do not add application scaffolding as part of the repository bootstrap.
 
 The overlay has a strict visual contract; it is not a redesign invitation.
 Keep the exact status palette and meanings in `MVP_PLAN.md`. The user replaced
-the rounded-square tile strip with a document-tab dock on 2026-09-17; the
-approved mockup lives in `docs/mockups/tab-dock.html`. In particular:
+the document-tab dock with a compact dynamic island on 2026-09-23; the
+reference states render from `tests/fixtures/dynamic-island.html`. In
+particular:
 
-- Each session is one document-style tab anchored to the usable right edge:
-  **28 px tall**, **4 px apart**, an **8 px radius** on the left corners only,
-  filled with the status color, and stacked with its center on the work
-  area's upper-third line.
-- Folded tabs show only a **12 px** colored sliver with a 24 px wide native
-  hit target. A pointer within 48 px of the edge slides every tab out to
-  **34 px** so the lab icon shows; hovering or focusing one tab slides it fully
-  out. The slide is one transform transition of **140 ms** with an ease-out
-  curve and an 8 ms per-tab stagger; the hovered tab never waits.
-- While a tab is extended, a reach zone as deep as the widest tab and
-  reaching 24 px above and below the stack keeps the dock open. The
-  pointer's row selects the extended tab, and the margins belong to the
-  edge tabs, so the pointer can travel up and down between tabs and one
-  tab is always extended until the zone is left. Clicks land on tab surfaces only; the
-  reach zone is never a native hit region.
-- A tab contains, in order, one lab icon (OpenAI or Anthropic), the session
-  title, and one lucide status icon. Nothing else: no legends, badges, or
-  decorative copy. Titles truncate at 220 px with an ellipsis and no tooltip;
-  the full title stays in the accessible name.
-- No frosted backdrop or native vibrancy window sits behind the tabs.
+- The island is one black, notch-style shape hanging from the top edge of the
+  selected display, centered horizontally over the menu bar: **32 px tall**, a
+  flat top with **8 px** concave shoulders, a fully rounded bottom, at least
+  **48 px** wide, and **14 px** of horizontal padding around its content.
+- Compact mode shows one **8 px** indicator dot chosen in this priority order:
+  orange when any thread needs input, green when any thread is done and
+  unread, blue when any thread is working, otherwise white. When the green dot
+  shows while another thread works, a blue dot sits on its left. Only blue
+  dots pulse. Errors and unavailable threads read as idle in compact mode.
+- The label names the provider of the most recently updated thread in the
+  shown state: `Codex is working`, `Claude is done`, or `Codex needs input`.
+  The blue-and-green pair shows only the done label, and idle shows no text.
+  Nothing else: no icons, titles, counts, badges, or decorative copy.
+- The label uses bundled Fira Code at weight 500 and 12 px; the provider name
+  is full white and the rest is dimmed.
+- Width follows the content with one **420 ms** spring transition; a new label
+  fades in. Reduced motion stops the pulse and every transition.
+- Clicking the island opens the labeled thread and acknowledges the completion
+  visible at pointer-down; an idle island does nothing. The island surface is
+  the only native hit region.
+- The island does not expand yet. Do not add an expanded view without explicit
+  product authorization.
 - Settings use stock shadcn/ui components and standard styling. Keep one
   concise label per setting and omit redundant descriptions, cards, badges,
   sublines, and Save buttons. Add only actionable error text when needed.

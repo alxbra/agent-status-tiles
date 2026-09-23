@@ -1,83 +1,73 @@
 import { describe, expect, it } from 'vitest';
 
-import {
-  translateAndClipHitRegions,
-  type OverlayPortalRect,
-} from '../../src/renderer/overlay-hit-regions';
-import type { TileHitRegion } from '../../src/renderer/tiles/geometry';
+import type { OverlayHitRegion } from '../../src/shared/overlay-ipc';
+import { translateAndClipHitRegions } from '../../src/renderer/overlay-hit-regions';
 
-function tile(x: number, y: number, width = 24, height = 24): TileHitRegion {
-  return { x, y, width, height, sessionId: `codex:test-${String(x)}-${String(y)}` };
-}
-
-function portal(x: number, y: number, width: number, height: number): OverlayPortalRect {
+function region(x: number, y: number, width = 24, height = 24): OverlayHitRegion {
   return { x, y, width, height };
 }
 
 describe('overlay hit-region translation', () => {
-  it('translates root-local tile targets and keeps portal targets in viewport coordinates', () => {
+  it('translates root-local island regions into viewport coordinates', () => {
     expect(
-      translateAndClipHitRegions([tile(0, 100)], { left: 272, top: 0 }, [portal(10, 20, 80, 30)], {
-        width: 360,
-        height: 480,
-      }),
-    ).toEqual([
-      { x: 272, y: 100, width: 24, height: 24 },
-      { x: 10, y: 20, width: 80, height: 30 },
-    ]);
+      translateAndClipHitRegions(
+        [region(100, 0, 160, 32)],
+        { left: 4, top: 2 },
+        {
+          width: 360,
+          height: 56,
+        },
+      ),
+    ).toEqual([{ x: 104, y: 2, width: 160, height: 32 }]);
   });
 
   it('clips partially visible rectangles and drops invalid or fully outside rectangles', () => {
     expect(
       translateAndClipHitRegions(
-        [tile(-10, 470, 30, 30)],
-        { left: 0, top: 0 },
         [
-          portal(-10, 20, 30, 30),
-          portal(350, 470, 30, 30),
-          portal(361, 20, 10, 10),
-          portal(0, 0, Number.NaN, 10),
-          portal(0, 0, 10, -1),
+          region(-10, 40, 30, 30),
+          region(350, 0, 30, 30),
+          region(361, 20, 10, 10),
+          region(0, 0, Number.NaN, 10),
+          region(0, 0, 10, -1),
         ],
-        { width: 360, height: 480 },
+        { left: 0, top: 0 },
+        { width: 360, height: 56 },
       ),
     ).toEqual([
-      { x: 0, y: 470, width: 20, height: 10 },
-      { x: 0, y: 20, width: 20, height: 30 },
-      { x: 350, y: 470, width: 10, height: 10 },
+      { x: 0, y: 40, width: 20, height: 16 },
+      { x: 350, y: 0, width: 10, height: 30 },
     ]);
   });
 
-  it('deduplicates geometry and preserves tile priority at the shared cap', () => {
+  it('deduplicates geometry and stops at the cap', () => {
     const regions = translateAndClipHitRegions(
-      Array.from({ length: 12 }, (_, index) => tile(200, index * 24)),
+      [region(0, 0), region(0, 0), region(30, 0), region(60, 0)],
       { left: 0, top: 0 },
-      [portal(200, 0, 24, 24), portal(20, 20, 50, 20), portal(80, 20, 50, 20)],
-      { width: 360, height: 480 },
+      { width: 360, height: 56 },
+      2,
     );
-
-    expect(regions).toHaveLength(14);
-    expect(regions.slice(0, 12)).toEqual(
-      Array.from({ length: 12 }, (_, index) => ({ x: 200, y: index * 24, width: 24, height: 24 })),
-    );
-    expect(regions.slice(12)).toEqual([
-      { x: 20, y: 20, width: 50, height: 20 },
-      { x: 80, y: 20, width: 50, height: 20 },
-    ]);
+    expect(regions).toEqual([region(0, 0), region(30, 0)]);
   });
 
-  it('returns no regions for an invalid viewport or cap', () => {
-    expect(
-      translateAndClipHitRegions([tile(1, 1)], { left: 0, top: 0 }, [], {
-        width: Number.NaN,
-        height: 480,
-      }),
-    ).toEqual([]);
+  it('returns no regions for an invalid viewport, root, or cap', () => {
     expect(
       translateAndClipHitRegions(
-        [tile(1, 1)],
+        [region(1, 1)],
         { left: 0, top: 0 },
-        [],
+        {
+          width: Number.NaN,
+          height: 56,
+        },
+      ),
+    ).toEqual([]);
+    expect(translateAndClipHitRegions([region(1, 1)], null, { width: 100, height: 100 })).toEqual(
+      [],
+    );
+    expect(
+      translateAndClipHitRegions(
+        [region(1, 1)],
+        { left: 0, top: 0 },
         { width: 100, height: 100 },
         0,
       ),

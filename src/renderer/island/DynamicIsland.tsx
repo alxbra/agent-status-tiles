@@ -10,17 +10,17 @@ import {
 } from 'react';
 import '@fontsource/fira-code/500.css';
 
+import type { OverlayHitRegion } from '../../shared/overlay-ipc';
 import type { SessionSnapshot } from '../../shared/session';
-import type { TileHitRegion } from '../tiles/geometry';
-import { captureOpenTarget, type OpenSessionTarget } from '../tiles/interaction';
-import { TILE_COLORS } from '../tiles/theme';
-import { summarizeIsland, type IslandTone } from './summary';
+import { captureOpenTarget, visibleIslandSessions, type OpenSessionTarget } from './interaction';
+import { summarizeIsland } from './summary';
+import { TONE_COLOR } from './theme';
 import './island.css';
 
 export interface DynamicIslandProps {
   sessions: readonly SessionSnapshot[];
   onOpenSession: (target: OpenSessionTarget) => void | Promise<unknown>;
-  onHitRegionsChange: (regions: readonly TileHitRegion[]) => void;
+  onHitRegionsChange: (regions: readonly OverlayHitRegion[]) => void;
   onKeyboardExit: () => void;
   /** Monotonic signal from the native menu-bar keyboard-entry action. */
   keyboardEntryRevision?: number;
@@ -33,13 +33,6 @@ const ISLAND_PADDING_X = 14;
 const ISLAND_MOTION_MS = 420;
 /** Keeps publishing the pill's native hit region until the resize settles. */
 const HIT_REGION_SETTLE_MS = ISLAND_MOTION_MS + 80;
-
-const TONE_COLOR: Record<IslandTone, string> = {
-  idle: TILE_COLORS.neutral,
-  working: TILE_COLORS.blue,
-  unread: TILE_COLORS.green,
-  'needs-input': TILE_COLORS.orange,
-};
 
 function usePrefersReducedMotion(): boolean {
   const [prefersReducedMotion, setPrefersReducedMotion] = useState(
@@ -82,7 +75,7 @@ export function DynamicIsland({
   const motionReduced = prefersReducedMotion || reducedMotion === true;
 
   const summary = useMemo(() => summarizeIsland(sessions), [sessions]);
-  const hasSessions = sessions.some((session) => session.isTopLevel && !session.isArchived);
+  const hasSessions = visibleIslandSessions(sessions).length > 0;
   const width = Math.max(ISLAND_MIN_WIDTH, Math.ceil(contentWidth) + ISLAND_PADDING_X * 2);
 
   useLayoutEffect(() => {
@@ -108,8 +101,7 @@ export function DynamicIsland({
     const publish = (): void => {
       const rootBounds = root.getBoundingClientRect();
       const bounds = pill.getBoundingClientRect();
-      const region: TileHitRegion = {
-        sessionId: summary.target?.id ?? 'island',
+      const region: OverlayHitRegion = {
         x: bounds.left - rootBounds.left,
         y: bounds.top - rootBounds.top,
         width: bounds.width,
@@ -126,7 +118,7 @@ export function DynamicIsland({
     };
     publish();
     return () => window.cancelAnimationFrame(frame);
-  }, [width, summary.target?.id, onHitRegionsChange, hasSessions]);
+  }, [width, onHitRegionsChange, hasSessions]);
 
   useEffect(() => {
     if (
