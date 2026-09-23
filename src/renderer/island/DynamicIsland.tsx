@@ -157,6 +157,24 @@ export function DynamicIsland({
     });
   }, [sessions, columns, onTurnFinished]);
 
+  // Once a harness's tone moves away from the one it finished with, its green
+  // moment is over for good, even if the tone later comes back.
+  useLayoutEffect(() => {
+    const ended = columns.filter(
+      (column) => cued.has(column.provider) && cued.get(column.provider) !== column.tone,
+    );
+    if (ended.length === 0) return;
+    for (const { provider } of ended) {
+      window.clearTimeout(cueTimersRef.current.get(provider));
+      cueTimersRef.current.delete(provider);
+    }
+    setCued((current) => {
+      const next = new Map(current);
+      for (const { provider } of ended) next.delete(provider);
+      return next;
+    });
+  }, [columns, cued]);
+
   useEffect(() => {
     const timers = cueTimersRef.current;
     return () => {
@@ -257,9 +275,8 @@ export function DynamicIsland({
   if (!hasSessions) return null;
 
   const target = islandTarget(columns);
-  // The green cue lasts while the harness keeps the tone it finished with: a
-  // new turn starting or a question arriving ends it early, and a harness
-  // waiting for input never turns green, because a question outranks it.
+  // The green cue lasts while the harness keeps the tone it finished with; a
+  // harness waiting for input never turns green, because a question outranks it.
   const toneOf = (column: HarnessColumn): DotTone =>
     column.tone !== 'needs-input' && cued.get(column.provider) === column.tone
       ? 'finished'

@@ -31,6 +31,8 @@ const INAUDIBLE_GAIN = 0.001;
 
 let sharedContext: AudioContext | null = null;
 let sharedOutput: GainNode | null = null;
+/** At most one cue waits for a suspended context; later ones while it waits are dropped. */
+let pendingResume = false;
 
 function audioContext(): AudioContext | null {
   if (sharedContext !== null) return sharedContext;
@@ -114,18 +116,38 @@ function render(context: AudioContext): void {
   );
 }
 
+function renderSafely(context: AudioContext): void {
+  try {
+    render(context);
+  } catch {
+    // A closed or broken audio device only costs the cue.
+  }
+}
+
 /** Play the success cue once; never throws and never waits for a user gesture. */
 export function playSuccessCue(): void {
   const context = audioContext();
   if (context === null) return;
   if (context.state === 'running') {
-    render(context);
+    renderSafely(context);
     return;
   }
-  void context.resume().then(
-    () => {
-      if (context.state === 'running') render(context);
-    },
-    () => undefined,
-  );
+  if (pendingResume) return;
+  pendingResume = true;
+  try {
+    void context
+      .resume()
+      .then(
+        () => {
+          if (context.state === 'running') renderSafely(context);
+        },
+        () => undefined,
+      )
+      .finally(() => {
+        pendingResume = false;
+      });
+  } catch {
+    // Some engines throw synchronously when audio is blocked.
+    pendingResume = false;
+  }
 }

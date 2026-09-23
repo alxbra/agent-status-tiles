@@ -11,7 +11,9 @@ const VIEWPORT = { width: 360, height: 56 };
 let fixtureServer: ViteDevServer;
 
 // The native overlay runs with this autoplay policy and never takes focus.
-test.use({ launchOptions: { args: ['--autoplay-policy=no-user-gesture-required'] } });
+test.use({
+  launchOptions: { args: ['--autoplay-policy=no-user-gesture-required', '--mute-audio'] },
+});
 
 declare global {
   interface Window {
@@ -196,6 +198,20 @@ test('cues every finished turn with five seconds of green, then the current tone
       .locator('.dynamic-island__harness[data-provider="codex"] .dynamic-island__dot')
       .evaluate((dot) => getComputedStyle(dot).backgroundColor),
   ).toBe('rgb(143, 234, 152)');
+  // Codex finishes a second thread after 3 s: the green restarts from there.
+  await page.clock.runFor(3_000);
+  const codexD = workingSession({ id: 'codex:d', updatedAt: 4 });
+  await page.evaluate(
+    (sessions) => window.__setIslandSessions?.(sessions),
+    [doneA, codexB, codexD, claudeC],
+  );
+  await expect.poll(() => columns(page)).toEqual(['Codex:finished', 'Claude:working']);
+  const doneD = workingSession({ id: 'codex:d', status: 'unread', completionId: 'done-d' });
+  await page.evaluate(
+    (sessions) => window.__setIslandSessions?.(sessions),
+    [doneA, codexB, doneD, claudeC],
+  );
+  await expect.poll(() => page.evaluate(() => window.__islandTurnsFinished)).toBe(2);
   await page.clock.runFor(4_900);
   expect(await columns(page)).toEqual(['Codex:finished', 'Claude:working']);
   await page.clock.runFor(200);
@@ -204,24 +220,31 @@ test('cues every finished turn with five seconds of green, then the current tone
   // Claude finishes its only thread: green for five seconds, then idle.
   await page.evaluate((sessions) => window.__setIslandSessions?.(sessions), [doneA, codexB, doneC]);
   await expect.poll(() => columns(page)).toEqual(['Codex:working', 'Claude:finished']);
-  expect(await page.evaluate(() => window.__islandTurnsFinished)).toBe(2);
+  expect(await page.evaluate(() => window.__islandTurnsFinished)).toBe(3);
   await page.clock.runFor(5_100);
+  await expect.poll(() => columns(page)).toEqual(['Codex:working', 'Claude:idle']);
+
+  // Once the tone moves away, the green is over for good: a question and its
+  // answer inside the five seconds bring back blue, not green.
+  const againA = workingSession({ id: 'codex:a', status: 'unread', completionId: 'done-a3' });
+  const askingB = workingSession({ id: 'codex:b', updatedAt: 3, status: 'needs-input' });
+  const set = (sessions: readonly SessionSnapshot[]): Promise<void> =>
+    page.evaluate((next) => window.__setIslandSessions?.(next), sessions);
+  await set([againA, codexB, doneC]);
+  await expect.poll(() => columns(page)).toEqual(['Codex:finished', 'Claude:idle']);
+  expect(await page.evaluate(() => window.__islandTurnsFinished)).toBe(4);
+  await set([againA, askingB, doneC]);
+  await expect.poll(() => columns(page)).toEqual(['Codex:needs-input', 'Claude:idle']);
+  await set([againA, codexB, doneC]);
   await expect.poll(() => columns(page)).toEqual(['Codex:working', 'Claude:idle']);
 
   // A question outranks the cue: Codex finishes a turn while another of its
   // threads waits for input, so it sounds but stays orange.
-  const askingB = workingSession({ id: 'codex:b', updatedAt: 3, status: 'needs-input' });
-  const doneAgainA = workingSession({ id: 'codex:a', status: 'unread', completionId: 'done-a2' });
-  await page.evaluate(
-    (sessions) => window.__setIslandSessions?.(sessions),
-    [doneA, askingB, doneC],
-  );
+  const onceMoreA = workingSession({ id: 'codex:a', status: 'unread', completionId: 'done-a4' });
+  await set([againA, askingB, doneC]);
   await expect.poll(() => columns(page)).toEqual(['Codex:needs-input', 'Claude:idle']);
-  await page.evaluate(
-    (sessions) => window.__setIslandSessions?.(sessions),
-    [doneAgainA, askingB, doneC],
-  );
-  await expect.poll(() => page.evaluate(() => window.__islandTurnsFinished)).toBe(3);
+  await set([onceMoreA, askingB, doneC]);
+  await expect.poll(() => page.evaluate(() => window.__islandTurnsFinished)).toBe(5);
   expect(await columns(page)).toEqual(['Codex:needs-input', 'Claude:idle']);
 });
 
@@ -386,8 +409,13 @@ test('republishes the hit region when the window width changes', async ({ page }
 test.describe('the success cue', () => {
   test('synthesizes its three tones without any user gesture', async ({ page }) => {
     await page.addInitScript(() => {
-      // Playwright's evaluate counts as a user gesture, so report the state of
-      // the never-focused overlay directly: no activation, ever.
+      // Playwright's evaluate counts as a user gesture, so record the audio
+      // state at load, before any evaluate: under the overlay's autoplay
+      // policy it must already run without one.
+      const probe = new AudioContext();
+      Reflect.set(window, '__audioStateAtLoad', probe.state);
+      void probe.close();
+      // Also report no activation, so a reintroduced JavaScript gesture check fails.
       Object.defineProperty(Navigator.prototype, 'userActivation', {
         configurable: true,
         get: () => ({ hasBeenActive: false, isActive: false }),
@@ -401,6 +429,7 @@ test.describe('the success cue', () => {
       };
     });
     await openIsland(page, 'working', '&sound=real');
+    expect(await page.evaluate(() => Reflect.get(window, '__audioStateAtLoad'))).toBe('running');
     expect(await page.evaluate(() => navigator.userActivation.hasBeenActive)).toBe(false);
     await page.evaluate(
       (session) => window.__setIslandSessions?.([session]),

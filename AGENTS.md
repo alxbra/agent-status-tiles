@@ -28,7 +28,8 @@ it into one column per harness the same day; the reference states render from
   is idle. Nothing else: no labels, icons, titles, counts, or badges.
 - When a turn finishes, the island plays Cuelume's `success` cue and that
   harness's dot pulses green for **5 seconds**, then shows its current tone
-  (white or blue). A harness waiting for input stays orange throughout.
+  (white or blue). The green ends early for good once the harness's tone
+  changes, and a harness waiting for input stays orange throughout.
 - Both names use bundled Fira Code at weight 500 and 12 px in one gray.
 - Width follows the content with one **420 ms** spring transition. Reduced
   motion stops the pulse and every transition, but not the sound.
