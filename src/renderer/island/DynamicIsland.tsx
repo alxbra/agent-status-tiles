@@ -5,10 +5,13 @@ import {
   useRef,
   useState,
   type CSSProperties,
-  type KeyboardEvent,
+  type MouseEvent,
+  type PointerEvent,
   type ReactElement,
 } from 'react';
-import '@fontsource/fira-code/500.css';
+// Latin only: the other subsets are unused and a tiny one would be inlined as a
+// data: URL that the overlay's font-src policy blocks.
+import '@fontsource/fira-code/latin-500.css';
 
 import type { OverlayHitRegion } from '../../shared/overlay-ipc';
 import type { SessionSnapshot } from '../../shared/session';
@@ -31,8 +34,6 @@ const ISLAND_HEIGHT = 32;
 const ISLAND_MIN_WIDTH = 48;
 const ISLAND_PADDING_X = 14;
 const ISLAND_MOTION_MS = 420;
-/** Keeps publishing the pill's native hit region until the resize settles. */
-const HIT_REGION_SETTLE_MS = ISLAND_MOTION_MS + 80;
 
 function usePrefersReducedMotion(): boolean {
   const [prefersReducedMotion, setPrefersReducedMotion] = useState(
@@ -88,16 +89,14 @@ export function DynamicIsland({
     return () => observer.disconnect();
   }, [hasSessions]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const root = rootRef.current;
     const pill = pillRef.current;
     if (root === null || pill === null) {
       onHitRegionsChange([]);
       return undefined;
     }
-    let frame = 0;
     let lastKey = '';
-    const startedAt = performance.now();
     const publish = (): void => {
       const rootBounds = root.getBoundingClientRect();
       const bounds = pill.getBoundingClientRect();
@@ -108,17 +107,25 @@ export function DynamicIsland({
         height: bounds.height,
       };
       const key = JSON.stringify(region);
-      if (key !== lastKey) {
-        lastKey = key;
-        onHitRegionsChange([region]);
-      }
-      if (performance.now() - startedAt < HIT_REGION_SETTLE_MS) {
-        frame = window.requestAnimationFrame(publish);
-      }
+      if (key === lastKey) return;
+      lastKey = key;
+      onHitRegionsChange([region]);
     };
     publish();
-    return () => window.cancelAnimationFrame(frame);
-  }, [width, onHitRegionsChange, hasSessions]);
+    // The pill resizes on every frame of the spring and the root follows the
+    // window, so observing both keeps the native region current even when the
+    // spring ran while the overlay was hidden.
+    const observer = new ResizeObserver(publish);
+    observer.observe(root);
+    observer.observe(pill);
+    root.addEventListener('transitionend', publish);
+    document.addEventListener('visibilitychange', publish);
+    return () => {
+      observer.disconnect();
+      root.removeEventListener('transitionend', publish);
+      document.removeEventListener('visibilitychange', publish);
+    };
+  }, [onHitRegionsChange, hasSessions]);
 
   useEffect(() => {
     if (
@@ -127,27 +134,54 @@ export function DynamicIsland({
     ) {
       return;
     }
-    handledKeyboardEntryRevisionRef.current = keyboardEntryRevision;
     const pill = pillRef.current;
-    if (pill !== null) window.requestAnimationFrame(() => pill.focus());
+    // An entry that arrives before the island renders is handled once it does.
+    if (pill === null) return;
+    handledKeyboardEntryRevisionRef.current = keyboardEntryRevision;
+    window.requestAnimationFrame(() => pill.focus());
   }, [keyboardEntryRevision, hasSessions]);
+
+  useEffect(() => {
+    // Keyboard mode ends from anywhere in the focused overlay, not only the pill.
+    const handleKeyDown = (event: globalThis.KeyboardEvent): void => {
+      if (event.key !== 'Escape') return;
+      event.preventDefault();
+      if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
+      onKeyboardExit();
+    };
+    const clearStaleCapture = (event: globalThis.PointerEvent): void => {
+      const pill = pillRef.current;
+      if (pill === null || !(event.target instanceof Node) || !pill.contains(event.target)) {
+        capturedTargetRef.current = null;
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    window.addEventListener('pointerup', clearStaleCapture);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+      window.removeEventListener('pointerup', clearStaleCapture);
+    };
+  }, [onKeyboardExit]);
 
   if (!hasSessions) return null;
 
-  const openTarget = (target: OpenSessionTarget | null): void => {
-    capturedTargetRef.current = null;
-    if (target === null) return;
-    void Promise.resolve(onOpenSession(target)).catch(() => undefined);
-  };
-
-  const handleKeyDown = (event: KeyboardEvent<HTMLButtonElement>): void => {
-    if (event.key !== 'Escape') return;
-    event.preventDefault();
-    event.currentTarget.blur();
-    onKeyboardExit();
-  };
-
   const target = summary.target;
+  const openableTarget = (): OpenSessionTarget | null =>
+    target !== null && target.canOpen ? captureOpenTarget(target) : null;
+
+  const handlePointerDown = (event: PointerEvent<HTMLButtonElement>): void => {
+    capturedTargetRef.current = event.button === 0 ? openableTarget() : null;
+  };
+
+  const handleClick = (event: MouseEvent<HTMLButtonElement>): void => {
+    // Keyboard activation (detail 0) opens what the island shows now; a
+    // pointer click opens what it showed at pointer-down.
+    const clicked = event.detail === 0 ? openableTarget() : capturedTargetRef.current;
+    capturedTargetRef.current = null;
+    if (clicked === null) return;
+    void Promise.resolve(onOpenSession(clicked)).catch(() => undefined);
+  };
+
   const ariaLabel = summary.label ?? 'All threads are idle';
 
   return (
@@ -173,24 +207,17 @@ export function DynamicIsland({
           aria-disabled={target === null || !target.canOpen}
           data-tone={summary.dots.at(-1)}
           data-session-id={target?.id}
-          onPointerDown={() => {
-            capturedTargetRef.current = target === null ? null : captureOpenTarget(target);
-          }}
+          onPointerDown={handlePointerDown}
           onPointerCancel={() => {
             capturedTargetRef.current = null;
           }}
-          onClick={() =>
-            openTarget(
-              capturedTargetRef.current ?? (target === null ? null : captureOpenTarget(target)),
-            )
-          }
-          onKeyDown={handleKeyDown}
+          onClick={handleClick}
         >
           <span ref={contentRef} className="dynamic-island__content">
             <span className="dynamic-island__dots">
-              {summary.dots.map((tone, index) => (
+              {summary.dots.map((tone) => (
                 <span
-                  key={`${String(index)}:${tone}`}
+                  key={tone}
                   className="dynamic-island__dot"
                   data-tone={tone}
                   style={{ '--dynamic-island-dot': TONE_COLOR[tone] } as CSSProperties}

@@ -32,7 +32,8 @@ The main interface is a compact dynamic island: one black, notch-style shape han
 
 ### Current runtime readiness after PR #18
 
-The merged application now mounts `StatusTiles` in the sandboxed native overlay
+The merged application then mounted `StatusTiles` (since replaced by the
+dynamic island) in the sandboxed native overlay
 through a typed, sender/frame-validated preload and IPC bridge. It projects only
 bounded session metadata, keeps zero-session production state hidden,
 synchronizes tile and portal hit regions, persists the selected display and
@@ -426,7 +427,7 @@ The synthetic/source-derived Codex rollout fixtures under `tests/fixtures/codex/
 - [x] Implement primary-display default placement (verified by merged PR #4).
 - [x] Persist the selected display, fall back to primary while absent, and restore the preference when it reconnects (PR #16; simulated topology and native restart verified, physical unplug/reconnect remains below).
 - [ ] Implement Spaces/full-screen visibility without taking focus on hover. The all-workspaces/full-screen native flags and non-focusable hover path are automated; actual Space/full-screen transitions remain physically unverified.
-- [ ] Implement accurate mouse passthrough. Bounded native tile/portal regions and transparent-region ignore mode are automated; a real click reaching an arbitrary application behind the overlay remains physically unverified.
+- [ ] Implement accurate mouse passthrough. Bounded native island hit regions and transparent-region ignore mode are automated; a real click reaching an arbitrary application behind the overlay remains physically unverified.
 - [ ] Handle display changes, sleep/wake, and application shutdown. Display/resume recovery, close/crash/load-failure replacement, activation, and shutdown cleanup are automated; physical sleep/wake and display reconfiguration remain unverified.
 - [ ] **E2E and corrections:** test real clicks into an application behind the overlay, hover without focus theft, full-screen apps, two displays, unplug/reconnect, and wake recovery; fix, rerun, harden, and merge.
 

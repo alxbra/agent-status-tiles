@@ -140,6 +140,11 @@ test('pulses only blue dots and stills them under reduced motion', async ({ page
 
   await openIsland(page, 'working-done', '&motion=reduced');
   expect(await animations()).toEqual(['none', 'none']);
+  expect(
+    await page
+      .locator('.dynamic-island__shape')
+      .evaluate((shape) => getComputedStyle(shape).transitionProperty),
+  ).toBe('none');
 });
 
 test('resizes the island around its label and publishes the pill as the only hit region', async ({
@@ -226,4 +231,87 @@ test('renders nothing without visible sessions', async ({ page }) => {
   await openIsland(page, 'idle');
   await page.evaluate(() => window.__setIslandSessions?.([]));
   await expect(page.locator('.dynamic-island')).toHaveCount(0);
+});
+
+function workingSession(overrides: Partial<SessionSnapshot> = {}): SessionSnapshot {
+  return {
+    id: 'codex:w',
+    provider: 'codex',
+    surface: 'desktop',
+    title: 'W',
+    status: 'working',
+    updatedAt: 2,
+    lastTurnStartedAt: 2,
+    isTopLevel: true,
+    isArchived: false,
+    canOpen: true,
+    ...overrides,
+  };
+}
+
+test('focuses the island once a keyboard entry that arrived early can land', async ({ page }) => {
+  await openIsland(page, 'idle');
+  await page.evaluate(() => window.__setIslandSessions?.([]));
+  await expect(page.locator('.dynamic-island')).toHaveCount(0);
+  await page.evaluate(() => window.__triggerKeyboardEntry?.());
+  await page.evaluate((session) => window.__setIslandSessions?.([session]), workingSession());
+  await expect(page.locator('.dynamic-island__pill')).toBeFocused();
+});
+
+test('leaves keyboard mode on Escape even when the pill lost focus', async ({ page }) => {
+  await openIsland(page, 'working');
+  await page.evaluate(() => window.__triggerKeyboardEntry?.());
+  await expect(page.locator('.dynamic-island__pill')).toBeFocused();
+  await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+  await page.keyboard.press('Escape');
+  expect(await page.evaluate(() => window.__islandKeyboardExits)).toBe(1);
+});
+
+test('never opens a thread that cannot be opened', async ({ page }) => {
+  await openIsland(page, 'idle');
+  await page.evaluate(
+    (session) => window.__setIslandSessions?.([session]),
+    workingSession({ canOpen: false }),
+  );
+  const pill = page.locator('.dynamic-island__pill');
+  await expect(pill).toHaveAttribute('aria-disabled', 'true');
+  await pill.click({ force: true });
+  await pill.focus();
+  await page.keyboard.press('Enter');
+  expect(await page.evaluate(() => window.__islandOpenTarget)).toBeUndefined();
+});
+
+test('ignores a stale right-click capture when Enter opens the island', async ({ page }) => {
+  await openIsland(page, 'working-done');
+  const pill = page.locator('.dynamic-island__pill');
+  await pill.click({ button: 'right' });
+  await page.evaluate(
+    (session) => window.__setIslandSessions?.([session]),
+    workingSession({ id: 'claude:later', provider: 'claude' }),
+  );
+  await expect(page.locator('.dynamic-island__label')).toHaveText('Claude is working');
+  await pill.focus();
+  await page.keyboard.press('Enter');
+  expect(await page.evaluate(() => window.__islandOpenTarget)).toEqual({
+    sessionId: 'claude:later',
+  });
+});
+
+test('republishes the hit region when the window width changes', async ({ page }) => {
+  await openIsland(page, 'working');
+  const offset = async (): Promise<number | null> => {
+    const box = await page.locator('.dynamic-island__pill').boundingBox();
+    const x = await page.evaluate(
+      () => (window.__islandHitRegions as readonly { x: number }[] | undefined)?.[0]?.x,
+    );
+    return box === null || x === undefined ? null : Math.round(Math.abs(x - box.x) * 10) / 10;
+  };
+  await expect.poll(offset).toBe(0);
+  await page.setViewportSize({ width: VIEWPORT.width + 100, height: VIEWPORT.height });
+  const pillCenter = async (): Promise<number | null> => {
+    const box = await page.locator('.dynamic-island__pill').boundingBox();
+    return box === null ? null : Math.round(box.x + box.width / 2);
+  };
+  await expect.poll(pillCenter).toBe((VIEWPORT.width + 100) / 2);
+  await expect.poll(offset).toBe(0);
 });
