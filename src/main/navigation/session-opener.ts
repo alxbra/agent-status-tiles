@@ -4,10 +4,11 @@ import type {
   OverlayState,
 } from '../../shared/overlay-ipc';
 import type { SessionSnapshot } from '../../shared/session';
-import type {
-  NavigationResult,
-  QualifiedNavigationTarget,
-  TerminalApplication,
+import {
+  isCodexTaskId,
+  type NavigationResult,
+  type QualifiedNavigationTarget,
+  type TerminalApplication,
 } from './macos-navigator';
 
 export interface SessionNavigator {
@@ -26,8 +27,22 @@ export interface SessionOpenerOptions {
 const UNAVAILABLE: OverlayActionResult = { handled: false, reason: 'unavailable' };
 const FAILED: OverlayActionResult = { handled: false, reason: 'failed' };
 
-function nativeSessionId(session: SessionSnapshot): string {
+function nativeSessionId(session: Pick<SessionSnapshot, 'id' | 'provider'>): string {
   return session.id.slice(session.provider.length + 1);
+}
+
+/**
+ * Whether the navigator can bring this thread forward: a Codex Desktop thread
+ * with a task UUID, any Claude Desktop thread, and a Claude CLI thread, whose
+ * hook journal usually records its terminal. Codex CLI threads record none.
+ */
+export function canNavigateTo(
+  session: Pick<SessionSnapshot, 'id' | 'provider' | 'surface'>,
+): boolean {
+  if (session.provider === 'codex') {
+    return session.surface === 'desktop' && isCodexTaskId(nativeSessionId(session));
+  }
+  return true;
 }
 
 async function navigationTarget(
@@ -65,7 +80,16 @@ export async function openIslandSession(
   const session = options
     .getState()
     .sessions.find((candidate) => candidate.id === request.sessionId);
-  if (session === undefined || !session.canOpen) return UNAVAILABLE;
+  // Only a thread the island shows: top-level, not archived, and openable.
+  if (
+    session === undefined ||
+    !session.isTopLevel ||
+    session.isArchived ||
+    !session.canOpen ||
+    !canNavigateTo(session)
+  ) {
+    return UNAVAILABLE;
+  }
   let result: NavigationResult;
   try {
     result = await options.navigator.navigate(await navigationTarget(session, options.cliOwner));

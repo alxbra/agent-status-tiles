@@ -49,6 +49,41 @@ describe('overlay preload keyboard bridge', () => {
     );
   });
 
+  it('opens a session through IPC and accepts only a known action result', async () => {
+    await import('../../src/preload/overlay');
+    const api = electronMocks.contextBridge.exposeInMainWorld.mock.calls[0]?.[1] as {
+      openSession: (request: unknown) => Promise<unknown>;
+    };
+
+    electronMocks.ipcRenderer.invoke.mockResolvedValue({ handled: true } as never);
+    await expect(api.openSession({ sessionId: 'codex:one', completionId: 'c1' })).resolves.toEqual({
+      handled: true,
+    });
+    expect(electronMocks.ipcRenderer.invoke).toHaveBeenCalledWith(
+      OVERLAY_IPC_CHANNELS.openSession,
+      { sessionId: 'codex:one', completionId: 'c1' },
+    );
+    electronMocks.ipcRenderer.invoke.mockResolvedValue({
+      handled: false,
+      reason: 'failed',
+    } as never);
+    await expect(api.openSession({ sessionId: 'codex:one' })).resolves.toEqual({
+      handled: false,
+      reason: 'failed',
+    });
+    electronMocks.ipcRenderer.invoke.mockResolvedValue({ handled: true, extra: 1 } as never);
+    await expect(api.openSession({ sessionId: 'codex:one' })).rejects.toThrow(
+      'Overlay action result is invalid',
+    );
+    // A malformed request never reaches main.
+    electronMocks.ipcRenderer.invoke.mockClear();
+    await expect(api.openSession({ sessionId: '' })).resolves.toEqual({
+      handled: false,
+      reason: 'unavailable',
+    });
+    expect(electronMocks.ipcRenderer.invoke).not.toHaveBeenCalled();
+  });
+
   it('announces renderer readiness without a payload and validates the result', async () => {
     await import('../../src/preload/overlay');
     const api = electronMocks.contextBridge.exposeInMainWorld.mock.calls[0]?.[1] as {

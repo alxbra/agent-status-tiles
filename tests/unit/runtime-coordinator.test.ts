@@ -92,6 +92,47 @@ describe('runtime coordinator', () => {
     }
   });
 
+  it('marks exactly the threads the navigator can bring forward as openable', async () => {
+    const dataPath = await appDataPath();
+    const read = async (request: RuntimeReadRequest) => ({
+      events: [],
+      cursors: Object.fromEntries(
+        request.sources.map((item) => [
+          item.id,
+          { identity: 'fixture', offset: item.endOffset ?? 0 },
+        ]),
+      ),
+      complete: true,
+    });
+    const task = '0199f6a1-2b3c-7d4e-8f90-123456789abc';
+    const runtime = createRuntimeCoordinator({
+      appDataPath: dataPath,
+      monitors: [
+        monitor('codex:desktop', [source(task, 4), source('not-a-task-id', 3)], read),
+        monitor('codex:cli', [source('cli-thread', 2)], read),
+        monitor('claude:desktop', [source('claude-thread', 1)], read),
+      ],
+    });
+    try {
+      await runtime.start();
+      await runtime.connect('codex', 'desktop');
+      await runtime.connect('codex', 'cli');
+      await runtime.connect('claude', 'desktop');
+      expect(
+        Object.fromEntries(
+          runtime.getOverlayState().sessions.map((item) => [item.id, item.canOpen]),
+        ),
+      ).toEqual({
+        [`codex:${task}`]: true,
+        'codex:not-a-task-id': false,
+        'codex:cli-thread': false,
+        'claude:claude-thread': true,
+      });
+    } finally {
+      await runtime.stop();
+    }
+  });
+
   it('shows five latest top-level records across connected providers and changes the global limit', async () => {
     const dataPath = await appDataPath();
     const read = async (request: RuntimeReadRequest) => ({

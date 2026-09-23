@@ -67,17 +67,15 @@ import { ClaudeJournalDiscovery } from './providers/claude/journal-discovery';
 import { ClaudeSessionNames } from './providers/claude/session-names';
 import { ClaudeJournalCollector, claudeRetainedSet } from './providers/claude/journal-collector';
 import {
+  isTerminalApplication,
   MacOsNavigator,
-  TERMINAL_SELECTION_OPTIONS,
-  type NavigationResult,
-  type QualifiedNavigationTarget,
   type TerminalApplication,
 } from './navigation/macos-navigator';
 import { openIslandSession, type SessionNavigator } from './navigation/session-opener';
 
 const hasSingleInstanceLock = app.requestSingleInstanceLock();
 const TEST_KEYBOARD_ENTRY_HOOK = Symbol.for('agent-status-tiles.test.keyboard-entry');
-/** Test runtime only: the navigation targets island clicks produced, newest last. */
+/** Test runtime only: the /usr/bin/open commands island clicks produced, oldest first. */
 const TEST_NAVIGATIONS = Symbol.for('agent-status-tiles.test.navigations');
 let menuBar: MenuBarController | null = null;
 let overlayController: OverlayController | null = null;
@@ -143,16 +141,9 @@ function claudeIntegration(): ClaudeIntegration | undefined {
   };
 }
 
-const TERMINAL_HOSTS: ReadonlySet<string> = new Set<TerminalApplication>([
-  'terminal',
-  'iterm2',
-  'ghostty',
-  'warp',
-]);
-
 /** The terminal a Claude CLI session's hook journal recorded as its host. */
 function claudeTerminalOwner(host: string | undefined): TerminalApplication | 'unknown' {
-  return host !== undefined && TERMINAL_HOSTS.has(host) ? (host as TerminalApplication) : 'unknown';
+  return isTerminalApplication(host) ? host : 'unknown';
 }
 
 let navigator: SessionNavigator | null = null;
@@ -164,27 +155,24 @@ let navigator: SessionNavigator | null = null;
 function sessionNavigator(): SessionNavigator {
   if (navigator !== null) return navigator;
   if (isTestRuntime()) {
-    const targets: QualifiedNavigationTarget[] = [];
-    Reflect.defineProperty(globalThis, TEST_NAVIGATIONS, { configurable: true, value: targets });
-    navigator = {
-      navigate: (target) => {
-        targets.push(target);
-        const result: NavigationResult =
-          target.provider === 'codex' && target.surface === 'desktop'
-            ? { status: 'dispatched', target: 'session', application: 'codex-desktop' }
-            : target.surface === 'desktop'
-              ? { status: 'dispatched', target: 'application', application: 'claude-desktop' }
-              : target.owner === 'unknown'
-                ? {
-                    status: 'selection-required',
-                    target: 'application',
-                    reason: 'unknown-owner',
-                    options: TERMINAL_SELECTION_OPTIONS,
-                  }
-                : { status: 'dispatched', target: 'application', application: target.owner };
-        return Promise.resolve(result);
+    // The real navigator with every /usr/bin/open command recorded instead of
+    // run, so its target rules apply while E2E runs never switch apps.
+    const commands: string[][] = [];
+    Reflect.defineProperty(globalThis, TEST_NAVIGATIONS, { configurable: true, value: commands });
+    navigator = new MacOsNavigator(
+      (executable, args) => {
+        commands.push([executable, ...args]);
+        return Promise.resolve({
+          exitCode: 0,
+          stdout: '',
+          stderr: '',
+          hasTimedOut: false,
+          isCleanupConfirmed: true,
+        });
       },
-    };
+      () => Promise.resolve(),
+      'darwin',
+    );
   } else {
     navigator = new MacOsNavigator();
   }
@@ -500,22 +488,30 @@ if (!hasSingleInstanceLock) {
       setHitRegions: (regions) => overlayController?.setHitRegions(regions) ?? false,
       onKeyboardExit: () => overlayController?.exitKeyboardMode(),
       onRendererReady: () => overlayController?.setRendererReady(),
-      openSession: (request) =>
-        openIslandSession(request, {
+      openSession: async (request) => {
+        const result = await openIslandSession(request, {
           navigator: sessionNavigator(),
           getState: () => overlayState,
-          cliOwner: async (session) =>
-            session.provider === 'claude'
-              ? claudeTerminalOwner(
-                  (await claudeJournals.list()).find(
-                    (journal) => `claude:${journal.nativeSessionId}` === session.id,
-                  )?.host,
-                )
-              : // Codex records no launching terminal.
-                'unknown',
+          // The monitors' last journal listing, refreshed every discovery pass.
+          cliOwner: (session) =>
+            Promise.resolve(
+              session.provider === 'claude'
+                ? claudeTerminalOwner(
+                    claudeJournals.summaries.find(
+                      (journal) => `claude:${journal.nativeSessionId}` === session.id,
+                    )?.host,
+                  )
+                : // Codex records no launching terminal.
+                  'unknown',
+            ),
           acknowledge: (sessionId, completionId) =>
             runtimeCoordinator?.acknowledge(sessionId, completionId) ?? Promise.resolve(false),
-        }),
+        });
+        // The harness is in front now, so leave keyboard mode without handing
+        // focus back to the app that was active before.
+        if (result.handled) overlayController?.exitKeyboardMode({ restoreFocus: false });
+        return result;
+      },
     });
     menuBar = createMenuBar({
       showOverlay: () => overlayController?.enterKeyboardMode(),

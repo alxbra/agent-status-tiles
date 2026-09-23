@@ -24,7 +24,7 @@ describe('test-only overlay session source', () => {
     const snapshots = createTestSessionSnapshots(30);
     expect(snapshots).toHaveLength(30);
     expect(snapshots[0]).toMatchObject({
-      id: 'codex:test-session-1',
+      id: 'codex:00000000-0000-7000-8000-000000000001',
       provider: 'codex',
       surface: 'desktop',
       title: 'Test session 1',

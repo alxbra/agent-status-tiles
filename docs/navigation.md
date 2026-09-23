@@ -51,15 +51,22 @@ is returned in navigation results.
 
 Each island column is a button for its harness. Its click reaches the main
 process as an `overlay:open-session` request with the session ID (and, for a
-thread that just finished, the completion the click saw). `openIslandSession`
-in `src/main/navigation/session-opener.ts` accepts only a session in the
-island's current state whose `canOpen` is set, builds the qualified target
+thread that just finished, the completion the click saw). The runtime's
+overlay projection sets `canOpen` from `canNavigateTo`: a Codex Desktop thread
+whose ID is a task UUID, any Claude Desktop thread, and a Claude CLI thread.
+`openIslandSession` in `src/main/navigation/session-opener.ts` accepts only a
+top-level, unarchived session in the island's current state that passes both
+checks, builds the qualified target
 from the session's provider and surface, and calls the navigator. A CLI
 session's owner comes from its harness: Claude's hook journal records the
 launching terminal as `host`; Codex records none, so its CLI threads return
 `selection-required` and nothing opens. A completion is acknowledged only
-after the navigator reports `dispatched`.
+after the navigator reports `dispatched`. A successful open also ends keyboard
+mode without restoring the previously active app, since the harness is now in
+front.
 
-The test runtime (`NODE_ENV=test`, unpackaged) swaps the navigator for one
-that records each target under `Symbol.for('agent-status-tiles.test.navigations')`,
-so E2E runs never switch the developer's frontmost app.
+The test runtime (`NODE_ENV=test`, unpackaged) runs the real `MacOsNavigator`
+with a command runner that records each `/usr/bin/open` argument list under
+`Symbol.for('agent-status-tiles.test.navigations')` instead of running it, so
+the navigator's target rules apply while E2E runs never switch the developer's
+frontmost app.

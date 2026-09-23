@@ -607,9 +607,10 @@ for (const testSessionCount of [0, 1, 12, 30]) {
           )
           .toEqual(testSessionCount === 1 ? ['working', 'idle'] : ['working', 'needs-input']);
         if (testSessionCount === 1) {
-          // A click reaches main's navigator with the thread's qualified
-          // target; the test runtime records it instead of switching apps.
+          // A click reaches main's real navigator, whose /usr/bin/open
+          // commands the test runtime records instead of running.
           await page.locator('.dynamic-island__harness[data-provider="codex"]').click();
+          const task = '00000000-0000-7000-8000-000000000001';
           await expect
             .poll(() =>
               application!.evaluate(() =>
@@ -617,12 +618,8 @@ for (const testSessionCount of [0, 1, 12, 30]) {
               ),
             )
             .toEqual([
-              {
-                provider: 'codex',
-                surface: 'desktop',
-                nativeSessionId: 'test-session-1',
-                owner: 'codex-desktop',
-              },
+              ['/usr/bin/open', '-b', 'com.openai.codex'],
+              ['/usr/bin/open', '-g', '-b', 'com.openai.codex', `codex://threads/${task}`],
             ]);
         }
         // The island hangs from the window's top edge, centered horizontally.

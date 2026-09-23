@@ -413,6 +413,22 @@ test('takes keyboard focus from the menu bar entry and leaves it on Escape', asy
   expect(await page.evaluate(() => window.__islandKeyboardExits)).toBe(1);
 });
 
+test('lands keyboard entry on a column that can open, then on the newest thread', async ({
+  page,
+}) => {
+  await openIsland(page, 'idle');
+  // Codex's only thread cannot open, so both idle columns rank by openability.
+  await page.evaluate(
+    (sessions) => window.__setIslandSessions?.(sessions),
+    [
+      workingSession({ id: 'codex:locked', status: 'idle', canOpen: false, updatedAt: 9 }),
+      workingSession({ id: 'claude:open', provider: 'claude', status: 'idle', updatedAt: 1 }),
+    ],
+  );
+  await page.evaluate(() => window.__triggerKeyboardEntry?.());
+  await expect(column(page, 'claude')).toBeFocused();
+});
+
 test('renders nothing without visible sessions', async ({ page }) => {
   await openIsland(page, 'idle');
   await page.evaluate(() => window.__setIslandSessions?.([]));

@@ -295,6 +295,26 @@ describe('overlay controller', () => {
     controller.destroy();
   });
 
+  it('leaves keyboard mode after navigation without restoring the previous app', async () => {
+    const overlayWindow = createOverlayWindowMock();
+    mockOverlayWindow(overlayWindow);
+    const { createOverlayController } = await import('../../src/main/overlay-controller');
+    const controller = createOverlayController({ onKeyboardEntry: () => true });
+    controller.setRendererReady();
+    overlayWindow.readyListener?.();
+    controller.setQualifyingSessionCount(1);
+    controller.enterKeyboardMode();
+    expect(overlayWindow.isFocusable()).toBe(true);
+
+    controller.exitKeyboardMode({ restoreFocus: false });
+    expect(overlayWindow.blur).toHaveBeenCalledOnce();
+    expect(overlayWindow.isFocusable()).toBe(false);
+    // The harness the island opened is in front; nothing hands focus back.
+    expect(electronMocks.app.hide).not.toHaveBeenCalled();
+    expect(electronMocks.app.show).not.toHaveBeenCalled();
+    controller.destroy();
+  });
+
   it('queues keyboard entry until a ready overlay has a qualifying session', async () => {
     const overlayWindow = createOverlayWindowMock();
     mockOverlayWindow(overlayWindow);

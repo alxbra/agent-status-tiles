@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import {
+  canNavigateTo,
   openIslandSession,
   type SessionOpenerOptions,
 } from '../../src/main/navigation/session-opener';
@@ -146,5 +147,55 @@ describe('island session opener', () => {
       handled: false,
       reason: 'failed',
     });
+  });
+
+  it('maps busy and missing apps to failed and invalid targets to unavailable', async () => {
+    for (const [reason, expected] of [
+      ['busy', 'failed'],
+      ['missing-application', 'failed'],
+      ['invalid-target', 'unavailable'],
+      ['unsupported-platform', 'unavailable'],
+    ] as const) {
+      const opener = options([session()], { status: 'failed', target: 'session', reason });
+      await expect(openIslandSession({ sessionId: `codex:${CODEX_ID}` }, opener)).resolves.toEqual({
+        handled: false,
+        reason: expected,
+      });
+    }
+  });
+
+  it('reports a failed terminal lookup as failed', async () => {
+    const opener = options([session({ id: 'claude:cli-1', provider: 'claude', surface: 'cli' })]);
+    opener.cliOwner.mockRejectedValueOnce(new Error('listing failed'));
+    await expect(openIslandSession({ sessionId: 'claude:cli-1' }, opener)).resolves.toEqual({
+      handled: false,
+      reason: 'failed',
+    });
+    expect(opener.navigate).not.toHaveBeenCalled();
+  });
+
+  it('never opens archived, child, or non-navigable threads', async () => {
+    for (const hidden of [
+      session({ isArchived: true }),
+      session({ isTopLevel: false }),
+      session({ id: 'codex:not-a-task-id' }),
+    ]) {
+      const opener = options([hidden]);
+      await expect(openIslandSession({ sessionId: hidden.id }, opener)).resolves.toEqual({
+        handled: false,
+        reason: 'unavailable',
+      });
+      expect(opener.navigate).not.toHaveBeenCalled();
+    }
+  });
+
+  it('knows which threads the navigator can bring forward', () => {
+    expect(canNavigateTo(session())).toBe(true);
+    expect(canNavigateTo(session({ id: 'codex:not-a-task-id' }))).toBe(false);
+    expect(canNavigateTo(session({ surface: 'cli' }))).toBe(false);
+    expect(canNavigateTo(session({ id: 'claude:x', provider: 'claude' }))).toBe(true);
+    expect(canNavigateTo(session({ id: 'claude:x', provider: 'claude', surface: 'cli' }))).toBe(
+      true,
+    );
   });
 });

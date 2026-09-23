@@ -125,11 +125,25 @@ function HarnessCell({
 
 const ENTRY_RANK: Record<HarnessTone, number> = { 'needs-input': 0, working: 1, idle: 2 };
 
-/** Keyboard entry lands on the harness most worth opening: a question first, then work. */
-function keyboardEntryHarness(columns: readonly HarnessColumn[]): Provider {
+/**
+ * Keyboard entry lands on the harness most worth opening: one that can open
+ * at all, then a question before work before idle, then the newest thread.
+ */
+function keyboardEntryHarness(
+  columns: readonly HarnessColumn[],
+  canOpen: (column: HarnessColumn) => boolean,
+): Provider {
+  const rank = (column: HarnessColumn): [number, number, number] => [
+    canOpen(column) ? 0 : 1,
+    ENTRY_RANK[column.tone],
+    -(column.latest?.updatedAt ?? -Infinity),
+  ];
   let best = columns[0]!;
-  for (const column of columns) {
-    if (ENTRY_RANK[column.tone] < ENTRY_RANK[best.tone]) best = column;
+  for (const column of columns.slice(1)) {
+    const [a, b] = [rank(column), rank(best)];
+    if (a[0] < b[0] || (a[0] === b[0] && (a[1] < b[1] || (a[1] === b[1] && a[2] < b[2])))) {
+      best = column;
+    }
   }
   return best.provider;
 }
@@ -148,6 +162,8 @@ export function DynamicIsland({
   const contentRef = useRef<HTMLSpanElement>(null);
   const cellRefs = useRef(new Map<Provider, HTMLButtonElement>());
   const capturedTargetRef = useRef<OpenSessionTarget | null>(null);
+  /** The latest render's target rule, for the keyboard-entry frame callback. */
+  const openableTargetRef = useRef<(column: HarnessColumn) => OpenSessionTarget | null>(() => null);
   const handledKeyboardEntryRevisionRef = useRef(0);
   const [contentWidth, setContentWidth] = useState(0);
   const prefersReducedMotion = usePrefersReducedMotion();
@@ -280,7 +296,9 @@ export function DynamicIsland({
     // does; it only counts as handled once a column actually takes focus.
     if (pillRef.current === null) return undefined;
     const frame = window.requestAnimationFrame(() => {
-      const cell = cellRefs.current.get(keyboardEntryHarness(columns));
+      const cell = cellRefs.current.get(
+        keyboardEntryHarness(columns, (column) => openableTargetRef.current(column) !== null),
+      );
       if (cell === undefined || !cell.isConnected) return;
       handledKeyboardEntryRevisionRef.current = keyboardEntryRevision;
       cell.focus();
@@ -323,6 +341,7 @@ export function DynamicIsland({
     const target = columnTarget(column, finished);
     return target !== null && target.canOpen ? captureOpenTarget(target) : null;
   };
+  openableTargetRef.current = openableTarget;
 
   const handlePointerDown = (
     column: HarnessColumn,
