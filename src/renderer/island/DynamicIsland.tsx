@@ -8,6 +8,7 @@ import {
   type MouseEvent,
   type PointerEvent,
   type ReactElement,
+  type Ref,
 } from 'react';
 // Latin only: the other subsets are unused and a tiny one would be inlined as a
 // data: URL that the overlay's font-src policy blocks.
@@ -17,10 +18,10 @@ import type { OverlayHitRegion } from '../../shared/overlay-ipc';
 import type { Provider, SessionSnapshot } from '../../shared/session';
 import { captureOpenTarget, visibleIslandSessions, type OpenSessionTarget } from './interaction';
 import {
+  columnTarget,
   completionSnapshot,
   finishedHarnesses,
   HARNESS_NAME,
-  islandTarget,
   summarizeHarnesses,
   type CompletionSnapshot,
   type HarnessColumn,
@@ -43,7 +44,8 @@ export interface DynamicIslandProps {
 
 const ISLAND_HEIGHT = 32;
 const ISLAND_MIN_WIDTH = 48;
-const ISLAND_PADDING_X = 14;
+/** Plus each column button's 6 px padding, the content sits 14 px from the edge. */
+const ISLAND_PADDING_X = 8;
 const ISLAND_MOTION_MS = 420;
 
 function usePrefersReducedMotion(): boolean {
@@ -67,15 +69,28 @@ const TONE_WORDS: Record<DotTone, string> = {
   'needs-input': 'needs input',
 };
 
+interface HarnessCellProps {
+  column: HarnessColumn;
+  tone: DotTone;
+  side: 'start' | 'end';
+  canOpen: boolean;
+  buttonRef: Ref<HTMLButtonElement>;
+  onPointerDown: (event: PointerEvent<HTMLButtonElement>) => void;
+  onPointerCancel: () => void;
+  onClick: (event: MouseEvent<HTMLButtonElement>) => void;
+}
+
 function HarnessCell({
   column,
   tone,
   side,
-}: {
-  column: HarnessColumn;
-  tone: DotTone;
-  side: 'start' | 'end';
-}): ReactElement {
+  canOpen,
+  buttonRef,
+  onPointerDown,
+  onPointerCancel,
+  onClick,
+}: HarnessCellProps): ReactElement {
+  const name = HARNESS_NAME[column.provider];
   const dot = (
     <span
       // A tone change is a new dot, so it scales in again.
@@ -85,19 +100,52 @@ function HarnessCell({
       style={{ '--dynamic-island-dot': TONE_COLOR[tone] } as CSSProperties}
     />
   );
-  const name = <span className="dynamic-island__name">{HARNESS_NAME[column.provider]}</span>;
-  // The columns mirror each other around the island's center.
+  const label = <span className="dynamic-island__name">{name}</span>;
+  // The columns mirror each other around the island's center; each one opens
+  // its own harness's thread.
   return (
-    <span
+    <button
+      ref={buttonRef}
       className="dynamic-island__harness"
+      type="button"
+      aria-label={`${name} ${TONE_WORDS[tone]}`}
+      aria-disabled={!canOpen}
       data-provider={column.provider}
       data-tone={tone}
       data-side={side}
+      onPointerDown={onPointerDown}
+      onPointerCancel={onPointerCancel}
+      onClick={onClick}
     >
-      {side === 'start' ? dot : name}
-      {side === 'start' ? name : dot}
-    </span>
+      {side === 'start' ? dot : label}
+      {side === 'start' ? label : dot}
+    </button>
   );
+}
+
+const ENTRY_RANK: Record<HarnessTone, number> = { 'needs-input': 0, working: 1, idle: 2 };
+
+/**
+ * Keyboard entry lands on the harness most worth opening: one that can open
+ * at all, then a question before work before idle, then the newest thread.
+ */
+function keyboardEntryHarness(
+  columns: readonly HarnessColumn[],
+  canOpen: (column: HarnessColumn) => boolean,
+): Provider {
+  const rank = (column: HarnessColumn): [number, number, number] => [
+    canOpen(column) ? 0 : 1,
+    ENTRY_RANK[column.tone],
+    -(column.latest?.updatedAt ?? -Infinity),
+  ];
+  let best = columns[0]!;
+  for (const column of columns.slice(1)) {
+    const [a, b] = [rank(column), rank(best)];
+    if (a[0] < b[0] || (a[0] === b[0] && (a[1] < b[1] || (a[1] === b[1] && a[2] < b[2])))) {
+      best = column;
+    }
+  }
+  return best.provider;
 }
 
 export function DynamicIsland({
@@ -110,9 +158,12 @@ export function DynamicIsland({
   onTurnFinished,
 }: DynamicIslandProps): ReactElement | null {
   const rootRef = useRef<HTMLDivElement>(null);
-  const pillRef = useRef<HTMLButtonElement>(null);
+  const pillRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLSpanElement>(null);
+  const cellRefs = useRef(new Map<Provider, HTMLButtonElement>());
   const capturedTargetRef = useRef<OpenSessionTarget | null>(null);
+  /** The latest render's target rule, for the keyboard-entry frame callback. */
+  const openableTargetRef = useRef<(column: HarnessColumn) => OpenSessionTarget | null>(() => null);
   const handledKeyboardEntryRevisionRef = useRef(0);
   const [contentWidth, setContentWidth] = useState(0);
   const prefersReducedMotion = usePrefersReducedMotion();
@@ -121,8 +172,10 @@ export function DynamicIsland({
   const columns = useMemo(() => summarizeHarnesses(sessions), [sessions]);
   const completionsRef = useRef<CompletionSnapshot | null>(null);
   const cueTimersRef = useRef(new Map<Provider, number>());
-  /** Harnesses showing the green cue, with the tone they had when their turn finished. */
-  const [cued, setCued] = useState<ReadonlyMap<Provider, HarnessTone>>(() => new Map());
+  /** Harnesses showing the green cue: the tone they finished with and the finished thread. */
+  const [cued, setCued] = useState<
+    ReadonlyMap<Provider, { tone: HarnessTone; session: SessionSnapshot }>
+  >(() => new Map());
   const hasSessions = visibleIslandSessions(sessions).length > 0;
   const width = Math.max(ISLAND_MIN_WIDTH, Math.ceil(contentWidth) + ISLAND_PADDING_X * 2);
 
@@ -134,7 +187,7 @@ export function DynamicIsland({
     onTurnFinished?.();
     // Every harness that finished a turn shows green for a moment, then its
     // current tone; finishing again restarts its moment.
-    for (const provider of finished) {
+    for (const provider of finished.keys()) {
       window.clearTimeout(cueTimersRef.current.get(provider));
       cueTimersRef.current.set(
         provider,
@@ -151,7 +204,8 @@ export function DynamicIsland({
     setCued((current) => {
       const next = new Map(current);
       for (const column of columns) {
-        if (finished.has(column.provider)) next.set(column.provider, column.tone);
+        const session = finished.get(column.provider);
+        if (session !== undefined) next.set(column.provider, { tone: column.tone, session });
       }
       return next;
     });
@@ -161,7 +215,7 @@ export function DynamicIsland({
   // moment is over for good, even if the tone later comes back.
   useLayoutEffect(() => {
     const ended = columns.filter(
-      (column) => cued.has(column.provider) && cued.get(column.provider) !== column.tone,
+      (column) => cued.has(column.provider) && cued.get(column.provider)?.tone !== column.tone,
     );
     if (ended.length === 0) return;
     for (const { provider } of ended) {
@@ -239,16 +293,18 @@ export function DynamicIsland({
       return;
     }
     // An entry that arrives before the island renders is handled once it
-    // does; it only counts as handled once the pill actually takes focus.
+    // does; it only counts as handled once a column actually takes focus.
     if (pillRef.current === null) return undefined;
     const frame = window.requestAnimationFrame(() => {
-      const pill = pillRef.current;
-      if (pill === null || !pill.isConnected) return;
+      const cell = cellRefs.current.get(
+        keyboardEntryHarness(columns, (column) => openableTargetRef.current(column) !== null),
+      );
+      if (cell === undefined || !cell.isConnected) return;
       handledKeyboardEntryRevisionRef.current = keyboardEntryRevision;
-      pill.focus();
+      cell.focus();
     });
     return () => window.cancelAnimationFrame(frame);
-  }, [keyboardEntryRevision, hasSessions]);
+  }, [keyboardEntryRevision, hasSessions, columns]);
 
   useEffect(() => {
     // Keyboard mode ends from anywhere in the focused overlay, not only the pill.
@@ -272,34 +328,39 @@ export function DynamicIsland({
     };
   }, [onKeyboardExit]);
 
-  if (!hasSessions) return null;
-
-  const target = islandTarget(columns);
   // The green cue lasts while the harness keeps the tone it finished with; a
   // harness waiting for input never turns green, because a question outranks it.
   const toneOf = (column: HarnessColumn): DotTone =>
-    column.tone !== 'needs-input' && cued.get(column.provider) === column.tone
+    column.tone !== 'needs-input' && cued.get(column.provider)?.tone === column.tone
       ? 'finished'
       : column.tone;
-  const openableTarget = (): OpenSessionTarget | null =>
-    target !== null && target.canOpen ? captureOpenTarget(target) : null;
+  const openableTarget = (column: HarnessColumn): OpenSessionTarget | null => {
+    const finished = toneOf(column) === 'finished' ? cued.get(column.provider)?.session : undefined;
+    const target = columnTarget(column, finished);
+    return target !== null && target.canOpen ? captureOpenTarget(target) : null;
+  };
+  // The keyboard-entry frame reads the latest rule after this render commits.
+  useLayoutEffect(() => {
+    openableTargetRef.current = openableTarget;
+  });
 
-  const handlePointerDown = (event: PointerEvent<HTMLButtonElement>): void => {
-    capturedTargetRef.current = event.button === 0 ? openableTarget() : null;
+  if (!hasSessions) return null;
+
+  const handlePointerDown = (
+    column: HarnessColumn,
+    event: PointerEvent<HTMLButtonElement>,
+  ): void => {
+    capturedTargetRef.current = event.button === 0 ? openableTarget(column) : null;
   };
 
-  const handleClick = (event: MouseEvent<HTMLButtonElement>): void => {
-    // Keyboard activation (detail 0) opens what the island shows now; a
+  const handleClick = (column: HarnessColumn, event: MouseEvent<HTMLButtonElement>): void => {
+    // Keyboard activation (detail 0) opens what the column shows now; a
     // pointer click opens what it showed at pointer-down.
-    const clicked = event.detail === 0 ? openableTarget() : capturedTargetRef.current;
+    const clicked = event.detail === 0 ? openableTarget(column) : capturedTargetRef.current;
     capturedTargetRef.current = null;
     if (clicked === null) return;
     void Promise.resolve(onOpenSession(clicked)).catch(() => undefined);
   };
-
-  const ariaLabel = columns
-    .map((column) => `${HARNESS_NAME[column.provider]} ${TONE_WORDS[toneOf(column)]}`)
-    .join(', ');
 
   return (
     <div
@@ -316,18 +377,7 @@ export function DynamicIsland({
       <div className="dynamic-island__shape" style={{ width: `${width}px` }}>
         <span className="dynamic-island__shoulder dynamic-island__shoulder--left" />
         <span className="dynamic-island__shoulder dynamic-island__shoulder--right" />
-        <button
-          ref={pillRef}
-          className="dynamic-island__pill"
-          type="button"
-          aria-label={ariaLabel}
-          aria-disabled={target === null || !target.canOpen}
-          onPointerDown={handlePointerDown}
-          onPointerCancel={() => {
-            capturedTargetRef.current = null;
-          }}
-          onClick={handleClick}
-        >
+        <div ref={pillRef} className="dynamic-island__pill" role="group" aria-label="Agents">
           <span ref={contentRef} className="dynamic-island__content">
             {columns.map((column, index) => (
               <HarnessCell
@@ -335,10 +385,20 @@ export function DynamicIsland({
                 column={column}
                 tone={toneOf(column)}
                 side={index === 0 ? 'start' : 'end'}
+                canOpen={openableTarget(column) !== null}
+                buttonRef={(cell) => {
+                  if (cell === null) cellRefs.current.delete(column.provider);
+                  else cellRefs.current.set(column.provider, cell);
+                }}
+                onPointerDown={(event) => handlePointerDown(column, event)}
+                onPointerCancel={() => {
+                  capturedTargetRef.current = null;
+                }}
+                onClick={(event) => handleClick(column, event)}
               />
             ))}
           </span>
-        </button>
+        </div>
       </div>
     </div>
   );

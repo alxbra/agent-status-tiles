@@ -5,7 +5,7 @@ import {
   completionSnapshot,
   finishedHarnesses,
   MAX_REMEMBERED_COMPLETIONS,
-  islandTarget,
+  columnTarget,
   summarizeHarnesses,
 } from '../../src/renderer/island/summary';
 
@@ -82,31 +82,33 @@ describe('harness columns', () => {
     ).toEqual(['codex:idle', 'claude:idle']);
   });
 
-  it('opens a thread waiting for input first, then the newest working one', () => {
-    expect(
-      islandTarget(
-        summarizeHarnesses([
-          session({ status: 'working', updatedAt: 9 }),
-          claude({ status: 'needs-input', updatedAt: 1 }),
-        ]),
-      )?.id,
-    ).toBe('claude:one');
-    expect(
-      islandTarget(
-        summarizeHarnesses([
-          session({ status: 'working', updatedAt: 2 }),
-          claude({ status: 'working', updatedAt: 7 }),
-        ]),
-      )?.id,
-    ).toBe('claude:one');
-    expect(islandTarget(summarizeHarnesses([session()]))).toBeNull();
+  it('opens a question first, then a just-finished thread, then work, then the latest thread', () => {
+    const asking = session({ id: 'codex:asking', status: 'needs-input', updatedAt: 1 });
+    const running = session({ id: 'codex:running', status: 'working', updatedAt: 2 });
+    const done = session({ id: 'codex:done', status: 'unread', completionId: 'c1', updatedAt: 9 });
+    const [withQuestion] = summarizeHarnesses([asking, running, done]);
+    expect(columnTarget(withQuestion!, done)?.id).toBe('codex:asking');
+    const [working] = summarizeHarnesses([running, done]);
+    expect(columnTarget(working!, done)?.id).toBe('codex:done');
+    expect(columnTarget(working!, undefined)?.id).toBe('codex:running');
+    const [idle] = summarizeHarnesses([done, session({ id: 'codex:old', updatedAt: 3 })]);
+    expect(idle).toMatchObject({ tone: 'idle', latest: { id: 'codex:done' } });
+    expect(columnTarget(idle!, undefined)?.id).toBe('codex:done');
+    // An idle harness opens its newest thread that can open.
+    const [preferOpenable] = summarizeHarnesses([
+      session({ id: 'codex:cli-new', surface: 'cli', canOpen: false, updatedAt: 9 }),
+      session({ id: 'codex:desktop-old', updatedAt: 2 }),
+    ]);
+    expect(columnTarget(preferOpenable!, undefined)?.id).toBe('codex:desktop-old');
+    const [, claudeColumn] = summarizeHarnesses([done]);
+    expect(columnTarget(claudeColumn!, undefined)).toBeNull();
   });
 });
 
 describe('finished turns', () => {
   it('seeds silently on the first snapshot', () => {
     expect(finishedHarnesses(null, [session({ status: 'unread', completionId: 'c1' })])).toEqual(
-      new Set(),
+      new Map(),
     );
   });
 
@@ -119,7 +121,8 @@ describe('finished turns', () => {
       session({ status: 'unread', completionId: 'c1' }),
       claude({ status: 'working' }),
     ]);
-    expect(finished).toEqual(new Set(['codex']));
+    expect([...finished.keys()]).toEqual(['codex']);
+    expect(finished.get('codex')?.completionId).toBe('c1');
   });
 
   it('ignores unchanged completions and threads it has not seen before', () => {
@@ -129,24 +132,24 @@ describe('finished turns', () => {
         session({ status: 'unread', completionId: 'c1' }),
         claude({ status: 'unread', completionId: 'c9' }),
       ]),
-    ).toEqual(new Set());
+    ).toEqual(new Map());
   });
 
   it('ignores a completion that arrives already acknowledged, as replayed history does', () => {
     const before = completionSnapshot(null, [session()]);
     expect(finishedHarnesses(before, [session({ status: 'idle', completionId: 'old' })])).toEqual(
-      new Set(),
+      new Map(),
     );
   });
 
   it('counts each turn on the same thread, since a new turn clears the completion', () => {
     let snapshot = completionSnapshot(null, [session({ status: 'unread', completionId: 'c1' })]);
     const working = [session({ status: 'working' })];
-    expect(finishedHarnesses(snapshot, working)).toEqual(new Set());
+    expect(finishedHarnesses(snapshot, working)).toEqual(new Map());
     snapshot = completionSnapshot(snapshot, working);
     expect(
       finishedHarnesses(snapshot, [session({ status: 'unread', completionId: 'c2' })]),
-    ).toEqual(new Set(['codex']));
+    ).toEqual(new Map([['codex', expect.objectContaining({ id: 'codex:one' })]]));
   });
 
   it('remembers a thread that left the recent list and finishes when it returns', () => {
@@ -157,7 +160,7 @@ describe('finished turns', () => {
       finishedHarnesses(snapshot, [
         session({ status: 'unread', completionId: 'c1', updatedAt: 9 }),
       ]),
-    ).toEqual(new Set(['codex']));
+    ).toEqual(new Map([['codex', expect.objectContaining({ id: 'codex:one' })]]));
   });
 
   it('bounds how many threads it remembers', () => {

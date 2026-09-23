@@ -7,8 +7,12 @@ export type HarnessTone = 'idle' | 'working' | 'needs-input';
 export interface HarnessColumn {
   provider: Provider;
   tone: HarnessTone;
-  /** The thread behind the tone; clicking the island opens the most urgent one. */
+  /** The thread behind a needs-input or working tone. */
   target: SessionSnapshot | null;
+  /** The harness's most recently updated visible thread, whatever its status. */
+  latest: SessionSnapshot | null;
+  /** The newest visible thread that can be opened, for an idle harness's click. */
+  latestOpenable: SessionSnapshot | null;
 }
 
 export const HARNESS_NAME: Record<Provider, string> = {
@@ -33,9 +37,24 @@ function toneOf(status: SessionSnapshot['status']): HarnessTone {
 export function summarizeHarnesses(sessions: readonly SessionSnapshot[]): readonly HarnessColumn[] {
   const visible = visibleIslandSessions(sessions);
   return HARNESS_ORDER.map((provider) => {
-    let column: HarnessColumn = { provider, tone: 'idle', target: null };
+    let column: HarnessColumn = {
+      provider,
+      tone: 'idle',
+      target: null,
+      latest: null,
+      latestOpenable: null,
+    };
     for (const session of visible) {
       if (session.provider !== provider) continue;
+      if (column.latest === null || session.updatedAt > column.latest.updatedAt) {
+        column = { ...column, latest: session };
+      }
+      if (
+        session.canOpen &&
+        (column.latestOpenable === null || session.updatedAt > column.latestOpenable.updatedAt)
+      ) {
+        column = { ...column, latestOpenable: session };
+      }
       const tone = toneOf(session.status);
       if (tone === 'idle') continue;
       const difference = TONE_RANK[tone] - TONE_RANK[column.tone];
@@ -43,27 +62,24 @@ export function summarizeHarnesses(sessions: readonly SessionSnapshot[]): readon
         difference < 0 ||
         (difference === 0 && column.target !== null && session.updatedAt > column.target.updatedAt)
       ) {
-        column = { provider, tone, target: session };
+        column = { ...column, tone, target: session };
       }
     }
     return column;
   });
 }
 
-/** The thread a click opens: one waiting for input first, then the newest working one. */
-export function islandTarget(columns: readonly HarnessColumn[]): SessionSnapshot | null {
-  let best: { tone: HarnessTone; target: SessionSnapshot } | null = null;
-  for (const { tone, target } of columns) {
-    if (target === null) continue;
-    if (
-      best === null ||
-      TONE_RANK[tone] < TONE_RANK[best.tone] ||
-      (tone === best.tone && target.updatedAt > best.target.updatedAt)
-    ) {
-      best = { tone, target };
-    }
-  }
-  return best?.target ?? null;
+/**
+ * The thread a click on a harness's column opens: the one waiting for input,
+ * else the one that just finished while its green cue shows, else the newest
+ * working one, else the harness's newest thread that can open.
+ */
+export function columnTarget(
+  column: HarnessColumn,
+  finished: SessionSnapshot | undefined,
+): SessionSnapshot | null {
+  if (column.tone === 'needs-input') return column.target;
+  return finished ?? column.target ?? column.latestOpenable ?? column.latest;
 }
 
 /** Each seen session's latest completion, used to notice a turn finishing. */
@@ -98,14 +114,17 @@ export function completionSnapshot(
 export function finishedHarnesses(
   previous: CompletionSnapshot | null,
   sessions: readonly SessionSnapshot[],
-): ReadonlySet<Provider> {
-  const finished = new Set<Provider>();
+): ReadonlyMap<Provider, SessionSnapshot> {
+  // Each harness maps to the most recently updated of its threads that finished.
+  const finished = new Map<Provider, SessionSnapshot>();
   if (previous === null) return finished;
   for (const session of visibleIslandSessions(sessions)) {
     if (!previous.has(session.id) || session.status === 'idle') continue;
     const completionId = session.completionId;
-    if (completionId !== undefined && completionId !== previous.get(session.id)) {
-      finished.add(session.provider);
+    if (completionId === undefined || completionId === previous.get(session.id)) continue;
+    const current = finished.get(session.provider);
+    if (current === undefined || session.updatedAt > current.updatedAt) {
+      finished.set(session.provider, session);
     }
   }
   return finished;

@@ -44,10 +44,10 @@ export interface OverlayDismissErrorRequest {
   sessionId: string;
 }
 
-export interface OverlayActionResult {
-  handled: false;
-  reason: 'unavailable';
-}
+export type OverlayActionResult =
+  | { handled: true }
+  /** Unavailable: nothing to open or no way to open it; failed: the harness could not be reached. */
+  | { handled: false; reason: 'unavailable' | 'failed' };
 
 export const OVERLAY_ACTION_UNAVAILABLE: OverlayActionResult = {
   handled: false,
@@ -94,6 +94,7 @@ const OPEN_REQUEST_KEYS = ['sessionId'];
 const OPEN_REQUEST_KEYS_WITH_COMPLETION = ['sessionId', 'completionId'];
 const DISMISS_REQUEST_KEYS = ['sessionId'];
 const ACTION_RESULT_KEYS = ['handled', 'reason'];
+const HANDLED_RESULT_KEYS = ['handled'];
 const CONTROL_CHARACTER_PATTERN = /\p{Cc}/u;
 
 export function isOverlayNoPayload(value: unknown): value is undefined {
@@ -158,11 +159,12 @@ export function isOverlayState(value: unknown): value is OverlayState {
 }
 
 export function isOverlayActionResult(value: unknown): value is OverlayActionResult {
+  if (!isRecord(value)) return false;
+  if (value.handled === true) return hasExactKeys(value, HANDLED_RESULT_KEYS);
   return (
-    isRecord(value) &&
     hasExactKeys(value, ACTION_RESULT_KEYS) &&
     value.handled === false &&
-    value.reason === 'unavailable'
+    (value.reason === 'unavailable' || value.reason === 'failed')
   );
 }
 

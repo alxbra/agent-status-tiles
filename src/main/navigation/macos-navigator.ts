@@ -145,7 +145,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object';
 }
 
-function isTerminalApplication(value: unknown): value is TerminalApplication {
+export function isTerminalApplication(value: unknown): value is TerminalApplication {
   return value === 'terminal' || value === 'ghostty' || value === 'warp' || value === 'iterm2';
 }
 

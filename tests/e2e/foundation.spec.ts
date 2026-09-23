@@ -67,7 +67,8 @@ test('enters and exits native keyboard mode without hiding the overlay', async (
     const overlay = await overlayWindow(application);
     await closePage(settings);
 
-    await expect(overlay.locator('.dynamic-island__pill')).toBeFocused();
+    // Test session 1 is a working Codex thread, the harness keyboard entry picks.
+    await expect(overlay.locator('.dynamic-island__harness[data-provider="codex"]')).toBeFocused();
     await expect
       .poll(() =>
         application!.evaluate(({ BrowserWindow }) => {
@@ -588,7 +589,15 @@ for (const testSessionCount of [0, 1, 12, 30]) {
           testSessionCount === 1
             ? 'Codex working, Claude idle'
             : 'Codex working, Claude needs input';
-        await expect(pill).toHaveAttribute('aria-label', expectedLabel);
+        await expect
+          .poll(async () =>
+            (
+              await page
+                .locator('.dynamic-island__harness')
+                .evaluateAll((cells) => cells.map((cell) => cell.getAttribute('aria-label')))
+            ).join(', '),
+          )
+          .toBe(expectedLabel);
         await expect(page.locator('.dynamic-island__name')).toHaveText(['Codex', 'Claude']);
         await expect
           .poll(() =>
@@ -597,6 +606,22 @@ for (const testSessionCount of [0, 1, 12, 30]) {
               .evaluateAll((cells) => cells.map((cell) => cell.getAttribute('data-tone'))),
           )
           .toEqual(testSessionCount === 1 ? ['working', 'idle'] : ['working', 'needs-input']);
+        if (testSessionCount === 1) {
+          // A click reaches main's real navigator, whose /usr/bin/open
+          // commands the test runtime records instead of running.
+          await page.locator('.dynamic-island__harness[data-provider="codex"]').click();
+          const task = '00000000-0000-7000-8000-000000000001';
+          await expect
+            .poll(() =>
+              application!.evaluate(() =>
+                Reflect.get(globalThis, Symbol.for('agent-status-tiles.test.navigations')),
+              ),
+            )
+            .toEqual([
+              ['/usr/bin/open', '-b', 'com.openai.codex'],
+              ['/usr/bin/open', '-g', '-b', 'com.openai.codex', `codex://threads/${task}`],
+            ]);
+        }
         // The island hangs from the window's top edge, centered horizontally.
         await expect
           .poll(async () => {

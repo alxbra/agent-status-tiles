@@ -29,8 +29,13 @@ export function createTestSessionSnapshots(count: number): readonly SessionSnaps
     const sequence = index + 1;
     const provider = index % 2 === 0 ? 'codex' : 'claude';
     const status = TEST_STATUSES[index % TEST_STATUSES.length]!;
+    // Codex Desktop threads are task UUIDs, which navigation requires.
+    const nativeId =
+      provider === 'codex'
+        ? `00000000-0000-7000-8000-${String(sequence).padStart(12, '0')}`
+        : `test-session-${sequence}`;
     return {
-      id: `${provider}:test-session-${sequence}`,
+      id: `${provider}:${nativeId}`,
       provider,
       surface: provider === 'codex' ? 'desktop' : 'cli',
       title: `Test session ${sequence}`,

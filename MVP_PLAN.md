@@ -17,7 +17,7 @@ The first publishable release targets macOS and supports:
 
 Each eligible top-level thread or task is tracked locally. The overlay considers the five most recently updated items across connected harnesses by default, configurable from one to ten. Spawned subagents remain represented by their parent.
 
-The main interface is a compact dynamic island: one black, notch-style shape hanging from the top center of the selected display, over the menu bar. It shows two mirrored columns, Codex on the left and Claude on the right, each with one status dot (needs input, working, or idle) beside the harness name, and it plays a short success cue when a turn finishes. Clicking foregrounds the harness of the most urgent thread and selects the specific session where supported. The user authorized this island on 2026-09-23, replacing the document-tab dock of 2026-09-17 (which had itself replaced the rounded-square tiles and Dock-style magnification); the reference states render from `tests/fixtures/dynamic-island.html`. The same day, the user split it into per-harness columns and removed the done state. The island does not expand yet.
+The main interface is a compact dynamic island: one black, notch-style shape hanging from the top center of the selected display, over the menu bar. It shows two mirrored columns, Codex on the left and Claude on the right, each with one status dot (needs input, working, or idle) beside the harness name, and it plays a short success cue when a turn finishes. Clicking a column foregrounds that harness and selects its most relevant thread where supported. The user authorized this island on 2026-09-23, replacing the document-tab dock of 2026-09-17 (which had itself replaced the rounded-square tiles and Dock-style magnification); the reference states render from `tests/fixtures/dynamic-island.html`. The same day, the user split it into per-harness columns and removed the done state. The island does not expand yet.
 
 ### Fixed scope
 
@@ -124,7 +124,9 @@ The notes to the right explain the mockup; they never appear in the island.
 - Sort eligible items by confirmed provider update or task activity, newest first, with a stable ID tie-break. Local acknowledgement and error dismissal do not change recency.
 - Apply the global Recent threads limit (default five, range one to ten) across connected harnesses, including idle items; the island summarizes only those items.
 - Items outside the configured recent limit remain in local state and return when they become recent enough.
-- A click opens the most urgent thread (waiting for input, else the newest working one), bound to the session captured on pointer-down. Those threads have no completion, so opening from the island acknowledges nothing; unread completions stay in session state only, where they no longer show.
+- Each column is a button for its harness (the user asked for click-to-open on 2026-09-23). A click opens that harness's thread captured on pointer-down: the one waiting for input, else the one that just finished while its green cue shows, else the newest working one, else the harness's most recent thread; a harness with no visible thread does nothing.
+- The runtime marks a thread openable when the navigator can bring it forward, and main opens only such a top-level, unarchived thread in the island's current state, through the navigator in `docs/navigation.md`: Codex Desktop selects the exact thread; Claude Desktop is activated; a Claude CLI thread activates the terminal its hook journal recorded and is openable only when that terminal is known; Codex CLI threads, which record none, are not openable yet. An idle harness's click opens its newest openable thread.
+- Opening a thread with an unread completion (the just-finished one, or an idle harness's newest thread) acknowledges the completion the click saw, only after navigation was dispatched and only if it is still current; a failed or unavailable navigation acknowledges nothing. Unread completions otherwise stay in session state, where they no longer show.
 - Errors remain in session state until a new turn. Explicit dismissal stays available over IPC for the future expanded island; the compact island has no context menu.
 - Dismissal affects only the companion's display, never the underlying task.
 
@@ -173,8 +175,8 @@ Rules:
 ### 2.6 Accessibility and desktop behavior
 
 - Hover must not activate the app or steal keyboard focus.
-- Support keyboard entry through the menu-bar action, which focuses the island; Enter opens the most urgent thread (waiting for input, else the newest working one), like a click, and Escape leaves keyboard mode.
-- The island's accessible name lists each harness and its tone, for example `Codex working, Claude idle`; it never includes thread titles.
+- Support keyboard entry through the menu-bar action, which focuses the column of the harness most worth opening (waiting for input, then working); Tab moves between the columns, Enter opens a column's thread like a click, and Escape leaves keyboard mode.
+- Each column's accessible name is its harness and tone, for example `Codex working`; the columns sit in a group named `Agents`, and no name includes a thread title.
 - Respect system reduced-motion settings; allow explicitly enabling reduced motion.
 - Reduced motion stops the pulse and every island transition.
 - Display disconnection moves the island to the primary display; reconnecting restores the selected display.
@@ -576,7 +578,7 @@ terminal validation and navigation remain pending.
 - [x] Add Claude Desktop activation (PR #11 fixed bundle activation; live harness validation remains pending).
 - [x] Resolve and activate qualified terminal apps (PR #11 fixed bundle activation; ownership discovery remains pending).
 - [x] Return the one-time terminal selection-required result for unknown ownership (PR #11; selection UI remains pending).
-- [ ] Connect successful dispatch to completion acknowledgement.
+- [ ] Connect successful dispatch to completion acknowledgement. Implementation progress (not an acceptance checkoff): `feat/island-open-thread` wires island clicks through `openIslandSession` to the navigator and acknowledges a clicked completion only after dispatch; live harness validation remains pending.
 - [ ] Preserve unread state on launch failure.
 - [x] Prevent duplicate launches from rapid repeated clicks (PR #11 single-flight guard).
 - [ ] **E2E and corrections:** verify real harness activation, exact Codex task selection, terminal app fallback, missing-app errors, rapid clicks, and completion races; confirm no new agent session or prompt is created; fix, rerun, harden, and merge.
@@ -799,7 +801,7 @@ Record corrections made after review and the commit used for final validation.
 - [ ] The compact island hangs from the top center of the selected display at 32 pixels tall, above the menu bar.
 - [ ] The island shows Codex and Claude columns with one dot each (needs input, working, or idle) and no other text; working dots pulse.
 - [ ] A finished turn plays the success cue and pulses its harness green for 5 seconds before its current tone.
-- [ ] Clicking the island opens the most urgent thread; transparent space around it does not block underlying applications.
+- [ ] Clicking a column opens its harness's thread (the exact thread in Codex Desktop); transparent space around the island does not block underlying applications.
 - [ ] Settings use stock shadcn without redundant copy.
 - [ ] The configured number of recent eligible items appears, including idle and acknowledged items.
 - [ ] Clicks foreground the correct owning app.

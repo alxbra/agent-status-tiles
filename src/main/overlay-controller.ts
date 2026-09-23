@@ -29,7 +29,11 @@ export interface OverlayController {
   getWindow(): BrowserWindow | null;
   recover(): void;
   enterKeyboardMode(): void;
-  exitKeyboardMode(): void;
+  /**
+   * Leave keyboard mode. By default the previously active app comes back;
+   * after navigation brought a harness forward, pass `restoreFocus: false`.
+   */
+  exitKeyboardMode(options?: { restoreFocus?: boolean }): void;
   setRendererReady(): void;
   setPreferredDisplayId(displayId: string): void;
   setQualifyingSessionCount(count: number): void;
@@ -496,10 +500,14 @@ export function createOverlayController(options: OverlayControllerOptions = {}):
       keyboardEntryNotified = false;
       syncVisibility();
     },
-    exitKeyboardMode: () => {
+    exitKeyboardMode: (exitOptions) => {
+      // After a mouse click there is no keyboard mode to leave; blurring and
+      // re-ordering the window then would only disturb the island.
+      if (exitOptions?.restoreFocus === false && !keyboardMode && !keyboardWindowActivated) return;
       const shouldDeactivate = leaveKeyboardMode();
       syncVisibility();
       reapplyMousePassthrough();
+      if (exitOptions?.restoreFocus === false) return;
       restorePreviousApplication(shouldDeactivate, overlayWindow?.isVisible() ?? false);
     },
     setRendererReady: () => {

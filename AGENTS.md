@@ -33,9 +33,12 @@ it into one column per harness the same day; the reference states render from
 - Both names use bundled Fira Code at weight 500 and 12 px in one gray.
 - Width follows the content with one **420 ms** spring transition. Reduced
   motion stops the pulse and every transition, but not the sound.
-- Clicking the island opens the most urgent thread (waiting for input, else
-  the newest working one) captured at pointer-down; an idle island does
-  nothing. The island surface is the only native hit region.
+- Each column is its own button that opens its harness's thread, captured at
+  pointer-down: the one waiting for input, else the one that just finished
+  while it shows green, else the newest working one, else the harness's most
+  recent thread. A harness with no thread does nothing. Codex Desktop opens
+  the exact thread; Claude Desktop and terminals are only brought forward. The
+  island surface is the only native hit region.
 - The island does not expand yet. Do not add an expanded view without explicit
   product authorization.
 - Settings use stock shadcn/ui components and standard styling. Keep one
