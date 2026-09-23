@@ -130,6 +130,9 @@ function createOverlayWindow(
       nodeIntegrationInSubFrames: false,
       nodeIntegrationInWorker: false,
       sandbox: true,
+      // The overlay never takes focus, so the turn-finished cue cannot wait
+      // for a user gesture.
+      autoplayPolicy: 'no-user-gesture-required',
       preload: join(__dirname, '../preload/overlay.js'),
     },
   });

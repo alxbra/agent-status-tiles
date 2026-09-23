@@ -581,17 +581,22 @@ for (const testSessionCount of [0, 1, 12, 30]) {
       if (testSessionCount === 0) {
         await expect(page.locator('.dynamic-island')).toHaveCount(0);
       } else {
-        // Test sessions cycle working, needs input, done, error; needs input
-        // outranks everything once a second session exists.
-        const expectedLabel = testSessionCount === 1 ? 'Codex is working' : 'Claude needs input';
-        const expectedTone = testSessionCount === 1 ? 'working' : 'needs-input';
+        // Test sessions alternate Codex and Claude while cycling working,
+        // needs input, done, and error: Codex keeps a working thread, and
+        // Claude's needs input outranks its failed one once it has two.
+        const expectedLabel =
+          testSessionCount === 1
+            ? 'Codex working, Claude idle'
+            : 'Codex working, Claude needs input';
         await expect(pill).toHaveAttribute('aria-label', expectedLabel);
-        await expect(page.locator('.dynamic-island__label')).toHaveText(expectedLabel);
-        await expect(page.locator('.dynamic-island__dot')).toHaveCount(1);
-        await expect(page.locator('.dynamic-island__dot').first()).toHaveAttribute(
-          'data-tone',
-          expectedTone,
-        );
+        await expect(page.locator('.dynamic-island__name')).toHaveText(['Codex', 'Claude']);
+        await expect
+          .poll(() =>
+            page
+              .locator('.dynamic-island__harness')
+              .evaluateAll((cells) => cells.map((cell) => cell.getAttribute('data-tone'))),
+          )
+          .toEqual(testSessionCount === 1 ? ['working', 'idle'] : ['working', 'needs-input']);
         // The island hangs from the window's top edge, centered horizontally.
         await expect
           .poll(async () => {

@@ -30,3 +30,7 @@ through `@fontsource/fira-code`. Fira Code is © The Fira Code Project Authors
 and licensed under the SIL Open Font License 1.1
 (<https://openfontlicense.org>); the font files are served locally and never
 fetched at runtime.
+
+The dynamic island plays interaction cues from Cuelume (`cuelume`), MIT
+licensed, Copyright (c) 2026 Daniel Belyi (<https://cuelume.dev/>). The cues
+are synthesized locally with Web Audio; no audio files are loaded.

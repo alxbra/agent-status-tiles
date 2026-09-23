@@ -227,6 +227,7 @@ describe('overlay controller', () => {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
+      autoplayPolicy: 'no-user-gesture-required',
     });
     expect(overlayWindow.setAlwaysOnTop).toHaveBeenCalledWith(true, 'status');
     expect(overlayWindow.setVisibleOnAllWorkspaces).toHaveBeenCalledWith(true, {

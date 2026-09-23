@@ -13,6 +13,7 @@ declare global {
     __islandOpenTarget?: OpenSessionTarget;
     __islandHitRegions?: unknown;
     __islandKeyboardExits?: number;
+    __islandTurnsFinished?: number;
   }
 }
 
@@ -39,14 +40,14 @@ function session(
 
 const FIXTURE_STATES: Record<string, readonly SessionSnapshot[]> = {
   idle: [session('a', 'codex', 'idle', 1), session('b', 'claude', 'idle', 2)],
-  working: [session('a', 'codex', 'working', 3), session('b', 'claude', 'idle', 2)],
-  done: [session('a', 'claude', 'unread', 3), session('b', 'codex', 'idle', 2)],
-  'working-done': [session('a', 'codex', 'working', 5), session('b', 'claude', 'unread', 4)],
+  working: [session('a', 'codex', 'working', 3), session('b', 'claude', 'unread', 2)],
+  'both-working': [session('a', 'codex', 'working', 5), session('b', 'claude', 'working', 4)],
   'needs-input': [
     session('a', 'codex', 'working', 5),
     session('b', 'claude', 'unread', 4),
     session('c', 'codex', 'needs-input', 3),
   ],
+  mixed: [session('a', 'codex', 'working', 5), session('b', 'claude', 'needs-input', 4)],
 };
 
 const params = new URLSearchParams(window.location.search);
@@ -71,6 +72,9 @@ function IslandFixture({ initial }: { initial: readonly SessionSnapshot[] }): Re
       }}
       onKeyboardExit={() => {
         window.__islandKeyboardExits = (window.__islandKeyboardExits ?? 0) + 1;
+      }}
+      onTurnFinished={() => {
+        window.__islandTurnsFinished = (window.__islandTurnsFinished ?? 0) + 1;
       }}
     />
   );
