@@ -329,12 +329,13 @@ describe('CodexRolloutReader', () => {
       response('function_call_output', { call_id: 'call-large', output: padding }),
       response('function_call', { name: 'request_user_input', arguments: padding }),
       record('unknown_record', { type: 'message', content: padding }),
+      event('agent_message2', 'turn-large', { message: padding }),
       `{"type":"response_item","timestamp":"2026-09-15T10:00:00Z","payload":{"type":"message","content":"${padding}"}}`,
     ]);
 
     const result = await readAll(new CodexRolloutReader(root), sourceFor(file));
     expect(eventTypes(result.events)).toEqual(['turn-started']);
-    expect(result.diagnostics).toEqual(Array.from({ length: 5 }, () => 'oversized-line'));
+    expect(result.diagnostics).toEqual(Array.from({ length: 6 }, () => 'oversized-line'));
   });
 
   it('skips an oversized activity-only record across batches', async () => {
