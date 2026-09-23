@@ -415,7 +415,7 @@ process.stdin.on('data', chunk => {
         overlay.evaluate(async () => (await window.agentStatusTilesOverlay.getState()).sessions),
       )
       .toHaveLength(5);
-    await expect(overlay.locator('.status-tiles__tile')).toHaveCount(5);
+    await expect(overlay.locator('.dynamic-island__pill')).toHaveCount(1);
     const visibleIds = await overlay.evaluate(async () =>
       (await window.agentStatusTilesOverlay.getState()).sessions.map((session) => session.id),
     );

@@ -67,7 +67,7 @@ test('enters and exits native keyboard mode without hiding the overlay', async (
     const overlay = await overlayWindow(application);
     await closePage(settings);
 
-    await expect(overlay.locator('.status-tiles__tile').first()).toBeFocused();
+    await expect(overlay.locator('.dynamic-island__pill')).toBeFocused();
     await expect
       .poll(() =>
         application!.evaluate(({ BrowserWindow }) => {
@@ -242,7 +242,7 @@ test('wires production settings through preload, overlay state, and restart pers
   }
 });
 
-test('creates a hidden nonactivating overlay in the primary work area', async () => {
+test('creates a hidden nonactivating overlay at the top center of the primary display', async () => {
   test.skip(process.platform !== 'darwin', 'the desktop shell targets macOS');
   const userDataDir = await mkdtemp(join(tmpdir(), 'agent-status-tiles-e2e-'));
   let application: ElectronApplication | undefined;
@@ -252,20 +252,14 @@ test('creates a hidden nonactivating overlay in the primary work area', async ()
     await settingsWindow(application);
 
     const shell = await application.evaluate(({ BrowserWindow, app, screen }) => {
-      const workArea = screen.getPrimaryDisplay().workArea;
-      const width = Math.max(1, Math.min(360, workArea.width));
-      const height = Math.max(1, Math.min(480, workArea.height));
+      const bounds = screen.getPrimaryDisplay().bounds;
+      const width = Math.max(1, Math.min(360, bounds.width));
+      const height = Math.max(1, Math.min(56, bounds.height));
       return {
         dockVisible: app.dock?.isVisible() ?? false,
-        workArea,
         expectedOverlayBounds: {
-          x: workArea.x + workArea.width - width,
-          y: Math.round(
-            Math.min(
-              Math.max(workArea.y + workArea.height / 3 - height / 2, workArea.y),
-              workArea.y + workArea.height - height,
-            ),
-          ),
+          x: Math.round(bounds.x + (bounds.width - width) / 2),
+          y: bounds.y,
           width,
           height,
         },
@@ -379,7 +373,7 @@ test('recreates one native overlay after an unexpected close', async () => {
     expect(replacementOverlayId).not.toBe(initialOverlayId);
 
     const replacement = await overlayWindow(application);
-    await expect(replacement.locator('.status-tiles__tile')).toHaveCount(1);
+    await expect(replacement.locator('.dynamic-island__pill')).toHaveCount(1);
     expect(await replacement.evaluate(() => window.agentStatusTilesOverlay.getState())).toEqual(
       initialOverlayState,
     );
@@ -465,7 +459,7 @@ test('recreates the native overlay after a renderer crash', async () => {
     expect(await replacement.evaluate(() => window.agentStatusTilesOverlay.getState())).toEqual(
       initialState,
     );
-    await expect(replacement.locator('.status-tiles__tile')).toHaveCount(1);
+    await expect(replacement.locator('.dynamic-island__pill')).toHaveCount(1);
   } finally {
     await closeApplication(application);
     await rm(userDataDir, { recursive: true, force: true });
@@ -583,40 +577,32 @@ for (const testSessionCount of [0, 1, 12, 30]) {
           isVisible: testSessionCount > 0,
         });
 
-      const tiles = page.locator('.status-tiles__tile');
-      await expect(tiles).toHaveCount(Math.min(testSessionCount, 12));
+      const pill = page.locator('.dynamic-island__pill');
       if (testSessionCount === 0) {
-        await expect(page.locator('.status-tiles')).toHaveCount(0);
+        await expect(page.locator('.dynamic-island')).toHaveCount(0);
       } else {
-        await expect(page.getByRole('listbox', { name: 'Agent status sessions' })).toBeVisible();
-        // Tabs fold into the right edge: only a 12px colored sliver stays on screen.
-        // The real cursor may rest on the native overlay, which legitimately
-        // reveals the icon depth (34px) or the whole hovered tab.
-        const firstTab = page.locator('.status-tiles__tile').first();
+        // Test sessions cycle working, needs input, done, error; needs input
+        // outranks everything once a second session exists.
+        const expectedLabel = testSessionCount === 1 ? 'Codex is working' : 'Claude needs input';
+        const expectedTone = testSessionCount === 1 ? 'working' : 'needs-input';
+        await expect(pill).toHaveAttribute('aria-label', expectedLabel);
+        await expect(page.locator('.dynamic-island__label')).toHaveText(expectedLabel);
+        await expect(page.locator('.dynamic-island__dot')).toHaveCount(1);
+        await expect(page.locator('.dynamic-island__dot').first()).toHaveAttribute(
+          'data-tone',
+          expectedTone,
+        );
+        // The island hangs from the window's top edge, centered horizontally.
         await expect
           .poll(async () => {
-            const box = await firstTab.boundingBox();
-            if (box === null) return 'missing';
+            const box = await pill.boundingBox();
             const width = await page.evaluate(() => window.innerWidth);
-            const visible = Math.round(width - box.x);
-            if (visible === 12) return 'folded';
-            const cursor = await application!.evaluate(({ BrowserWindow, screen }) => {
-              const overlay = BrowserWindow.getAllWindows().find((window) =>
-                window.webContents.getURL().includes('/renderer/overlay.html'),
-              );
-              const bounds = overlay?.getBounds();
-              const point = screen.getCursorScreenPoint();
-              return bounds === undefined
-                ? false
-                : point.x >= bounds.x &&
-                    point.x < bounds.x + bounds.width &&
-                    point.y >= bounds.y &&
-                    point.y < bounds.y + bounds.height;
-            });
-            const revealed = visible === 34 || visible === Math.round(box.width);
-            return cursor && revealed ? 'revealed-under-cursor' : `unexpected:${String(visible)}`;
+            return box === null
+              ? null
+              : { top: box.y, centerOffset: Math.round(box.x + box.width / 2 - width / 2) };
           })
-          .toMatch(/^(?:folded|revealed-under-cursor)$/u);
+          .toEqual({ top: 0, centerOffset: 0 });
+        expect(await page.evaluate(() => document.fonts.check('500 12px "Fira Code"'))).toBe(true);
         expect(
           await application.evaluate(
             ({ BaseWindow }) =>
@@ -625,15 +611,6 @@ for (const testSessionCount of [0, 1, 12, 30]) {
               ).length,
           ),
         ).toBe(0);
-        await expect(page.getByRole('option').first()).toHaveAttribute(
-          'aria-label',
-          /Test session 1/u,
-        );
-        if (testSessionCount > 12) {
-          await expect(page.locator('.status-tiles__indicator--next')).toBeVisible();
-        } else {
-          await expect(page.locator('.status-tiles__indicator')).toHaveCount(0);
-        }
       }
     } finally {
       await closeApplication(application);
@@ -643,7 +620,7 @@ for (const testSessionCount of [0, 1, 12, 30]) {
 }
 
 for (const testSessionCount of [1, 12]) {
-  test(`keeps portal hit regions bounded for ${String(testSessionCount)} synthetic sessions`, async () => {
+  test(`keeps island hit regions bounded for ${String(testSessionCount)} synthetic sessions`, async () => {
     test.skip(process.platform !== 'darwin', 'the desktop shell targets macOS');
     const userDataDir = await mkdtemp(join(tmpdir(), 'agent-status-tiles-portal-e2e-'));
     let application: ElectronApplication | undefined;
@@ -652,42 +629,19 @@ for (const testSessionCount of [1, 12]) {
       application = await launch(userDataDir, testSessionCount);
       await settingsWindow(application);
       const page = await overlayWindow(application);
-      await expect(page.locator('.status-tiles__tile')).toHaveCount(testSessionCount);
+      const pill = page.locator('.dynamic-island__pill');
+      await expect(pill).toHaveCount(1);
 
-      const firstTile = page.locator('.status-tiles__tile').first();
       const viewport = await page.evaluate(() => ({
         width: window.innerWidth,
         height: window.innerHeight,
       }));
-      const foldedBox = await firstTile.boundingBox();
-      if (foldedBox === null) throw new Error('First tab has no bounds');
-      // Hover the visible sliver; the tab then slides fully into the window.
-      await page.mouse.move(viewport.width - 6, foldedBox.y + foldedBox.height / 2);
-      await expect(firstTile).toHaveAttribute('data-extended', 'true');
-      await expect
-        .poll(async () => {
-          const box = await firstTile.boundingBox();
-          return box === null ? null : Math.round((box.x + box.width - viewport.width) * 10) / 10;
-        })
-        .toBe(0);
-      const extendedBox = await firstTile.boundingBox();
-      if (extendedBox === null) throw new Error('Extended tab has no bounds');
-      expect(extendedBox.x).toBeGreaterThanOrEqual(0);
-      // Tabs never show a tooltip; the title stays in the accessible name.
-      await expect(page.locator('[data-slot="tooltip-content"]')).toHaveCount(0);
-
-      await firstTile.click({ button: 'right' });
-      const contextMenu = page.locator('[data-slot="context-menu-content"]');
-      await expect(contextMenu).toBeVisible();
-      const contextMenuBounds = await contextMenu.boundingBox();
-      if (contextMenuBounds === null) throw new Error('Context menu has no bounds');
-      expect(contextMenuBounds.x).toBeGreaterThanOrEqual(0);
-      expect(contextMenuBounds.y).toBeGreaterThanOrEqual(0);
-      expect(contextMenuBounds.x + contextMenuBounds.width).toBeLessThanOrEqual(viewport.width);
-      expect(contextMenuBounds.y + contextMenuBounds.height).toBeLessThanOrEqual(viewport.height);
-
-      await page.mouse.move(1, 1);
-      await expect(contextMenu).toBeHidden();
+      const box = await pill.boundingBox();
+      if (box === null) throw new Error('The island has no bounds');
+      expect(box.x).toBeGreaterThanOrEqual(0);
+      expect(box.y).toBe(0);
+      expect(box.x + box.width).toBeLessThanOrEqual(viewport.width);
+      expect(box.y + box.height).toBeLessThanOrEqual(viewport.height);
 
       const rejected = await page.evaluate(() => {
         const invalidNegative = window.agentStatusTilesOverlay.publishHitRegions([
@@ -709,29 +663,6 @@ for (const testSessionCount of [1, 12]) {
   });
 }
 
-test('keeps an actionable native context menu reachable', async () => {
-  test.skip(process.platform !== 'darwin', 'the desktop shell targets macOS');
-  const userDataDir = await mkdtemp(join(tmpdir(), 'agent-status-tiles-menu-e2e-'));
-  let application: ElectronApplication | undefined;
-
-  try {
-    application = await launch(userDataDir, 4);
-    await settingsWindow(application);
-    const page = await overlayWindow(application);
-    const errorTile = page.locator('.status-tiles__tile[data-status="error"]');
-    await expect(errorTile).toHaveCount(1);
-
-    await errorTile.click({ button: 'right' });
-    const dismissItem = page.getByRole('menuitem', { name: 'Dismiss error' });
-    await expect(dismissItem).toBeEnabled();
-    await dismissItem.click();
-    await expect(dismissItem).toBeHidden();
-  } finally {
-    await closeApplication(application);
-    await rm(userDataDir, { recursive: true, force: true });
-  }
-});
-
 test('does not open Settings by itself at launch', async () => {
   test.skip(process.platform !== 'darwin', 'the desktop shell targets macOS');
   const userDataDir = await mkdtemp(join(tmpdir(), 'agent-status-tiles-quiet-launch-e2e-'));
@@ -740,7 +671,7 @@ test('does not open Settings by itself at launch', async () => {
   try {
     application = await launch(userDataDir, 1);
     const overlay = await overlayWindow(application);
-    await expect(overlay.locator('.status-tiles__tile')).toHaveCount(1);
+    await expect(overlay.locator('.dynamic-island__pill')).toHaveCount(1);
     await new Promise((resolve) => setTimeout(resolve, 500));
     expect(findSettingsWindow(application)).toBeUndefined();
 

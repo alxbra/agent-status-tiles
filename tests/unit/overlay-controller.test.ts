@@ -53,8 +53,17 @@ const electronMocks = vi.hoisted(() => ({
   app: { focus: vi.fn(), hide: vi.fn(), isPackaged: true, show: vi.fn() },
   powerMonitor: { on: vi.fn(), off: vi.fn() },
   screen: {
-    getAllDisplays: vi.fn(() => [{ id: 1, workArea: { x: 0, y: 24, width: 1440, height: 876 } }]),
-    getPrimaryDisplay: vi.fn(() => ({ workArea: { x: 0, y: 24, width: 1440, height: 876 } })),
+    getAllDisplays: vi.fn(() => [
+      {
+        id: 1,
+        bounds: { x: 0, y: 0, width: 1440, height: 900 },
+        workArea: { x: 0, y: 24, width: 1440, height: 876 },
+      },
+    ]),
+    getPrimaryDisplay: vi.fn(() => ({
+      bounds: { x: 0, y: 0, width: 1440, height: 900 },
+      workArea: { x: 0, y: 24, width: 1440, height: 876 },
+    })),
     getCursorScreenPoint: vi.fn(() => ({ x: 0, y: 0 })),
     on: vi.fn(),
     off: vi.fn(),
@@ -170,10 +179,15 @@ describe('overlay controller', () => {
     electronMocks.app.show.mockClear();
     electronMocks.screen.getAllDisplays.mockReset();
     electronMocks.screen.getAllDisplays.mockReturnValue([
-      { id: 1, workArea: { x: 0, y: 24, width: 1440, height: 876 } },
+      {
+        id: 1,
+        bounds: { x: 0, y: 0, width: 1440, height: 900 },
+        workArea: { x: 0, y: 24, width: 1440, height: 876 },
+      },
     ]);
     electronMocks.screen.getPrimaryDisplay.mockReset();
     electronMocks.screen.getPrimaryDisplay.mockReturnValue({
+      bounds: { x: 0, y: 0, width: 1440, height: 900 },
       workArea: { x: 0, y: 24, width: 1440, height: 876 },
     });
     electronMocks.screen.getCursorScreenPoint.mockClear();
@@ -187,7 +201,7 @@ describe('overlay controller', () => {
     vi.restoreAllMocks();
   });
 
-  it('creates a transparent nonactivating window centered in the primary work area', async () => {
+  it('creates a transparent nonactivating window at the top center of the primary display', async () => {
     const overlayWindow = createOverlayWindowMock();
     mockOverlayWindow(overlayWindow);
     const { createOverlayController } = await import('../../src/main/overlay-controller');
@@ -196,10 +210,11 @@ describe('overlay controller', () => {
     const options = electronMocks.BrowserWindow.mock.calls[0]?.[0] as Record<string, unknown>;
 
     expect(options).toMatchObject({
-      x: 1080,
-      y: 76,
+      x: 540,
+      y: 0,
       width: 360,
-      height: 480,
+      height: 56,
+      enableLargerThanScreen: true,
       frame: false,
       transparent: true,
       focusable: false,
@@ -213,7 +228,7 @@ describe('overlay controller', () => {
       nodeIntegration: false,
       sandbox: true,
     });
-    expect(overlayWindow.setAlwaysOnTop).toHaveBeenCalledWith(true, 'floating');
+    expect(overlayWindow.setAlwaysOnTop).toHaveBeenCalledWith(true, 'status');
     expect(overlayWindow.setVisibleOnAllWorkspaces).toHaveBeenCalledWith(true, {
       skipTransformProcessType: true,
       visibleOnFullScreen: true,
@@ -428,7 +443,7 @@ describe('overlay controller', () => {
     )?.[1] as (() => void) | undefined;
     resume?.();
     expect(recoveredWindow.setBounds).toHaveBeenCalledWith(
-      { x: 1080, y: 76, width: 360, height: 480 },
+      { x: 540, y: 0, width: 360, height: 56 },
       false,
     );
 
@@ -441,8 +456,16 @@ describe('overlay controller', () => {
   });
 
   it('uses the preferred connected display, falls back while absent, and restores on reconnect', async () => {
-    const primary = { id: 1, workArea: { x: 0, y: 24, width: 1440, height: 876 } };
-    const external = { id: 42, workArea: { x: -1200, y: -200, width: 1200, height: 900 } };
+    const primary = {
+      id: 1,
+      bounds: { x: 0, y: 0, width: 1440, height: 900 },
+      workArea: { x: 0, y: 24, width: 1440, height: 876 },
+    };
+    const external = {
+      id: 42,
+      bounds: { x: -1200, y: -200, width: 1200, height: 900 },
+      workArea: { x: -1200, y: -175, width: 1200, height: 875 },
+    };
     electronMocks.screen.getPrimaryDisplay.mockReturnValue(primary);
     electronMocks.screen.getAllDisplays.mockReturnValue([primary]);
     const overlayWindow = createOverlayWindowMock();
@@ -451,10 +474,10 @@ describe('overlay controller', () => {
 
     const controller = createOverlayController({ preferredDisplayId: '42' });
     expect(electronMocks.BrowserWindow.mock.calls[0]?.[0]).toMatchObject({
-      x: 1080,
-      y: 76,
+      x: 540,
+      y: 0,
       width: 360,
-      height: 480,
+      height: 56,
     });
 
     electronMocks.screen.getAllDisplays.mockReturnValue([primary, external]);
@@ -463,13 +486,13 @@ describe('overlay controller', () => {
     )?.[1] as (() => void) | undefined;
     onAdded?.();
     expect(overlayWindow.setBounds).toHaveBeenLastCalledWith(
-      { x: -360, y: -140, width: 360, height: 480 },
+      { x: -780, y: -200, width: 360, height: 56 },
       false,
     );
 
     controller.setPreferredDisplayId('primary');
     expect(overlayWindow.setBounds).toHaveBeenLastCalledWith(
-      { x: 1080, y: 76, width: 360, height: 480 },
+      { x: 540, y: 0, width: 360, height: 56 },
       false,
     );
     controller.destroy();
@@ -482,24 +505,24 @@ describe('overlay controller', () => {
       await import('../../src/main/overlay-controller');
     const controller = createOverlayController();
 
-    expect(overlayBounds({ x: 0, y: 0, width: 40, height: 80 })).toEqual({
+    expect(overlayBounds({ x: 0, y: 0, width: 40, height: 40 })).toEqual({
       x: 0,
       y: 0,
       width: 40,
-      height: 80,
+      height: 40,
     });
-    // Centered on the upper-third line, clamped inside the work area.
-    expect(overlayBounds({ x: 0, y: 24, width: 1440, height: 876 })).toEqual({
-      x: 1080,
-      y: 76,
-      width: 360,
-      height: 480,
-    });
-    expect(overlayBounds({ x: 0, y: 0, width: 1440, height: 500 })).toEqual({
-      x: 1080,
+    // Hangs from the top edge, centered horizontally (odd widths round), over the menu bar.
+    expect(overlayBounds({ x: 0, y: 0, width: 1440, height: 900 })).toEqual({
+      x: 540,
       y: 0,
       width: 360,
-      height: 480,
+      height: 56,
+    });
+    expect(overlayBounds({ x: -1200, y: -1080, width: 1921, height: 1080 })).toEqual({
+      x: -419,
+      y: -1080,
+      width: 360,
+      height: 56,
     });
     expect(isValidOverlayHitRegion({ x: 10, y: 90, width: 24, height: 10 }, 88, 100)).toBe(true);
     expect(isValidOverlayHitRegion({ x: 10, y: 90, width: 24, height: 11 }, 88, 100)).toBe(false);
@@ -513,19 +536,20 @@ describe('overlay controller', () => {
     expect(overlayWindow.setIgnoreMouseEvents).toHaveBeenLastCalledWith(true, { forward: true });
 
     electronMocks.screen.getPrimaryDisplay.mockReturnValue({
-      workArea: { x: 0, y: 24, width: 1440, height: 80 },
+      bounds: { x: 0, y: 0, width: 1440, height: 50 },
+      workArea: { x: 0, y: 24, width: 1440, height: 26 },
     });
     const reposition = electronMocks.screen.on.mock.calls.find(
       ([event]) => event === 'display-metrics-changed',
     )?.[1] as (() => void) | undefined;
     reposition?.();
     expect(overlayWindow.setBounds).toHaveBeenLastCalledWith(
-      { x: 1080, y: 24, width: 360, height: 80 },
+      { x: 540, y: 0, width: 360, height: 50 },
       false,
     );
-    expect(controller.setHitRegions([{ x: 10, y: 71, width: 24, height: 10 }])).toBe(false);
+    expect(controller.setHitRegions([{ x: 10, y: 41, width: 24, height: 10 }])).toBe(false);
 
-    electronMocks.screen.getCursorScreenPoint.mockReturnValue({ x: 1092, y: 60 });
+    electronMocks.screen.getCursorScreenPoint.mockReturnValue({ x: 552, y: 36 });
     expect(controller.setHitRegions([{ x: 10, y: 20, width: 24, height: 24 }])).toBe(true);
     expect(overlayWindow.setIgnoreMouseEvents).toHaveBeenLastCalledWith(false, undefined);
     controller.setQualifyingSessionCount(0);

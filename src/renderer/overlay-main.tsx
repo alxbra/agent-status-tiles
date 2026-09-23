@@ -5,7 +5,7 @@ import type { OverlayState } from '../shared/overlay-ipc';
 import { createOverlayHitRegionPublisher } from './overlay-hit-region-publisher';
 import { translateAndClipHitRegions, type OverlayPortalRect } from './overlay-hit-regions';
 import { retryOverlayHandshake } from './overlay-readiness';
-import { StatusTiles } from './tiles/StatusTiles';
+import { DynamicIsland } from './island/DynamicIsland';
 import { DISMISS_TILE_PORTALS_EVENT } from './tiles/events';
 import type { TileHitRegion } from './tiles/geometry';
 import type { OpenSessionTarget } from './tiles/interaction';
@@ -71,7 +71,7 @@ export function OverlayApp(): ReactElement {
   }, []);
 
   const publishCurrentHitRegions = useCallback(() => {
-    const root = document.querySelector<HTMLElement>('.status-tiles');
+    const root = document.querySelector<HTMLElement>('.dynamic-island');
     const rootBounds = root?.getBoundingClientRect();
     const regions = translateAndClipHitRegions(
       tileRegionsRef.current,
@@ -140,7 +140,7 @@ export function OverlayApp(): ReactElement {
 
   const publishHitRegions = useCallback(
     (regions: readonly TileHitRegion[]) => {
-      // StatusTiles deliberately keeps its callback root-local. The overlay
+      // The island deliberately keeps its callback root-local. The overlay
       // host translates those regions to viewport coordinates before IPC.
       tileRegionsRef.current = regions;
       publishCurrentHitRegions();
@@ -223,20 +223,16 @@ export function OverlayApp(): ReactElement {
   const openSession = useCallback((target: OpenSessionTarget) => {
     return overlayApi.openSession(target);
   }, []);
-  const dismissError = useCallback((sessionId: string) => {
-    return overlayApi.dismissError({ sessionId });
-  }, []);
   const keyboardExit = useCallback(() => {
     if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
     void overlayApi.requestKeyboardExit().catch(() => undefined);
   }, []);
 
   return (
-    <StatusTiles
+    <DynamicIsland
       sessions={state.sessions}
       reducedMotion={state.reducedMotion}
       onOpenSession={openSession}
-      onDismissError={dismissError}
       onHitRegionsChange={publishHitRegions}
       onKeyboardExit={keyboardExit}
       keyboardEntryRevision={keyboardEntryRevision}

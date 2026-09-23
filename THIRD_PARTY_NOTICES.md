@@ -30,3 +30,9 @@ The macOS navigation adapter also adapts the validated Codex task-link and
 and [`src/task-link.ts`](https://github.com/alxbra/codex-status-actions/blob/main/src/task-link.ts).
 The adapter is Apache-2.0 licensed; it does not carry over Stream Deck actions,
 shell execution, or unsupported legacy navigation modes.
+
+The experimental dynamic island bundles the Fira Code typeface (weight 500)
+through `@fontsource/fira-code`. Fira Code is © The Fira Code Project Authors
+and licensed under the SIL Open Font License 1.1
+(<https://openfontlicense.org>); the font files are served locally and never
+fetched at runtime.

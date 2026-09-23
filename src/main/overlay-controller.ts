@@ -20,11 +20,11 @@ export { MAX_OVERLAY_HIT_REGIONS } from '../shared/overlay-ipc';
 export type { OverlayHitRegion } from '../shared/overlay-ipc';
 
 /**
- * The transparent native window hosts the right-anchored tab dock plus room
- * for a fully extended tab and the context menu (tabs show no tooltip).
+ * The transparent native window hangs from the top center of the display and
+ * leaves room around the compact island for its widest label and shadow.
  */
 export const OVERLAY_WINDOW_WIDTH = 360;
-export const OVERLAY_WINDOW_HEIGHT = 480;
+export const OVERLAY_WINDOW_HEIGHT = 56;
 export interface OverlayController {
   getWindow(): BrowserWindow | null;
   recover(): void;
@@ -38,19 +38,14 @@ export interface OverlayController {
   destroy(): void;
 }
 
-/** The tab stack is centered inside the window, so the window centers on this line. */
-export const OVERLAY_ANCHOR_FRACTION = 1 / 3;
-
-export function overlayBounds(workArea: Rectangle): Rectangle {
-  const width = Math.max(1, Math.min(OVERLAY_WINDOW_WIDTH, workArea.width));
-  const height = Math.max(1, Math.min(OVERLAY_WINDOW_HEIGHT, workArea.height));
-  const anchorY = workArea.y + workArea.height * OVERLAY_ANCHOR_FRACTION;
-  const minY = workArea.y;
-  const maxY = workArea.y + workArea.height - height;
+/** The island hangs from the display's top edge, over the menu bar's empty center. */
+export function overlayBounds(displayBounds: Rectangle): Rectangle {
+  const width = Math.max(1, Math.min(OVERLAY_WINDOW_WIDTH, displayBounds.width));
+  const height = Math.max(1, Math.min(OVERLAY_WINDOW_HEIGHT, displayBounds.height));
 
   return {
-    x: Math.round(workArea.x + workArea.width - width),
-    y: Math.round(Math.min(Math.max(anchorY - height / 2, minY), maxY)),
+    x: Math.round(displayBounds.x + (displayBounds.width - width) / 2),
+    y: displayBounds.y,
     width,
     height,
   };
@@ -117,7 +112,8 @@ function createOverlayWindow(
   const allowedUrl = rendererUrl();
   const window = new BrowserWindow({
     title: 'Agent Status Tiles Overlay',
-    ...overlayBounds(display.workArea),
+    ...overlayBounds(display.bounds),
+    enableLargerThanScreen: true,
     frame: false,
     transparent: true,
     resizable: false,
@@ -138,7 +134,8 @@ function createOverlayWindow(
     },
   });
 
-  window.setAlwaysOnTop(true, 'floating');
+  // Above the menu bar (level 24) so the island can sit over its empty center.
+  window.setAlwaysOnTop(true, 'status');
   window.setVisibleOnAllWorkspaces(true, {
     visibleOnFullScreen: true,
     skipTransformProcessType: true,
@@ -248,7 +245,7 @@ export function createOverlayController(options: OverlayControllerOptions = {}):
       connectedDisplays(),
       screen.getPrimaryDisplay(),
     );
-    const bounds = overlayBounds(display.workArea);
+    const bounds = overlayBounds(display.bounds);
     overlayWindow.setBounds(bounds, false);
     const currentBounds = overlayWindow.getBounds();
     hitRegions = hitRegions.filter((region) =>
