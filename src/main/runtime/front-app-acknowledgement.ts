@@ -2,9 +2,14 @@ import type { SessionSnapshot, Surface, Provider } from '../../shared/session';
 import { MACOS_APPLICATIONS } from '../navigation/macos-navigator';
 
 interface SurfaceMatch {
-  provider?: Provider;
+  provider: Provider;
   surface: Surface;
 }
+
+const CLI_SURFACES: readonly SurfaceMatch[] = [
+  { provider: 'codex', surface: 'cli' },
+  { provider: 'claude', surface: 'cli' },
+];
 
 /**
  * Which sessions an activated app shows. The desktop apps own their provider's
@@ -14,12 +19,10 @@ interface SurfaceMatch {
 const SURFACES_BY_BUNDLE: ReadonlyMap<string, readonly SurfaceMatch[]> = new Map([
   [MACOS_APPLICATIONS.codexDesktop.bundleId, [{ provider: 'codex', surface: 'desktop' }]],
   [MACOS_APPLICATIONS.claudeDesktop.bundleId, [{ provider: 'claude', surface: 'desktop' }]],
-  ...[
-    MACOS_APPLICATIONS.terminal,
-    MACOS_APPLICATIONS.iterm2,
-    MACOS_APPLICATIONS.ghostty,
-    MACOS_APPLICATIONS.warp,
-  ].map((application) => [application.bundleId, [{ surface: 'cli' }]] as [string, SurfaceMatch[]]),
+  [MACOS_APPLICATIONS.terminal.bundleId, CLI_SURFACES],
+  [MACOS_APPLICATIONS.iterm2.bundleId, CLI_SURFACES],
+  [MACOS_APPLICATIONS.ghostty.bundleId, CLI_SURFACES],
+  [MACOS_APPLICATIONS.warp.bundleId, CLI_SURFACES],
 ]);
 
 export interface CompletionAcknowledgement {
@@ -41,9 +44,7 @@ export function completionsSeenOnActivation(
     session.status === 'unread' &&
     session.completionId !== undefined &&
     matches.some(
-      (match) =>
-        match.surface === session.surface &&
-        (match.provider === undefined || match.provider === session.provider),
+      (match) => match.surface === session.surface && match.provider === session.provider,
     )
       ? [{ sessionId: session.id, completionId: session.completionId }]
       : [],

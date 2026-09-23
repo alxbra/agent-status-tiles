@@ -137,16 +137,18 @@ function claudeIntegration(): ClaudeIntegration | undefined {
   };
 }
 
-/** Acknowledge the unread completions of the surfaces an activated app shows. */
-function acknowledgeCompletionsSeenIn(bundleId: string): void {
+/**
+ * Acknowledge the unread completions of the surfaces an activated app shows.
+ * The promise settles once every acknowledgement has; only tests await it.
+ */
+function acknowledgeCompletionsSeenIn(bundleId: string): Promise<unknown> {
   const coordinator = runtimeCoordinator;
-  if (coordinator === null) return;
-  for (const { sessionId, completionId } of completionsSeenOnActivation(
-    bundleId,
-    coordinator.getOverlayState().sessions,
-  )) {
-    void coordinator.acknowledge(sessionId, completionId).catch(() => undefined);
-  }
+  if (coordinator === null) return Promise.resolve();
+  return Promise.allSettled(
+    completionsSeenOnActivation(bundleId, coordinator.getOverlayState().sessions).map(
+      ({ sessionId, completionId }) => coordinator.acknowledge(sessionId, completionId),
+    ),
+  );
 }
 
 function isTestRuntime(): boolean {
@@ -477,7 +479,9 @@ if (!hasSingleInstanceLock) {
         value: acknowledgeCompletionsSeenIn,
       });
     } else if (process.platform === 'darwin') {
-      frontAppMonitor = startFrontAppMonitor(acknowledgeCompletionsSeenIn);
+      frontAppMonitor = startFrontAppMonitor((bundleId) => {
+        void acknowledgeCompletionsSeenIn(bundleId);
+      });
     }
     if (isKeyboardEntryTestHookEnabled(process.argv, process.env.NODE_ENV, app.isPackaged)) {
       Reflect.defineProperty(globalThis, TEST_KEYBOARD_ENTRY_HOOK, {

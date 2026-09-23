@@ -795,7 +795,7 @@ Record corrections made after review and the commit used for final validation.
 
 - [ ] All four local harness surfaces have live validation evidence.
 - [ ] The compact island hangs from the top center of the selected display at 32 pixels tall, above the menu bar.
-- [ ] The island shows one dot per active harness and only the provider status label; blue dots pulse, idle shows no text, and switching to a harness clears its done threads.
+- [ ] The island shows one dot per active harness and only the harness status label; blue dots pulse, idle shows no text, and switching to a harness clears its done threads.
 - [ ] Clicking the island opens the labeled thread; transparent space around it does not block underlying applications.
 - [ ] Settings use stock shadcn without redundant copy.
 - [ ] The configured number of recent eligible items appears, including idle and acknowledged items.

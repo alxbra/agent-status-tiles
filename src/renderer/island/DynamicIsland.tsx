@@ -211,7 +211,8 @@ export function DynamicIsland({
             <span className="dynamic-island__dots">
               {summary.dots.map(({ provider, tone }) => (
                 <span
-                  key={provider ?? 'idle'}
+                  // A tone change is a new dot, so it scales in again.
+                  key={`${provider ?? 'idle'}:${tone}`}
                   className="dynamic-island__dot"
                   data-provider={provider}
                   data-tone={tone}

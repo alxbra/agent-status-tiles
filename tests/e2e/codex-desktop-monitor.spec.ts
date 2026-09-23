@@ -246,12 +246,11 @@ process.stdin.on('data', chunk => {
       await application!.evaluate((_electron, id) => {
         const hook = Reflect.get(globalThis, Symbol.for('agent-status-tiles.test.front-app'));
         if (typeof hook !== 'function') throw new Error('Front-app test hook is unavailable');
-        (hook as (bundleId: string) => void)(id);
+        // Resolves once every acknowledgement the activation started has settled.
+        return (hook as (bundleId: string) => Promise<unknown>)(id);
       }, bundleId);
     };
     await activate('com.apple.Terminal');
-    // Acknowledgement is asynchronous; give a wrong one time to land.
-    await new Promise((resolve) => setTimeout(resolve, 750));
     expect(
       await restartedOverlay.evaluate(async () =>
         (await window.agentStatusTilesOverlay.getState()).sessions.map((session) => session.status),
