@@ -62,6 +62,13 @@ describe('claude readiness', () => {
     expect(
       readinessOf({ ok: false, code: 'helper-translocated' }, { status: 'installed' }),
     ).toEqual({ status: 'issue', issue: 'helper-translocated' });
+    expect(readinessOf({ ok: false, code: 'helper-not-built' }, { status: 'installed' })).toEqual({
+      status: 'issue',
+      issue: 'helper-not-built',
+    });
+    expect(claudeIssueSentence('helper-not-built', 'connect')).toBe(
+      'The hook helper is not built in this checkout. Run pnpm build:hook-helper -- --arch host, then connect again.',
+    );
     for (const code of [
       'unsupported-architecture',
       'helper-not-regular',
@@ -103,6 +110,7 @@ describe('claude readiness', () => {
   it('phrases every issue as one actionable sentence without paths', () => {
     for (const issue of [
       'helper-missing',
+      'helper-not-built',
       'helper-translocated',
       'helper-unusable',
       'hooks-missing',

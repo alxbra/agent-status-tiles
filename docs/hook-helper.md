@@ -26,11 +26,20 @@ The future app integration selects the directory matching Electron's
 `process.arch` and invokes the helper by absolute path. Packaging does not
 install hooks or choose a user-data directory; those are separate integration
 and installer responsibilities. To build one target while developing, use
-`pnpm run build:hook-helper -- --arch arm64` (or `x64`). If Cargo is not on
-`PATH`, pass its executable explicitly with `--cargo PATH` or set
-`HOOK_HELPER_CARGO`. The selected Rust toolchain must provide the corresponding
-`aarch64-apple-darwin` or `x86_64-apple-darwin` target; missing toolchains,
-targets, build output, and architecture mismatches fail the build clearly.
+`pnpm run build:hook-helper -- --arch arm64` (or `x64`, or `host` for this
+Mac). `pnpm dev` and `pnpm start` run the host build with `--if-stale
+--optional`, so a fresh checkout gets its helper, and a helper older than the
+Rust sources is rebuilt, without failing to start when Rust is absent; until a
+helper exists, Settings asks for `pnpm build:hook-helper -- --arch host` instead
+of a reinstall. Each build replaces only the selected architectures' helpers,
+renaming a verified copy over the old file so installed hooks never see a
+missing helper. Cargo comes from `HOOK_HELPER_CARGO`, `CARGO`, or
+`--cargo PATH`; otherwise the script tries `cargo` on `PATH`, then
+`~/.cargo/bin`, then the stable rustup toolchains, which rustup installs even
+when its proxies are not linked onto `PATH`. The selected Rust toolchain must
+provide the corresponding `aarch64-apple-darwin` or `x86_64-apple-darwin`
+target; missing toolchains, targets, build output, and architecture mismatches
+fail the build clearly.
 
 The helper is copied by electron-builder's `extraResources` configuration,
 which places it under macOS `Contents/Resources` rather than inside ASAR. The
@@ -58,7 +67,12 @@ The installer writes exactly one matcher-less group per event in the helper's
 allowlist, each holding one command hook:
 
 ```json
-{ "type": "command", "command": "'<helper>' --provider claude --data-dir '<app-data>'", "timeout": 5, "async": true }
+{
+  "type": "command",
+  "command": "'<helper>' --provider claude --data-dir '<app-data>'",
+  "timeout": 5,
+  "async": true
+}
 ```
 
 Both paths are single-quoted for the shell, and the fixed argument order is the

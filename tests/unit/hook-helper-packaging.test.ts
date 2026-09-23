@@ -8,6 +8,7 @@ import {
   realpathSync,
   rmSync,
   symlinkSync,
+  utimesSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -18,6 +19,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import {
   ARCHITECTURES,
+  cargoCandidates,
   getCargoBuildArguments,
   getHelperBuildPath,
   parseBuildOptions,
@@ -227,7 +229,10 @@ describe('hook-helper packaging contract', () => {
 
   it('rejects malformed build options and unsupported architectures', () => {
     expect(() => parseBuildOptions(['--arch', 'ia32'], {})).toThrow(
-      '--arch must be arm64, x64, or both',
+      '--arch must be arm64, x64, both, or host',
+    );
+    expect(() => parseBuildOptions(['--arch', 'host'], {}, 'ia32')).toThrow(
+      "This Mac's architecture has no hook-helper",
     );
     expect(() => parseBuildOptions(['--cargo'], {})).toThrow('--cargo requires an executable path');
     expect(() => parseBuildOptions(['--unknown'], {})).toThrow('Unknown argument');
@@ -267,6 +272,174 @@ describe('hook-helper packaging contract', () => {
     expect(() => validateMachOArchitecture(path, 'arm64')).toThrow(
       'not a 64-bit macOS Mach-O executable',
     );
+  });
+
+  it('builds only the host architecture and parses the development flags', () => {
+    expect(parseBuildOptions(['--arch', 'host'], {}, 'arm64')).toMatchObject({
+      arch: 'arm64',
+      architectures: ['arm64'],
+      cargoPath: 'cargo',
+      cargoExplicit: false,
+      ifStale: false,
+      optional: false,
+    });
+    expect(
+      parseBuildOptions(['--arch', 'host', '--if-stale', '--optional'], {}, 'x64'),
+    ).toMatchObject({ architectures: ['x64'], ifStale: true, optional: true });
+    expect(parseBuildOptions([], { HOOK_HELPER_CARGO: '/opt/cargo' })).toMatchObject({
+      cargoPath: '/opt/cargo',
+      cargoExplicit: true,
+    });
+    expect(parseBuildOptions(['--cargo', '/opt/cargo'], {})).toMatchObject({
+      cargoExplicit: true,
+    });
+  });
+
+  it('looks for Cargo on PATH, in the rustup proxies, then in stable toolchains', () => {
+    expect(cargoCandidates({}, '/Users/dev')).toEqual([
+      'cargo',
+      '/Users/dev/.cargo/bin/cargo',
+      '/Users/dev/.rustup/toolchains/stable-aarch64-apple-darwin/bin/cargo',
+      '/Users/dev/.rustup/toolchains/stable-x86_64-apple-darwin/bin/cargo',
+    ]);
+    expect(cargoCandidates({ CARGO_HOME: '/c', RUSTUP_HOME: '/r' }, '/Users/dev')).toEqual([
+      'cargo',
+      '/c/bin/cargo',
+      '/r/toolchains/stable-aarch64-apple-darwin/bin/cargo',
+      '/r/toolchains/stable-x86_64-apple-darwin/bin/cargo',
+    ]);
+  });
+
+  it('finds a stable rustup toolchain Cargo that is not on PATH', () => {
+    const { directory, buildScript, fakeCargo, cargoLog } = createBuildFixture();
+    const home = join(directory, 'home');
+    const toolchainBin = join(home, '.rustup', 'toolchains', 'stable-aarch64-apple-darwin', 'bin');
+    mkdirSync(toolchainBin, { recursive: true });
+    copyFileSync(fakeCargo, join(toolchainBin, 'cargo'));
+    chmodSync(join(toolchainBin, 'cargo'), 0o755);
+
+    // A directory holding only Node.js, so no real Cargo is reachable even
+    // where Node.js and Cargo share an install prefix such as Homebrew's.
+    const nodeOnly = join(directory, 'node-only');
+    mkdirSync(nodeOnly);
+    symlinkSync(process.execPath, join(nodeOnly, 'node'));
+
+    const result = spawnSync(process.execPath, [buildScript, '--arch', 'arm64'], {
+      cwd: directory,
+      encoding: 'utf8',
+      env: { HOME: home, PATH: nodeOnly, FAKE_CARGO_LOG: cargoLog },
+    });
+
+    expect(result.status).toBe(0);
+    expect(
+      readFileSync(join(directory, 'build', 'hook-helper', 'arm64', 'hook-helper')),
+    ).toHaveLength(32);
+  });
+
+  it('skips a valid helper with --if-stale and only warns with --optional', () => {
+    const { directory, buildScript, fakeCargo, cargoLog } = createBuildFixture();
+    const env = { ...process.env, FAKE_CARGO_LOG: cargoLog };
+    const build = (...args: string[]) =>
+      spawnSync(process.execPath, [buildScript, '--arch', 'arm64', ...args], {
+        cwd: directory,
+        encoding: 'utf8',
+        env,
+      });
+    const missingCargo = join(directory, 'cargo-not-installed');
+
+    const optionalFailure = build('--cargo', missingCargo, '--optional');
+    expect(optionalFailure.status).toBe(0);
+    expect(optionalFailure.stderr).toContain('hook-helper was not built');
+    expect(optionalFailure.stderr).toContain('pnpm build:hook-helper');
+
+    expect(build('--cargo', fakeCargo).status).toBe(0);
+    rmSync(cargoLog);
+    const skipped = build('--cargo', missingCargo, '--if-stale');
+    expect(skipped.status).toBe(0);
+    expect(() => readFileSync(cargoLog)).toThrow();
+  });
+
+  it('rebuilds a wrong-architecture or out-of-date helper despite --if-stale', () => {
+    const { directory, buildScript, fakeCargo, cargoLog } = createBuildFixture();
+    const build = (...args: string[]) =>
+      spawnSync(process.execPath, [buildScript, '--arch', 'arm64', '--cargo', fakeCargo, ...args], {
+        cwd: directory,
+        encoding: 'utf8',
+        env: { ...process.env, FAKE_CARGO_LOG: cargoLog },
+      });
+    const helper = join(directory, 'build', 'hook-helper', 'arm64', 'hook-helper');
+
+    expect(build().status).toBe(0);
+    copyFileSync(writeMachO(directory, 'x64'), helper);
+    rmSync(cargoLog);
+    expect(build('--if-stale').status).toBe(0);
+    expect(readFileSync(cargoLog, 'utf8')).toContain('aarch64-apple-darwin');
+
+    const later = new Date(Date.now() + 60_000);
+    utimesSync(join(directory, 'crates', 'hook-helper', 'Cargo.toml'), later, later);
+    rmSync(cargoLog);
+    expect(build('--if-stale').status).toBe(0);
+    expect(readFileSync(cargoLog, 'utf8')).toContain('aarch64-apple-darwin');
+  });
+
+  it("keeps the other architecture's helper when building one", () => {
+    const { directory, buildScript, fakeCargo, cargoLog } = createBuildFixture();
+    const build = (arch: string) =>
+      spawnSync(process.execPath, [buildScript, '--arch', arch, '--cargo', fakeCargo], {
+        cwd: directory,
+        encoding: 'utf8',
+        env: { ...process.env, FAKE_CARGO_LOG: cargoLog },
+      });
+
+    expect(build('x64').status).toBe(0);
+    expect(build('arm64').status).toBe(0);
+    for (const arch of ['arm64', 'x64']) {
+      expect(
+        readFileSync(join(directory, 'build', 'hook-helper', arch, 'hook-helper')),
+      ).toHaveLength(32);
+    }
+  });
+
+  it('removes staged copies left by an interrupted install', () => {
+    const { directory, buildScript, fakeCargo, cargoLog } = createBuildFixture();
+    const leftover = join(directory, 'build', 'hook-helper', 'x64', 'hook-helper.4242.tmp');
+    mkdirSync(join(directory, 'build', 'hook-helper', 'x64'), { recursive: true });
+    writeFileSync(leftover, 'partial');
+
+    const result = spawnSync(
+      process.execPath,
+      [buildScript, '--arch', 'arm64', '--cargo', fakeCargo],
+      { cwd: directory, encoding: 'utf8', env: { ...process.env, FAKE_CARGO_LOG: cargoLog } },
+    );
+
+    expect(result.status).toBe(0);
+    expect(() => readFileSync(leftover)).toThrow();
+  });
+
+  it('says an existing helper was kept when an optional rebuild fails', () => {
+    const { directory, buildScript, fakeCargo, cargoLog } = createBuildFixture();
+    const build = (...args: string[]) =>
+      spawnSync(process.execPath, [buildScript, '--arch', 'arm64', ...args], {
+        cwd: directory,
+        encoding: 'utf8',
+        env: { ...process.env, FAKE_CARGO_LOG: cargoLog },
+      });
+    expect(build('--cargo', fakeCargo).status).toBe(0);
+    const later = new Date(Date.now() + 60_000);
+    utimesSync(join(directory, 'crates', 'hook-helper', 'Cargo.toml'), later, later);
+
+    const result = build('--cargo', join(directory, 'no-cargo'), '--if-stale', '--optional');
+    expect(result.status).toBe(0);
+    expect(result.stderr).toContain('the existing helper is older than the Rust sources');
+  });
+
+  it('still fails malformed arguments under --optional', () => {
+    const result = spawnSync(process.execPath, [scriptPath, '--optional', '--arch', 'ia32'], {
+      cwd: projectRoot,
+      encoding: 'utf8',
+    });
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('--arch must be');
   });
 
   it('reports missing Cargo without silently producing a package', () => {

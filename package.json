@@ -11,8 +11,8 @@
     "node": "^20.19.0 || ^22.13.0 || >=24.0.0"
   },
   "scripts": {
-    "dev": "electron-vite dev",
-    "start": "electron-vite preview",
+    "dev": "node scripts/build-hook-helper.mjs --arch host --if-stale --optional && electron-vite dev",
+    "start": "node scripts/build-hook-helper.mjs --arch host --if-stale --optional && electron-vite preview",
     "build": "electron-vite build",
     "build:hook-helper": "node scripts/build-hook-helper.mjs",
     "format": "prettier --write 'src/**/*.{ts,tsx,css,html}' 'scripts/**/*.{d.mts,js,mjs,ts}' 'tests/**/*.{ts,tsx}' '*.{js,mjs,ts,json,yaml,yml}' '.github/**/*.{yml,yaml}'",
