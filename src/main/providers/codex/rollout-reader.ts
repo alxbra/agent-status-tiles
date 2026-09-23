@@ -526,6 +526,9 @@ export class CodexRolloutReader {
       let parts: Buffer[] = [];
       let lineLength = 0;
       let discarding = cursor.isDiscardingOversizedLine === true;
+      // A resumed line is skipped quietly only when its cursor carries the
+      // activity-only verdict; an older cursor without it stays an issue.
+      let discardingActivityOnly = discarding && cursor.isDiscardingActivityOnlyLine === true;
       let unprocessedCompleteLine = false;
       const fileEvents: CodexRolloutEvent[] = [];
       const eventsBeforeFile = budget.eventsEmitted;
@@ -550,6 +553,12 @@ export class CodexRolloutReader {
           const segment = chunk.subarray(start, end);
           if (!discarding) {
             if (lineLength + segment.length > MAX_LINE_BYTES) {
+              // Large local tool output is routine and carries no status, so
+              // only an oversized line whose prefix does not prove that stays
+              // a coverage issue.
+              discardingActivityOnly = isActivityOnlyRecordPrefix(
+                recordPrefix([...parts, segment]),
+              );
               discarding = true;
               parts = [];
               lineLength = 0;
@@ -562,7 +571,8 @@ export class CodexRolloutReader {
 
           const newlineOffset = chunkStart + newline;
           if (discarding) {
-            this.addDiagnostic(diagnostics, 'oversized-line', pathKey, lineStart);
+            if (!discardingActivityOnly)
+              this.addDiagnostic(diagnostics, 'oversized-line', pathKey, lineStart);
           } else {
             const line = Buffer.concat(parts, lineLength).toString('utf8');
             const estimatedEvents = canResolveInputOnLine(line, context) ? 2 : 1;
@@ -587,19 +597,24 @@ export class CodexRolloutReader {
           parts = [];
           lineLength = 0;
           discarding = false;
+          discardingActivityOnly = false;
           start = newline + 1;
         }
         if (budget.bytesRead >= MAX_READ_BYTES && position < boundary) budget.isExhausted = true;
       }
       if (discarding) {
-        this.addDiagnostic(diagnostics, 'oversized-line', pathKey, lineStart);
-        // A malformed line cannot become valid after it exceeds the bound.
-        // Advance the cursor while retaining discard mode so a later batch
-        // resumes at the current byte rather than rescanning its prefix.
+        if (!discardingActivityOnly)
+          this.addDiagnostic(diagnostics, 'oversized-line', pathKey, lineStart);
+        // A line cannot become readable after it exceeds the bound.
+        // Advance the cursor while retaining discard mode and its verdict so a
+        // later batch resumes at the current byte rather than its prefix.
         cursor.offset = position;
         cursor.isDiscardingOversizedLine = true;
+        if (discardingActivityOnly) cursor.isDiscardingActivityOnlyLine = true;
+        else delete cursor.isDiscardingActivityOnlyLine;
       } else {
         delete cursor.isDiscardingOversizedLine;
+        delete cursor.isDiscardingActivityOnlyLine;
       }
       if (baselineUntilOffset !== undefined && cursor.offset < baselineUntilOffset) {
         cursor.baselineUntilOffset = baselineUntilOffset;
@@ -1016,6 +1031,9 @@ export class CodexRolloutReader {
         ? { baselineUntilOffset }
         : {}),
       ...(cursor.isDiscardingOversizedLine === true ? { isDiscardingOversizedLine: true } : {}),
+      ...(cursor.isDiscardingOversizedLine === true && cursor.isDiscardingActivityOnlyLine === true
+        ? { isDiscardingActivityOnlyLine: true }
+        : {}),
     };
   }
 
@@ -1058,6 +1076,32 @@ const KNOWN_RESPONSE_ITEMS = new Set([
   'ghost_snapshot',
   'compaction',
 ]);
+
+const RECORD_PREFIX_BYTES = 256;
+// Codex writes each record envelope in this fixed key order, so the bounded
+// prefix of an oversized line still names its record and payload types.
+const RECORD_PREFIX =
+  /^\{"timestamp":"[^"\\]{1,64}",(?:"ordinal":\d{1,16},)?"type":"([a-z_]{1,64})"(?:,"payload":\{"type":"([a-z_]{1,64})")?/;
+
+function recordPrefix(parts: readonly Buffer[]): string {
+  const length = parts.reduce((total, part) => total + part.length, 0);
+  return Buffer.concat(parts, Math.min(length, RECORD_PREFIX_BYTES)).toString('utf8');
+}
+
+/**
+ * Whether a record with this prefix is at most activity when parsed. Status
+ * records, tool calls that may request input, and their outputs are not.
+ */
+function isActivityOnlyRecordPrefix(prefix: string): boolean {
+  const match = RECORD_PREFIX.exec(prefix);
+  if (!match) return false;
+  const [, type, payloadType] = match;
+  if (IGNORED_RECORD_TYPES.has(type)) return true;
+  if (payloadType === undefined) return false;
+  if (type === 'event_msg')
+    return IGNORED_EVENT_TYPES.has(payloadType) || KNOWN_NONTERMINAL_EVENTS.has(payloadType);
+  return type === 'response_item' && KNOWN_RESPONSE_ITEMS.has(payloadType);
+}
 
 function asRecord(value: unknown): JsonRecord | undefined {
   return isRecord(value) ? value : undefined;

@@ -5,6 +5,8 @@ export interface FileCursor {
   offset: number;
   baselineUntilOffset?: number;
   isDiscardingOversizedLine?: boolean;
+  /** The discarded line's own prefix proved it carries no status. */
+  isDiscardingActivityOnlyLine?: boolean;
 }
 
 export type FileCursorMap = Readonly<Record<string, FileCursor>>;
