@@ -41,6 +41,9 @@ describe('hook helper path', () => {
     ).toEqual({ ok: true, path: packaged });
 
     const appRoot = await root();
+    expect(
+      resolveHookHelperPath({ isPackaged: false, resourcesPath: '/x', appRoot, arch: 'x64' }),
+    ).toEqual({ ok: false, code: 'helper-not-built' });
     const built = await writeHelper(join(appRoot, 'build'), 'x64');
     expect(
       resolveHookHelperPath({ isPackaged: false, resourcesPath: '/x', appRoot, arch: 'x64' }),

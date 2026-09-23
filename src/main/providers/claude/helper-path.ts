@@ -8,6 +8,8 @@ const OWNER_EXECUTE_BIT = 0o100;
 export type HookHelperPathCode =
   | 'unsupported-architecture'
   | 'helper-missing'
+  /** Development only: `pnpm build:hook-helper` has not run in this checkout. */
+  | 'helper-not-built'
   | 'helper-not-regular'
   | 'helper-not-executable'
   /** An unsigned app launched from Downloads runs from a throwaway translocated path. */
@@ -54,7 +56,8 @@ export function resolveHookHelperPath(options: HookHelperPathOptions): HookHelpe
     const code = (error as { code?: unknown }).code;
     // A stray file where a directory belongs is as actionable as a missing helper.
     const missing = code === 'ENOENT' || code === 'ENOTDIR';
-    return { ok: false, code: missing ? 'helper-missing' : 'resolver-failed' };
+    if (!missing) return { ok: false, code: 'resolver-failed' };
+    return { ok: false, code: options.isPackaged ? 'helper-missing' : 'helper-not-built' };
   }
   if (metadata.isSymbolicLink() || !metadata.isFile()) {
     return { ok: false, code: 'helper-not-regular' };

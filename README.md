@@ -25,7 +25,9 @@ full contribution and review requirements.
 
 Use a supported Node.js line (`^20.19.0`, `^22.13.0`, or `>=24.0.0`; CI uses
 Node.js 24), then install dependencies with `pnpm install`. Use `pnpm dev` for
-the Electron development shell. The foundation checks are `pnpm format:check`,
+the Electron development shell; it first builds the Claude Code hook helper for
+this Mac when the checkout has none (Rust with the matching macOS target), and
+only warns if that fails. The foundation checks are `pnpm format:check`,
 `pnpm lint`, `pnpm typecheck`, and `pnpm test`. `pnpm test:e2e` builds the app
 and runs headless browser fixtures locally. It skips native Electron tests by
 default because their windows can take focus; a local pass is not native E2E

@@ -5,6 +5,7 @@ import type { ClaudeManagedHooksVerification } from './managed-settings';
 /** Why a Claude surface cannot observe sessions; each maps to one Settings sentence. */
 export type ClaudeIssue =
   | 'helper-missing'
+  | 'helper-not-built'
   | 'helper-translocated'
   | 'helper-unusable'
   | 'hooks-missing'
@@ -23,6 +24,8 @@ function helperIssue(helper: HelperFailure): ClaudeIssue {
   switch (helper.code) {
     case 'helper-missing':
       return 'helper-missing';
+    case 'helper-not-built':
+      return 'helper-not-built';
     case 'helper-translocated':
       return 'helper-translocated';
     case 'unsupported-architecture':
@@ -89,6 +92,8 @@ export function claudeIssueSentence(issue: ClaudeIssue, action: ClaudeAction = '
   switch (issue) {
     case 'helper-missing':
       return `The hook helper is missing from this app. Reinstall Agent Status Tiles, then ${step}.`;
+    case 'helper-not-built':
+      return `The hook helper is not built in this checkout. Run pnpm build:hook-helper, then ${step}.`;
     case 'helper-translocated':
       return `Move Agent Status Tiles to the Applications folder and reopen it, then ${step}.`;
     case 'helper-unusable':

@@ -5,10 +5,19 @@ export const ARCHITECTURES: Readonly<Record<HelperArch, { target: string; cpuTyp
 export interface BuildOptions {
   arch: HelperArch | 'both';
   cargoPath: string;
+  /** False when Cargo comes from the default lookup rather than configuration. */
+  cargoExplicit: boolean;
+  ifMissing: boolean;
+  optional: boolean;
   architectures: HelperArch[];
 }
 
-export function parseBuildOptions(argv: string[], environment?: NodeJS.ProcessEnv): BuildOptions;
+export function parseBuildOptions(
+  argv: string[],
+  environment?: NodeJS.ProcessEnv,
+  processArch?: string,
+): BuildOptions;
+export function cargoCandidates(environment?: NodeJS.ProcessEnv, home?: string): string[];
 export function getHelperBuildPath(arch: string): string;
 export function getCargoBuildArguments(target: string): string[];
 export function validateMachOArchitecture(binaryPath: string, arch: HelperArch): void;

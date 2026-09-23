@@ -26,9 +26,14 @@ The future app integration selects the directory matching Electron's
 `process.arch` and invokes the helper by absolute path. Packaging does not
 install hooks or choose a user-data directory; those are separate integration
 and installer responsibilities. To build one target while developing, use
-`pnpm run build:hook-helper -- --arch arm64` (or `x64`). If Cargo is not on
-`PATH`, pass its executable explicitly with `--cargo PATH` or set
-`HOOK_HELPER_CARGO`. The selected Rust toolchain must provide the corresponding
+`pnpm run build:hook-helper -- --arch arm64` (or `x64`, or `host` for this
+Mac). `pnpm dev` and `pnpm start` run the host build with `--if-missing
+--optional`, so a fresh checkout gets its helper without failing to start when
+Rust is absent; until it exists, Settings asks for `pnpm build:hook-helper`
+instead of a reinstall. Cargo comes from `HOOK_HELPER_CARGO`, `CARGO`, or
+`--cargo PATH`; otherwise the script tries `cargo` on `PATH`, then
+`~/.cargo/bin`, then the stable rustup toolchains, which rustup installs even
+when its proxies are not linked onto `PATH`. The selected Rust toolchain must provide the corresponding
 `aarch64-apple-darwin` or `x86_64-apple-darwin` target; missing toolchains,
 targets, build output, and architecture mismatches fail the build clearly.
 

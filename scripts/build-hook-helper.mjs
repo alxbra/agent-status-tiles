@@ -9,7 +9,8 @@ import {
   realpathSync,
   rmSync,
 } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
+import { homedir } from 'node:os';
+import { dirname, isAbsolute, join, resolve } from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 
@@ -30,15 +31,31 @@ function isSupportedArchitecture(arch) {
   return typeof arch === 'string' && Object.hasOwn(ARCHITECTURES, arch);
 }
 
-const usage = `Usage: node scripts/build-hook-helper.mjs [--arch arm64|x64|both] [--cargo PATH]
+const usage = `Usage: node scripts/build-hook-helper.mjs [--arch arm64|x64|both|host] [--cargo PATH]
+       [--if-missing] [--optional]
 
 Builds the macOS hook-helper resource for the selected Electron architectures.
-The default is both supported architectures. Set HOOK_HELPER_CARGO or pass
---cargo when Cargo is not on PATH.`;
+The default is both supported architectures; host builds only this Mac's.
+Without HOOK_HELPER_CARGO, CARGO, or --cargo, Cargo is looked up on PATH, in
+~/.cargo/bin, and in the stable rustup toolchains.
+--if-missing skips the build when a valid helper is already in place.
+--optional reports a failed build as a warning and exits successfully.`;
 
-export function parseBuildOptions(argv, environment = process.env) {
+/** Map `--arch host` to the architecture of the running Node.js process. */
+function hostArchitecture(processArch) {
+  if (!isSupportedArchitecture(processArch)) {
+    throw new Error(`This Mac's architecture has no hook-helper: ${processArch}`);
+  }
+  return processArch;
+}
+
+export function parseBuildOptions(argv, environment = process.env, processArch = process.arch) {
   let arch = 'both';
-  let cargoPath = environment.HOOK_HELPER_CARGO ?? environment.CARGO ?? 'cargo';
+  const configuredCargo = environment.HOOK_HELPER_CARGO ?? environment.CARGO;
+  let cargoPath = configuredCargo ?? 'cargo';
+  let cargoExplicit = configuredCargo !== undefined;
+  let ifMissing = false;
+  let optional = false;
 
   for (let index = 0; index < argv.length; index += 1) {
     const argument = argv[index];
@@ -47,14 +64,20 @@ export function parseBuildOptions(argv, environment = process.env) {
     }
     if (argument === '--arch') {
       arch = argv[++index];
-      if (!arch || !['arm64', 'x64', 'both'].includes(arch)) {
-        throw new Error('--arch must be arm64, x64, or both');
+      if (!arch || !['arm64', 'x64', 'both', 'host'].includes(arch)) {
+        throw new Error('--arch must be arm64, x64, both, or host');
       }
+      if (arch === 'host') arch = hostArchitecture(processArch);
     } else if (argument === '--cargo') {
       cargoPath = argv[++index];
       if (!cargoPath) {
         throw new Error('--cargo requires an executable path');
       }
+      cargoExplicit = true;
+    } else if (argument === '--if-missing') {
+      ifMissing = true;
+    } else if (argument === '--optional') {
+      optional = true;
     } else if (argument !== '--help' && argument !== '-h') {
       throw new Error(`Unknown argument: ${argument}`);
     }
@@ -63,8 +86,34 @@ export function parseBuildOptions(argv, environment = process.env) {
   return {
     arch,
     cargoPath,
+    cargoExplicit,
+    ifMissing,
+    optional,
     architectures: arch === 'both' ? ['arm64', 'x64'] : [arch],
   };
+}
+
+/**
+ * Where to look for Cargo when none is configured: PATH first, then the rustup
+ * proxy directory, then the stable toolchains themselves, which rustup
+ * installs even when its proxies were never linked onto PATH.
+ */
+export function cargoCandidates(environment = process.env, home = homedir()) {
+  const candidates = ['cargo'];
+  if (!home) return candidates;
+  candidates.push(join(environment.CARGO_HOME ?? join(home, '.cargo'), 'bin', 'cargo'));
+  const toolchains = join(environment.RUSTUP_HOME ?? join(home, '.rustup'), 'toolchains');
+  for (const { target } of Object.values(ARCHITECTURES)) {
+    candidates.push(join(toolchains, `stable-${target}`, 'bin', 'cargo'));
+  }
+  return candidates;
+}
+
+/** A toolchain Cargo run by absolute path finds its rustc beside it. */
+function cargoEnvironment(cargoPath) {
+  if (!isAbsolute(cargoPath)) return process.env;
+  const path = process.env.PATH ? `${dirname(cargoPath)}:${process.env.PATH}` : dirname(cargoPath);
+  return { ...process.env, PATH: path };
 }
 
 export function getHelperBuildPath(arch) {
@@ -90,6 +139,7 @@ function runCargo(cargoPath, target) {
   const result = spawnSync(cargoPath, getCargoBuildArguments(target), {
     cwd: repositoryRoot,
     encoding: 'utf8',
+    env: cargoEnvironment(cargoPath),
     stdio: 'pipe',
   });
   if (result.status !== 0 || result.error) {
@@ -194,18 +244,43 @@ function clearOutputRoot() {
   mkdirSync(outputRoot, { mode: 0o755 });
 }
 
-function checkCargo(cargoPath) {
-  const result = spawnSync(cargoPath, ['--version'], {
+function cargoVersion(cargoPath) {
+  return spawnSync(cargoPath, ['--version'], {
     cwd: repositoryRoot,
     encoding: 'utf8',
+    env: cargoEnvironment(cargoPath),
     stdio: 'pipe',
   });
-  if (result.status !== 0 || result.error) {
-    throw new Error(describeCommandFailure(result, cargoPath, 'the configured toolchain'));
+}
+
+/** Use the configured Cargo as is; otherwise take the first candidate that runs. */
+function resolveCargo(cargoPath, cargoExplicit) {
+  if (cargoExplicit) {
+    const result = cargoVersion(cargoPath);
+    if (result.status !== 0 || result.error) {
+      throw new Error(describeCommandFailure(result, cargoPath, 'the configured toolchain'));
+    }
+    return cargoPath;
+  }
+  for (const candidate of cargoCandidates()) {
+    const result = cargoVersion(candidate);
+    if (result.status === 0 && !result.error) return candidate;
+  }
+  throw new Error(
+    'Unable to run Cargo: none on PATH, in ~/.cargo/bin, or in a stable rustup toolchain. Set HOOK_HELPER_CARGO or pass --cargo.',
+  );
+}
+
+function helpersInPlace(architectures) {
+  try {
+    for (const arch of architectures) validateBuiltHelper(arch);
+    return true;
+  } catch {
+    return false;
   }
 }
 
-function buildHookHelper({ cargoPath, architectures }) {
+function buildHookHelper({ cargoPath, cargoExplicit, architectures }) {
   if (process.platform !== 'darwin') {
     throw new Error('hook-helper packaging supports macOS only');
   }
@@ -217,12 +292,12 @@ function buildHookHelper({ cargoPath, architectures }) {
       throw new Error(`Unsupported helper architecture: ${arch}`);
     }
   }
-  checkCargo(cargoPath);
+  const cargo = resolveCargo(cargoPath, cargoExplicit);
   clearOutputRoot();
 
   for (const arch of architectures) {
     const architecture = ARCHITECTURES[arch];
-    runCargo(cargoPath, architecture.target);
+    runCargo(cargo, architecture.target);
     const cargoBinary = join(targetDirectory, architecture.target, 'release', 'hook-helper');
     assertRegularExecutable(cargoBinary, arch);
 
@@ -241,7 +316,16 @@ function main() {
     return;
   }
   const options = parseBuildOptions(argv);
-  buildHookHelper(options);
+  if (options.ifMissing && helpersInPlace(options.architectures)) return;
+  try {
+    buildHookHelper(options);
+  } catch (error) {
+    if (!options.optional) throw error;
+    logger.warn(
+      `hook-helper was not built (${error.message}); Claude Code cannot connect until \`pnpm build:hook-helper\` succeeds.`,
+    );
+    return;
+  }
   logger.log(`Built hook-helper resources: ${options.architectures.join(', ')}`);
 }
 
