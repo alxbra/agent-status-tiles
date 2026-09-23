@@ -1,0 +1,187 @@
+/* A notch-style island hanging from the top edge of the display: flat top,
+   concave shoulders, a rounded bottom, and a springy width change. */
+.dynamic-island {
+  --dynamic-island-fill: #000;
+  --dynamic-island-radius: calc(var(--dynamic-island-height) / 2);
+  --dynamic-island-shoulder: 8px;
+  --dynamic-island-spring: cubic-bezier(0.34, 1.32, 0.64, 1);
+  --dynamic-island-text: #f1f1ed;
+
+  position: relative;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  user-select: none;
+}
+
+.dynamic-island__shape {
+  position: absolute;
+  top: 0;
+  left: 50%;
+  height: var(--dynamic-island-height);
+  transform: translateX(-50%);
+  transition: width var(--dynamic-island-motion) var(--dynamic-island-spring);
+}
+
+.dynamic-island__shoulder {
+  position: absolute;
+  top: 0;
+  width: var(--dynamic-island-shoulder);
+  height: var(--dynamic-island-shoulder);
+}
+
+.dynamic-island__shoulder--left {
+  right: 100%;
+  background: radial-gradient(
+    circle at 0 100%,
+    transparent calc(var(--dynamic-island-shoulder) - 0.5px),
+    var(--dynamic-island-fill) var(--dynamic-island-shoulder)
+  );
+}
+
+.dynamic-island__shoulder--right {
+  left: 100%;
+  background: radial-gradient(
+    circle at 100% 100%,
+    transparent calc(var(--dynamic-island-shoulder) - 0.5px),
+    var(--dynamic-island-fill) var(--dynamic-island-shoulder)
+  );
+}
+
+.dynamic-island__pill {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  padding: 0 var(--dynamic-island-padding-x);
+  overflow: hidden;
+  border: 0;
+  border-radius: 0 0 var(--dynamic-island-radius) var(--dynamic-island-radius);
+  box-sizing: border-box;
+  background: var(--dynamic-island-fill);
+  /* A plain shadow instead of a filter on the shape, so the pulsing dots do not
+     force the whole island to repaint every frame. */
+  box-shadow: 0 4px 10px rgb(0 0 0 / 0.28);
+  color: var(--dynamic-island-text);
+  cursor: default;
+  outline: none;
+  pointer-events: auto;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.dynamic-island__pill:focus-visible {
+  box-shadow:
+    inset 0 0 0 1.5px rgb(241 241 237 / 0.45),
+    0 4px 10px rgb(0 0 0 / 0.28);
+}
+
+.dynamic-island__content {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 10px;
+  white-space: nowrap;
+}
+
+.dynamic-island__dots {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.dynamic-island__dot {
+  position: relative;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--dynamic-island-dot);
+  box-shadow: 0 0 8px color-mix(in srgb, var(--dynamic-island-dot) 55%, transparent);
+  animation: dynamic-island-dot-in 320ms var(--dynamic-island-spring) both;
+}
+
+/* Working dots breathe and throw a soft ring. */
+.dynamic-island__dot[data-tone='working'] {
+  animation:
+    dynamic-island-dot-in 320ms var(--dynamic-island-spring) both,
+    dynamic-island-breathe 1.6s ease-in-out 320ms infinite;
+}
+
+.dynamic-island__dot[data-tone='working']::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background: var(--dynamic-island-dot);
+  animation: dynamic-island-ring 1.6s cubic-bezier(0.2, 0, 0, 1) infinite;
+}
+
+.dynamic-island__label {
+  font:
+    500 12px/1 'Fira Code',
+    ui-monospace,
+    'SF Mono',
+    Menlo,
+    monospace;
+  font-feature-settings:
+    'calt' 1,
+    'liga' 1;
+  letter-spacing: -0.01em;
+  color: rgb(241 241 237 / 0.62);
+  animation: dynamic-island-label-in 360ms cubic-bezier(0.2, 0, 0, 1) both;
+}
+
+.dynamic-island__provider {
+  color: var(--dynamic-island-text);
+}
+
+@keyframes dynamic-island-dot-in {
+  from {
+    transform: scale(0.2);
+    opacity: 0;
+  }
+}
+
+@keyframes dynamic-island-breathe {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.55;
+    transform: scale(0.8);
+  }
+}
+
+@keyframes dynamic-island-ring {
+  from {
+    opacity: 0.5;
+    transform: scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: scale(2.4);
+  }
+}
+
+@keyframes dynamic-island-label-in {
+  from {
+    opacity: 0;
+    filter: blur(4px);
+    transform: translateY(3px);
+  }
+}
+
+.dynamic-island--reduced-motion .dynamic-island__shape,
+.dynamic-island--reduced-motion .dynamic-island__dot,
+.dynamic-island--reduced-motion .dynamic-island__dot::after,
+.dynamic-island--reduced-motion .dynamic-island__label {
+  animation: none;
+  transition: none;
+}
+
+.dynamic-island--reduced-motion .dynamic-island__dot::after {
+  display: none;
+}

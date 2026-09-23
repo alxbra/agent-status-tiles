@@ -127,7 +127,7 @@ export interface ProviderSurfaceMonitor {
    * longer reports, whatever its status, and a session reappears when the
    * provider reports it again. Adapters must not enumerate beyond the window
    * (for example archived or historical records) to explain an absence; they
-   * report what the dock can show and leave removal to the coordinator.
+   * report what the overlay can show and leave removal to the coordinator.
    */
   discover(): Promise<RuntimeDiscoveryResult>;
   /** Optional fixed-EOF capture hook. If absent, discovery's sources are used. */

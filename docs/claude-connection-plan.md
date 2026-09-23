@@ -73,8 +73,9 @@ Existing and reused as-is:
   their status), `claude:desktop` and `claude:cli` partitions, baseline and
   cutoff handling, owner reconciliation, per-surface health, 2 s discovery and
   250 ms file polling, connect/disconnect.
-- Tab dock: each tab shows lab icon, session title, and status icon, so the
-  title we report is visible text, not just a tooltip.
+- Overlay: the compact dynamic island (2026-09-23) names only the provider,
+  never the session title; titles stay in local state for navigation and a
+  future expanded island.
 - Settings: one row per provider since PR #35 (`codex`, `claude`); the Claude
   row renders as unavailable. The `Advanced` button exists but opens
   nothing. Desktop preferences persist display, reduced motion, and the
@@ -184,7 +185,7 @@ are covered by the reader's inode-tracked cursors.
 
 A session that moves between surfaces (`/desktop`, `/resume`) shows up in the
 other monitor's cohort once its newest record carries the new host; the
-coordinator's owner reconciliation already keeps one tile on the most recently
+coordinator's owner reconciliation already keeps one session on the most recently
 confirmed surface, and the old surface drops it on its next discovery.
 
 ### 3.3 Event normalization

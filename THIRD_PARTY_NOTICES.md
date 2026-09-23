@@ -1,11 +1,5 @@
 # Third-party notices
 
-The tile renderer uses the OpenAI and Anthropic marks from the SVG Logos icon
-set (`@iconify-json/logos`, CC0-1.0), authored by Gil Barbara and distributed
-at <https://github.com/gilbarbara/logos>. The paths are vendored in
-`src/renderer/tiles/icons.tsx` so the renderer does not load a 7 MB icon
-catalog at runtime.
-
 The implementation plan identifies
 [`codex-status-actions`](https://github.com/alxbra/codex-status-actions) as an
 Apache-2.0 reference for future Codex observation work. Any source code or
@@ -30,3 +24,9 @@ The macOS navigation adapter also adapts the validated Codex task-link and
 and [`src/task-link.ts`](https://github.com/alxbra/codex-status-actions/blob/main/src/task-link.ts).
 The adapter is Apache-2.0 licensed; it does not carry over Stream Deck actions,
 shell execution, or unsupported legacy navigation modes.
+
+The dynamic island bundles the Fira Code typeface (weight 500)
+through `@fontsource/fira-code`. Fira Code is © The Fira Code Project Authors
+and licensed under the SIL Open Font License 1.1
+(<https://openfontlicense.org>); the font files are served locally and never
+fetched at runtime.

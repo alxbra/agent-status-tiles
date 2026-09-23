@@ -8,8 +8,3 @@ body,
   background: transparent;
   pointer-events: none;
 }
-
-/* The context-menu portal sits outside .status-tiles and stays interactive. */
-[data-slot='context-menu-content'] {
-  pointer-events: auto;
-}

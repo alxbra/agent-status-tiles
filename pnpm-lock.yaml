@@ -23,6 +23,9 @@ importers:
       '@eslint/js':
         specifier: ^10.0.1
         version: 10.0.1(eslint@10.10.0(jiti@2.7.0))
+      '@fontsource/fira-code':
+        specifier: ^5.3.0
+        version: 5.3.0
       '@playwright/test':
         specifier: ^1.63.0
         version: 1.63.0
@@ -882,6 +885,12 @@ packages:
     resolution:
       {
         integrity: sha512-HpCo8tmWzLVad5s2d19EhAz5zqrrQ6s69qd6moPMQvkOuSwDT1YgRfWSVuc4ennqrgv3OHppiOGMQ7oC13yIww==,
+      }
+
+  '@fontsource/fira-code@5.3.0':
+    resolution:
+      {
+        integrity: sha512-EJL968RJRkakubAj/coU8pSUaeTE5UNoRjtzAr6kGiSZ3jWuN8/AKWHwym/PFUaQL1q7IL/H+EXs4358YhrTBQ==,
       }
 
   '@humanfs/core@0.19.2':
@@ -5751,6 +5760,8 @@ snapshots:
       react-dom: 19.3.0(react@19.3.0)
 
   '@floating-ui/utils@0.2.12': {}
+
+  '@fontsource/fira-code@5.3.0': {}
 
   '@humanfs/core@0.19.2':
     dependencies:
