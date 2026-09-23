@@ -93,7 +93,7 @@ export function claudeIssueSentence(issue: ClaudeIssue, action: ClaudeAction = '
     case 'helper-missing':
       return `The hook helper is missing from this app. Reinstall Agent Status Tiles, then ${step}.`;
     case 'helper-not-built':
-      return `The hook helper is not built in this checkout. Run pnpm build:hook-helper, then ${step}.`;
+      return `The hook helper is not built in this checkout. Run pnpm build:hook-helper -- --arch host, then ${step}.`;
     case 'helper-translocated':
       return `Move Agent Status Tiles to the Applications folder and reopen it, then ${step}.`;
     case 'helper-unusable':

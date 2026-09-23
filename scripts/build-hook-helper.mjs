@@ -5,8 +5,10 @@ import {
   copyFileSync,
   lstatSync,
   mkdirSync,
+  readdirSync,
   readFileSync,
   realpathSync,
+  renameSync,
   rmSync,
 } from 'node:fs';
 import { homedir } from 'node:os';
@@ -38,7 +40,8 @@ Builds the macOS hook-helper resource for the selected Electron architectures.
 The default is both supported architectures; host builds only this Mac's.
 Without HOOK_HELPER_CARGO, CARGO, or --cargo, Cargo is looked up on PATH, in
 ~/.cargo/bin, and in the stable rustup toolchains.
---if-missing skips the build when a valid helper is already in place.
+--if-missing skips the build when a valid helper newer than the Rust sources
+is already in place.
 --optional reports a failed build as a warning and exits successfully.`;
 
 /** Map `--arch host` to the architecture of the running Node.js process. */
@@ -208,7 +211,8 @@ export function validateBuiltHelper(arch) {
   return path;
 }
 
-function clearOutputRoot() {
+/** Validate the output root and create it; existing helpers stay until replaced. */
+function prepareOutputRoot() {
   const outputRoot = defaultOutputRoot;
   const outputParent = dirname(outputRoot);
   let resolvedParent;
@@ -240,8 +244,60 @@ function clearOutputRoot() {
       throw error;
     }
   }
-  rmSync(outputRoot, { force: true, recursive: true });
-  mkdirSync(outputRoot, { mode: 0o755 });
+  mkdirSync(outputRoot, { recursive: true, mode: 0o755 });
+}
+
+/**
+ * Replace one architecture's helper by renaming a verified copy over it, so
+ * installed hooks never see a missing or partial file and the other
+ * architecture's helper is left alone.
+ */
+function installHelper(cargoBinary, arch) {
+  const destination = getHelperBuildPath(arch);
+  const architectureDirectory = dirname(destination);
+  try {
+    const metadata = lstatSync(architectureDirectory);
+    if (metadata.isSymbolicLink()) {
+      throw new Error(`Refusing symlinked helper output: ${architectureDirectory}`);
+    }
+    if (!metadata.isDirectory()) rmSync(architectureDirectory, { force: true });
+  } catch (error) {
+    if (error.code !== 'ENOENT') throw error;
+  }
+  mkdirSync(architectureDirectory, { recursive: true, mode: 0o755 });
+  const staged = `${destination}.${String(process.pid)}.tmp`;
+  try {
+    copyFileSync(cargoBinary, staged);
+    chmodSync(staged, 0o755);
+    assertRegularExecutable(staged, arch);
+    renameSync(staged, destination);
+  } finally {
+    rmSync(staged, { force: true });
+  }
+  assertRegularExecutable(destination, arch);
+}
+
+/** The newest modification time among the helper's Rust sources, or 0. */
+function newestSourceTime() {
+  let newest = 0;
+  const visit = (path) => {
+    let metadata;
+    try {
+      metadata = lstatSync(path);
+    } catch {
+      return;
+    }
+    if (metadata.isSymbolicLink()) return;
+    if (metadata.isDirectory()) {
+      for (const entry of readdirSync(path)) visit(join(path, entry));
+    } else if (metadata.isFile()) {
+      newest = Math.max(newest, metadata.mtimeMs);
+    }
+  };
+  for (const source of ['Cargo.toml', 'Cargo.lock', 'src']) {
+    visit(join(dirname(manifestPath), source));
+  }
+  return newest;
 }
 
 function cargoVersion(cargoPath) {
@@ -271,10 +327,13 @@ function resolveCargo(cargoPath, cargoExplicit) {
   );
 }
 
+/** Valid helpers built after the last change to the Rust sources. */
 function helpersInPlace(architectures) {
+  const sourcesChangedAt = newestSourceTime();
   try {
-    for (const arch of architectures) validateBuiltHelper(arch);
-    return true;
+    return architectures.every(
+      (arch) => lstatSync(validateBuiltHelper(arch)).mtimeMs >= sourcesChangedAt,
+    );
   } catch {
     return false;
   }
@@ -293,19 +352,14 @@ function buildHookHelper({ cargoPath, cargoExplicit, architectures }) {
     }
   }
   const cargo = resolveCargo(cargoPath, cargoExplicit);
-  clearOutputRoot();
+  prepareOutputRoot();
 
   for (const arch of architectures) {
     const architecture = ARCHITECTURES[arch];
     runCargo(cargo, architecture.target);
     const cargoBinary = join(targetDirectory, architecture.target, 'release', 'hook-helper');
     assertRegularExecutable(cargoBinary, arch);
-
-    const destination = getHelperBuildPath(arch);
-    mkdirSync(dirname(destination), { recursive: true, mode: 0o755 });
-    copyFileSync(cargoBinary, destination);
-    chmodSync(destination, 0o755);
-    assertRegularExecutable(destination, arch);
+    installHelper(cargoBinary, arch);
   }
 }
 
@@ -322,7 +376,7 @@ function main() {
   } catch (error) {
     if (!options.optional) throw error;
     logger.warn(
-      `hook-helper was not built (${error.message}); Claude Code cannot connect until \`pnpm build:hook-helper\` succeeds.`,
+      `hook-helper was not built (${error.message}); Claude Code cannot connect until \`pnpm build:hook-helper -- --arch host\` succeeds.`,
     );
     return;
   }

@@ -67,7 +67,7 @@ describe('claude readiness', () => {
       issue: 'helper-not-built',
     });
     expect(claudeIssueSentence('helper-not-built', 'connect')).toBe(
-      'The hook helper is not built in this checkout. Run pnpm build:hook-helper, then connect again.',
+      'The hook helper is not built in this checkout. Run pnpm build:hook-helper -- --arch host, then connect again.',
     );
     for (const code of [
       'unsupported-architecture',
