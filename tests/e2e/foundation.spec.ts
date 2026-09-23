@@ -622,7 +622,7 @@ for (const testSessionCount of [0, 1, 12, 30]) {
 for (const testSessionCount of [1, 12]) {
   test(`keeps island hit regions bounded for ${String(testSessionCount)} synthetic sessions`, async () => {
     test.skip(process.platform !== 'darwin', 'the desktop shell targets macOS');
-    const userDataDir = await mkdtemp(join(tmpdir(), 'agent-status-tiles-portal-e2e-'));
+    const userDataDir = await mkdtemp(join(tmpdir(), 'agent-status-tiles-island-region-e2e-'));
     let application: ElectronApplication | undefined;
 
     try {

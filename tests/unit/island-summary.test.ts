@@ -82,7 +82,7 @@ describe('compact island summary', () => {
     expect(summary.target?.id).toBe('claude:three');
   });
 
-  it('ignores archived and child threads like the tab dock did', () => {
+  it('ignores archived threads and spawned child threads', () => {
     const summary = summarizeIsland([
       session({ status: 'needs-input', isArchived: true }),
       session({ id: 'codex:child', status: 'working', isTopLevel: false }),

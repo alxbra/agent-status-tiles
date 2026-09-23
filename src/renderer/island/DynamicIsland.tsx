@@ -134,11 +134,16 @@ export function DynamicIsland({
     ) {
       return;
     }
-    const pill = pillRef.current;
-    // An entry that arrives before the island renders is handled once it does.
-    if (pill === null) return;
-    handledKeyboardEntryRevisionRef.current = keyboardEntryRevision;
-    window.requestAnimationFrame(() => pill.focus());
+    // An entry that arrives before the island renders is handled once it
+    // does; it only counts as handled once the pill actually takes focus.
+    if (pillRef.current === null) return undefined;
+    const frame = window.requestAnimationFrame(() => {
+      const pill = pillRef.current;
+      if (pill === null || !pill.isConnected) return;
+      handledKeyboardEntryRevisionRef.current = keyboardEntryRevision;
+      pill.focus();
+    });
+    return () => window.cancelAnimationFrame(frame);
   }, [keyboardEntryRevision, hasSessions]);
 
   useEffect(() => {
@@ -205,8 +210,6 @@ export function DynamicIsland({
           type="button"
           aria-label={ariaLabel}
           aria-disabled={target === null || !target.canOpen}
-          data-tone={summary.dots.at(-1)}
-          data-session-id={target?.id}
           onPointerDown={handlePointerDown}
           onPointerCancel={() => {
             capturedTargetRef.current = null;

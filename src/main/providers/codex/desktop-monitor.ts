@@ -169,7 +169,7 @@ export class CodexSurfaceMonitor implements ProviderSurfaceMonitor {
   async discover(): Promise<RuntimeDiscoveryResult> {
     if (!this.started || this.catalog === undefined) throw new Error(`${this.surface}-not-started`);
     // A single live page, newest first, is the whole product surface. Threads
-    // beyond it are older than anything the dock can show, so the page is
+    // beyond it are older than anything the overlay can show, so the page is
     // complete even when the app-server reports a continuation cursor.
     const page = await this.catalog.listThreads({
       pageSize: RECENT_THREAD_DISCOVERY_WINDOW,

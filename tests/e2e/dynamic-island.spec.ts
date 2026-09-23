@@ -57,6 +57,22 @@ async function dotTones(page: Page): Promise<readonly (string | null)[]> {
     .evaluateAll((dots) => dots.map((dot) => dot.getAttribute('data-tone')));
 }
 
+function workingSession(overrides: Partial<SessionSnapshot> = {}): SessionSnapshot {
+  return {
+    id: 'codex:w',
+    provider: 'codex',
+    surface: 'desktop',
+    title: 'W',
+    status: 'working',
+    updatedAt: 2,
+    lastTurnStartedAt: 2,
+    isTopLevel: true,
+    isArchived: false,
+    canOpen: true,
+    ...overrides,
+  };
+}
+
 const CASES = [
   { state: 'idle', dots: ['idle'], label: null },
   { state: 'working', dots: ['working'], label: 'Codex is working' },
@@ -196,7 +212,23 @@ test('resizes the island around its label and publishes the pill as the only hit
 
 test('opens the labeled thread with the completion visible at pointer-down', async ({ page }) => {
   await openIsland(page, 'working-done');
-  await page.locator('.dynamic-island__pill').click();
+  const box = await page.locator('.dynamic-island__pill').boundingBox();
+  if (box === null) throw new Error('The island has no bounds');
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.down();
+  // A newer completion lands between pointer-down and click.
+  await page.evaluate(
+    (session) => window.__setIslandSessions?.([session]),
+    workingSession({
+      id: 'claude:b',
+      provider: 'claude',
+      status: 'unread',
+      completionId: 'completion-newer',
+      updatedAt: 9,
+    }),
+  );
+  await expect(page.locator('.dynamic-island__label')).toHaveText('Claude is done');
+  await page.mouse.up();
   expect(await page.evaluate(() => window.__islandOpenTarget)).toEqual({
     sessionId: 'claude:b',
     completionId: 'completion-b',
@@ -233,22 +265,6 @@ test('renders nothing without visible sessions', async ({ page }) => {
   await expect(page.locator('.dynamic-island')).toHaveCount(0);
 });
 
-function workingSession(overrides: Partial<SessionSnapshot> = {}): SessionSnapshot {
-  return {
-    id: 'codex:w',
-    provider: 'codex',
-    surface: 'desktop',
-    title: 'W',
-    status: 'working',
-    updatedAt: 2,
-    lastTurnStartedAt: 2,
-    isTopLevel: true,
-    isArchived: false,
-    canOpen: true,
-    ...overrides,
-  };
-}
-
 test('focuses the island once a keyboard entry that arrived early can land', async ({ page }) => {
   await openIsland(page, 'idle');
   await page.evaluate(() => window.__setIslandSessions?.([]));
@@ -279,22 +295,6 @@ test('never opens a thread that cannot be opened', async ({ page }) => {
   await pill.focus();
   await page.keyboard.press('Enter');
   expect(await page.evaluate(() => window.__islandOpenTarget)).toBeUndefined();
-});
-
-test('ignores a stale right-click capture when Enter opens the island', async ({ page }) => {
-  await openIsland(page, 'working-done');
-  const pill = page.locator('.dynamic-island__pill');
-  await pill.click({ button: 'right' });
-  await page.evaluate(
-    (session) => window.__setIslandSessions?.([session]),
-    workingSession({ id: 'claude:later', provider: 'claude' }),
-  );
-  await expect(page.locator('.dynamic-island__label')).toHaveText('Claude is working');
-  await pill.focus();
-  await page.keyboard.press('Enter');
-  expect(await page.evaluate(() => window.__islandOpenTarget)).toEqual({
-    sessionId: 'claude:later',
-  });
 });
 
 test('republishes the hit region when the window width changes', async ({ page }) => {

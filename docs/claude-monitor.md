@@ -34,13 +34,13 @@ when the newest identified record carries `host: claude-desktop` or
 `entrypoint: claude-desktop`, and `cli` otherwise, including an unrecognised
 host such as an IDE terminal. A session that moves surfaces (`/desktop`,
 `/resume`) changes cohort when its newest record does; the coordinator's owner
-reconciliation keeps one tile on the most recently confirmed surface.
+reconciliation keeps one session on the most recently confirmed surface.
 
 Each monitor reports the newest `RECENT_THREAD_DISCOVERY_WINDOW` journals of
 its own surface whose newest record is not `SessionEnd`, following the
 [PR #33 cohort contract](../MVP_PLAN.md): the page is complete, an unreported
 session is dropped by the coordinator whatever its status, and it reappears
-when its journal grows again. An ended session therefore leaves the dock on
+when its journal grows again. An ended session therefore leaves the overlay on
 the next 2 s discovery, including one that ended unread; unlike a Codex thread
 that aged off the page, an ended Claude session only returns if it is resumed
 into the same session ID. A session killed without `SessionEnd` keeps its last
@@ -81,7 +81,7 @@ days (`JOURNAL_ABANDONED_RETENTION_MS`) and nothing refers to it any more.
 Hooks record activity, not liveness, so a session that merely sat at a prompt
 for a month looks the same as a killed one; the guard is the cohort, not the
 clock: a journal still in its surface's cohort (the discovery section's
-window over the inspected listing) keeps its tile and its files however old
+window over the inspected listing) keeps its session and its files however old
 it is (a killed session keeps its last state until it ages out of the window,
 as the discovery section says), so a light install never collects a killed
 session, and beyond the window killed sessions are held for at most thirty
@@ -209,7 +209,7 @@ ordinary tool failure never reddens a session. `Stop` and `StopFailure` close th
 late record after them is plain activity the reducer ignores. In a parallel
 tool batch, another tool finishing while one permission prompt is still open
 resolves that prompt too: confirmed activity means the user acted, and a
-denied permission would otherwise leave the tile waiting forever; the prompt
+denied permission would otherwise leave the session waiting forever; the prompt
 notification re-opens the wait if the dialog is still up.
 
 ## Connecting

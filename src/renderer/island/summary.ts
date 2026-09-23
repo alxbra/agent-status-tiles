@@ -13,7 +13,7 @@ export interface IslandSummary {
   target: SessionSnapshot | null;
 }
 
-export const ISLAND_PROVIDER_NAME: Record<Provider, string> = {
+const ISLAND_PROVIDER_NAME: Record<Provider, string> = {
   codex: 'Codex',
   claude: 'Claude',
 };

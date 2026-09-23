@@ -85,11 +85,10 @@ export function OverlayApp(): ReactElement {
   );
 
   useEffect(() => {
-    window.addEventListener('resize', publishCurrentHitRegions);
+    // The island observes its own root and pill, so it republishes on resize.
     publishCurrentHitRegions();
 
     return () => {
-      window.removeEventListener('resize', publishCurrentHitRegions);
       islandRegionsRef.current = [];
       regionPublisherRef.current?.stop();
       void overlayApi.publishHitRegions([]).catch(() => undefined);
@@ -100,7 +99,7 @@ export function OverlayApp(): ReactElement {
     return overlayApi.openSession(target);
   }, []);
   const keyboardExit = useCallback(() => {
-    if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
+    // The island has already blurred the focused element.
     void overlayApi.requestKeyboardExit().catch(() => undefined);
   }, []);
 

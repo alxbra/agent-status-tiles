@@ -2,19 +2,19 @@
 
 ## Status (2026-09-17)
 
-| Plan PR                                | Delivered as                                                                                                                           | Merge     |
-| -------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- | --------- |
-| 1 hook identity                        | [#36](https://github.com/alxbra/agent-status-tiles/pull/36)                                                                            | `6faaad2` |
-| 2 hook installer                       | [#37](https://github.com/alxbra/agent-status-tiles/pull/37)                                                                            | `a6778ad` |
-| 3 bundle provider rows                 | [#35](https://github.com/alxbra/agent-status-tiles/pull/35)                                                                            | `e038791` |
-| 4 observation                          | [#38](https://github.com/alxbra/agent-status-tiles/pull/38)                                                                            | `a7044a7` |
-| 5 connect                              | [#39](https://github.com/alxbra/agent-status-tiles/pull/39)                                                                            | `a66f805` |
-| 6 binary override                      | deferred                                                                                                                               |           |
-| 7 evidence                             | [#40](https://github.com/alxbra/agent-status-tiles/pull/40): merge record and this status; the live validation record is still pending | `1dc7ad8` |
-| 3.4 follow-up: managed hooks           | [#41](https://github.com/alxbra/agent-status-tiles/pull/41)                                                                            | `a4feaa8` |
-| journal collection                     | [#42](https://github.com/alxbra/agent-status-tiles/pull/42)                                                                            | `8906f06` |
-| journal collection: abandoned sessions | [#46](https://github.com/alxbra/agent-status-tiles/pull/46)                                                                            | `cb31ddd` |
-| live-turn and title fixes              | [#43](https://github.com/alxbra/agent-status-tiles/pull/43)                                                                            | `c851eab` |
+| Plan PR | Delivered as | Merge |
+| --- | --- | --- |
+| 1 hook identity | [#36](https://github.com/alxbra/agent-status-tiles/pull/36) | `6faaad2` |
+| 2 hook installer | [#37](https://github.com/alxbra/agent-status-tiles/pull/37) | `a6778ad` |
+| 3 bundle provider rows | [#35](https://github.com/alxbra/agent-status-tiles/pull/35) | `e038791` |
+| 4 observation | [#38](https://github.com/alxbra/agent-status-tiles/pull/38) | `a7044a7` |
+| 5 connect | [#39](https://github.com/alxbra/agent-status-tiles/pull/39) | `a66f805` |
+| 6 binary override | deferred | |
+| 7 evidence | [#40](https://github.com/alxbra/agent-status-tiles/pull/40): merge record and this status; the live validation record is still pending | `1dc7ad8` |
+| 3.4 follow-up: managed hooks | [#41](https://github.com/alxbra/agent-status-tiles/pull/41) | `a4feaa8` |
+| journal collection | [#42](https://github.com/alxbra/agent-status-tiles/pull/42) | `8906f06` |
+| journal collection: abandoned sessions | [#46](https://github.com/alxbra/agent-status-tiles/pull/46) | `cb31ddd` |
+| live-turn and title fixes | [#43](https://github.com/alxbra/agent-status-tiles/pull/43) | `c851eab` |
 
 Still open after these merges: the live verification matrix in section 5
 (real Claude Desktop and terminal sessions, hook coexistence, restart, uninstall,
@@ -144,13 +144,13 @@ against the current hooks documentation:
 The helper adds optional fields to its record (schema stays version 1,
 additive; the reader projects them and keeps rejecting unknown keys):
 
-| Field            | Source                               | Allowed values                                                                       |
-| ---------------- | ------------------------------------ | ------------------------------------------------------------------------------------ |
-| `host`           | `__CFBundleIdentifier`               | `claude-desktop`, `terminal`, `iterm2`, `ghostty`, `warp`; omitted for anything else |
-| `entrypoint`     | `CLAUDE_CODE_ENTRYPOINT`             | `claude-desktop`, `cli`; omitted otherwise                                           |
-| `is_subagent`    | presence of `agent_id` in hook input | boolean                                                                              |
-| `session_source` | `SessionStart.source`                | the five documented values                                                           |
-| `end_reason`     | `SessionEnd.reason`                  | the five documented values                                                           |
+| Field | Source | Allowed values |
+|---|---|---|
+| `host` | `__CFBundleIdentifier` | `claude-desktop`, `terminal`, `iterm2`, `ghostty`, `warp`; omitted for anything else |
+| `entrypoint` | `CLAUDE_CODE_ENTRYPOINT` | `claude-desktop`, `cli`; omitted otherwise |
+| `is_subagent` | presence of `agent_id` in hook input | boolean |
+| `session_source` | `SessionStart.source` | the five documented values |
+| `end_reason` | `SessionEnd.reason` | the five documented values |
 
 Surface rule: `host == claude-desktop` or `entrypoint == claude-desktop` gives
 `desktop`. Everything else gives `cli`, with the terminal owner recorded when
@@ -185,7 +185,7 @@ are covered by the reader's inode-tracked cursors.
 
 A session that moves between surfaces (`/desktop`, `/resume`) shows up in the
 other monitor's cohort once its newest record carries the new host; the
-coordinator's owner reconciliation already keeps one tile on the most recently
+coordinator's owner reconciliation already keeps one session on the most recently
 confirmed surface, and the old surface drops it on its next discovery.
 
 ### 3.3 Event normalization
@@ -194,19 +194,19 @@ confirmed surface, and the old surface drops it on its next discovery.
 a turn key (implemented as the `UserPromptSubmit` receipt time; see the status
 note above):
 
-| Journal event                                                                                                                                                                                          | SessionEvent                                                                                 |
-| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------- |
-| `SessionStart`                                                                                                                                                                                         | none (discovery only); `source: resume` keeps the existing record                            |
-| `UserPromptSubmit`                                                                                                                                                                                     | `turn-started`                                                                               |
-| `PreToolUse` / `PostToolUse` (not `AskUserQuestion`)                                                                                                                                                   | `activity`                                                                                   |
-| `PermissionRequest`, `PreToolUse{AskUserQuestion}`, `Elicitation`, `Notification{permission_prompt, elicitation_dialog}`                                                                               | `input-requested`; `callId` = `tool_call_id`, `elicitation_id`, or a notification-derived id |
-| `PostToolUse{AskUserQuestion}`, `PostToolUse` for a pending call id, `ElicitationResult`, `Notification{elicitation_complete, elicitation_response}`, next `PreToolUse`/`Stop` while a request is open | `input-resolved`                                                                             |
-| `Stop` with `stop_hook_active` false or absent                                                                                                                                                         | `turn-completed`; `completionId` derived from the turn key and the receipt time              |
-| `Stop` with `stop_hook_active` true                                                                                                                                                                    | `activity`                                                                                   |
-| `StopFailure`                                                                                                                                                                                          | `turn-failed`                                                                                |
-| `PostToolUseFailure`                                                                                                                                                                                   | `activity` (ordinary tool failures never redden the session)                                 |
-| `SessionEnd`                                                                                                                                                                                           | none; affects the discovery cohort                                                           |
-| any event with `is_subagent` true, except waiting signals                                                                                                                                              | `activity` on the parent                                                                     |
+| Journal event | SessionEvent |
+|---|---|
+| `SessionStart` | none (discovery only); `source: resume` keeps the existing record |
+| `UserPromptSubmit` | `turn-started` |
+| `PreToolUse` / `PostToolUse` (not `AskUserQuestion`) | `activity` |
+| `PermissionRequest`, `PreToolUse{AskUserQuestion}`, `Elicitation`, `Notification{permission_prompt, elicitation_dialog}` | `input-requested`; `callId` = `tool_call_id`, `elicitation_id`, or a notification-derived id |
+| `PostToolUse{AskUserQuestion}`, `PostToolUse` for a pending call id, `ElicitationResult`, `Notification{elicitation_complete, elicitation_response}`, next `PreToolUse`/`Stop` while a request is open | `input-resolved` |
+| `Stop` with `stop_hook_active` false or absent | `turn-completed`; `completionId` derived from the turn key and the receipt time |
+| `Stop` with `stop_hook_active` true | `activity` |
+| `StopFailure` | `turn-failed` |
+| `PostToolUseFailure` | `activity` (ordinary tool failures never redden the session) |
+| `SessionEnd` | none; affects the discovery cohort |
+| any event with `is_subagent` true, except waiting signals | `activity` on the parent |
 
 Duplicates are dropped by the reader's `eventIdentity`; stale turns by the
 reducer's current-turn rule. `Notification{idle_prompt}` is ignored for state.
@@ -341,15 +341,15 @@ The `host` field recorded in 3.1 is what a later navigation slice will consume.
 Each PR: one concern, tests included, format/lint/types/unit/build/E2E, one
 CodeRabbit pass, two QA passes, evidence row in `MVP_PLAN.md`.
 
-| #            | Branch                           | Content                                                                                                                                                                                                                                                                                                                                                                            | Main files                                                                                                                                                                                                                                                                        |
-| ------------ | -------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 1            | `feat/claude-hook-identity`      | Helper records `host`, `entrypoint`, `is_subagent`, `session_source`, `end_reason` from allowlists; reader projects them; docs and native tests                                                                                                                                                                                                                                    | `crates/hook-helper/src/lib.rs`, `crates/hook-helper/tests/native.rs`, `src/main/providers/hooks/hook-journal-reader.ts`, `docs/hook-helper.md`, `docs/hook-journal-reader.md`                                                                                                    |
-| 2            | `feat/claude-hook-installer`     | Helper path resolver; owned-hook install/verify/remove for `~/.claude/settings.json` with a HOME override for tests; no UI wiring                                                                                                                                                                                                                                                  | `src/main/providers/claude/helper-path.ts`, `src/main/providers/claude/hook-installer.ts`, `tests/unit/claude-hook-installer.test.ts`                                                                                                                                             |
-| 3            | `feat/bundle-provider-rows`      | `codex`/`claude` keys, two-surface connect with rollback, quiet-unavailable rule, migration of one-partition checkpoints, Repair channel, dialog copy, `AGENTS.md` line, settings E2E (Codex only; Claude row still unavailable)                                                                                                                                                   | `src/shared/settings.ts`, `src/shared/ipc.ts`, `src/main/index.ts`, `src/main/settings-ipc.ts`, `src/preload/index.ts`, `src/renderer/App.tsx`, `src/renderer/settings/SettingsView.tsx`, `tests/fixtures/settings-view/main.tsx`, `tests/e2e/settings-view.spec.ts`, `AGENTS.md` |
-| 4            | `feat/claude-observation`        | Journal discovery honoring the PR #33 cohort contract, event normalizer, `ClaudeSurfaceMonitor` with Desktop and CLI subclasses, coordinator registration, test env override for the journal root, sanitized journal fixtures, native E2E writing journals directly and asserting working, waiting, unread, error, ended-session pruning, restart replay, and baseline suppression | `src/main/providers/claude/{discovery,events,surface-monitor,desktop-monitor,cli-monitor}.ts`, `src/main/index.ts`, `tests/unit/claude-*.test.ts`, `tests/fixtures/claude/`, `tests/e2e/claude-*.spec.ts`                                                                         |
-| 5            | `feat/claude-connect`            | Enable the Claude row: connect installs hooks and both partitions, disconnect removes owned hooks, Repair rewrites them, health-to-sentence mapping, settings E2E                                                                                                                                                                                                                  | `src/main/index.ts`, `src/main/providers/claude/hook-installer.ts`, `tests/e2e/settings-view.spec.ts`, `tests/unit/settings-connection.test.ts`                                                                                                                                   |
-| 6 (deferred) | `feat/codex-cli-binary-override` | Advanced screen with the `Codex CLI` path field and native picker, preference persistence, override resolver, `codex:cli` restart on change, unit and settings E2E                                                                                                                                                                                                                 | `src/main/desktop-preferences.ts`, `src/main/providers/codex/configured-binary-resolver.ts`, `src/main/index.ts`, `src/shared/settings.ts`, `src/shared/ipc.ts`, `src/preload/index.ts`, `src/renderer/settings/AdvancedView.tsx`, tests                                          |
-| 7            | `docs/claude-epic-evidence`      | Merge record and plan status (PR #40); the live Desktop and terminal validation record and the Epic 5 and 7 checkbox updates follow the live matrix                                                                                                                                                                                                                                | `MVP_PLAN.md`                                                                                                                                                                                                                                                                     |
+| # | Branch | Content | Main files |
+|---|---|---|---|
+| 1 | `feat/claude-hook-identity` | Helper records `host`, `entrypoint`, `is_subagent`, `session_source`, `end_reason` from allowlists; reader projects them; docs and native tests | `crates/hook-helper/src/lib.rs`, `crates/hook-helper/tests/native.rs`, `src/main/providers/hooks/hook-journal-reader.ts`, `docs/hook-helper.md`, `docs/hook-journal-reader.md` |
+| 2 | `feat/claude-hook-installer` | Helper path resolver; owned-hook install/verify/remove for `~/.claude/settings.json` with a HOME override for tests; no UI wiring | `src/main/providers/claude/helper-path.ts`, `src/main/providers/claude/hook-installer.ts`, `tests/unit/claude-hook-installer.test.ts` |
+| 3 | `feat/bundle-provider-rows` | `codex`/`claude` keys, two-surface connect with rollback, quiet-unavailable rule, migration of one-partition checkpoints, Repair channel, dialog copy, `AGENTS.md` line, settings E2E (Codex only; Claude row still unavailable) | `src/shared/settings.ts`, `src/shared/ipc.ts`, `src/main/index.ts`, `src/main/settings-ipc.ts`, `src/preload/index.ts`, `src/renderer/App.tsx`, `src/renderer/settings/SettingsView.tsx`, `tests/fixtures/settings-view/main.tsx`, `tests/e2e/settings-view.spec.ts`, `AGENTS.md` |
+| 4 | `feat/claude-observation` | Journal discovery honoring the PR #33 cohort contract, event normalizer, `ClaudeSurfaceMonitor` with Desktop and CLI subclasses, coordinator registration, test env override for the journal root, sanitized journal fixtures, native E2E writing journals directly and asserting working, waiting, unread, error, ended-session pruning, restart replay, and baseline suppression | `src/main/providers/claude/{discovery,events,surface-monitor,desktop-monitor,cli-monitor}.ts`, `src/main/index.ts`, `tests/unit/claude-*.test.ts`, `tests/fixtures/claude/`, `tests/e2e/claude-*.spec.ts` |
+| 5 | `feat/claude-connect` | Enable the Claude row: connect installs hooks and both partitions, disconnect removes owned hooks, Repair rewrites them, health-to-sentence mapping, settings E2E | `src/main/index.ts`, `src/main/providers/claude/hook-installer.ts`, `tests/e2e/settings-view.spec.ts`, `tests/unit/settings-connection.test.ts` |
+| 6 (deferred) | `feat/codex-cli-binary-override` | Advanced screen with the `Codex CLI` path field and native picker, preference persistence, override resolver, `codex:cli` restart on change, unit and settings E2E | `src/main/desktop-preferences.ts`, `src/main/providers/codex/configured-binary-resolver.ts`, `src/main/index.ts`, `src/shared/settings.ts`, `src/shared/ipc.ts`, `src/preload/index.ts`, `src/renderer/settings/AdvancedView.tsx`, tests |
+| 7 | `docs/claude-epic-evidence` | Merge record and plan status (PR #40); the live Desktop and terminal validation record and the Epic 5 and 7 checkbox updates follow the live matrix | `MVP_PLAN.md` |
 
 PRs 1, 2, and 3 are independent of each other; 4 needs 1; 5 needs 2, 3, and 4;
 6 needs 3 and can run in parallel with 4 and 5.

@@ -351,7 +351,7 @@ The published Claude link documentation describes opening chats and starting Cod
 - Store no prompt or transcript content and send no telemetry.
 - Export diagnostics without session titles, project paths, credentials, or agent content.
 - Bound event size, history retention, filesystem reads, and retry queues.
-- Stop background animation work when the strip is hidden.
+- Stop background animation work when the island is hidden.
 
 ## 4. PR and hardening workflow
 
