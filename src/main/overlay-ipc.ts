@@ -10,6 +10,7 @@ import {
   OVERLAY_IPC_CHANNELS,
   type OverlayActionResult,
   type OverlayHitRegion,
+  type OverlayOpenSessionRequest,
   type OverlayState,
 } from '../shared/overlay-ipc';
 
@@ -19,6 +20,8 @@ export interface OverlayIpcOptions {
   setHitRegions: (regions: readonly OverlayHitRegion[]) => boolean;
   onKeyboardExit?: () => void;
   onRendererReady?: () => void;
+  /** Opens a thread the island shows; without it, clicks report unavailable. */
+  openSession?: (request: OverlayOpenSessionRequest) => Promise<OverlayActionResult>;
 }
 
 function assertOverlaySender(
@@ -73,13 +76,12 @@ export function registerOverlayIpcHandlers(options: OverlayIpcOptions): () => vo
 
   ipcMain.handle(
     OVERLAY_IPC_CHANNELS.openSession,
-    (event, payload: unknown): OverlayActionResult => {
+    async (event, payload: unknown): Promise<OverlayActionResult> => {
       assertSender(event);
       if (!isOverlayOpenSessionRequest(payload)) {
         throw new Error('Overlay open-session request is invalid');
       }
-      // Navigation is deliberately outside this bounded bridge slice.
-      return OVERLAY_ACTION_UNAVAILABLE;
+      return options.openSession?.(payload) ?? OVERLAY_ACTION_UNAVAILABLE;
     },
   );
 

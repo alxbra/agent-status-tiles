@@ -51,6 +51,14 @@ async function openIsland(page: Page, state: string, query = ''): Promise<void> 
   );
   await expect(page.locator('.dynamic-island__pill')).toBeVisible();
   await page.evaluate(() => document.fonts.ready);
+  // Let the width spring settle so pointer tests aim at columns that stay put.
+  await expect
+    .poll(() =>
+      page
+        .locator('.dynamic-island__shape')
+        .evaluate((shape) => getComputedStyle(shape).width === (shape as HTMLElement).style.width),
+    )
+    .toBe(true);
 }
 
 function screenshotPath(name: string): string {
@@ -113,7 +121,10 @@ for (const { state, columns: expected, label } of CASES) {
   test(`renders the ${state} harness columns`, async ({ page }) => {
     await openIsland(page, state);
     expect(await columns(page)).toEqual(expected);
-    await expect(page.locator('.dynamic-island__pill')).toHaveAttribute('aria-label', label);
+    const labels = await page
+      .locator('.dynamic-island__harness')
+      .evaluateAll((cells) => cells.map((cell) => cell.getAttribute('aria-label')));
+    expect(labels.join(', ')).toBe(label);
     await page.waitForTimeout(500);
     await page.screenshot({ path: screenshotPath(state), animations: 'disabled' });
   });
@@ -308,44 +319,97 @@ test('publishes the pill as the only hit region, centered at the top', async ({ 
     .toEqual({ top: 0, height: 32, centered: true, regionCount: 1, matchesPill: true });
 });
 
+function column(page: Page, provider: 'codex' | 'claude') {
+  return page.locator(`.dynamic-island__harness[data-provider="${provider}"]`);
+}
+
+test("opens each column's own harness thread", async ({ page }) => {
+  await openIsland(page, 'mixed');
+  await column(page, 'codex').click();
+  expect(await page.evaluate(() => window.__islandOpenTarget)).toEqual({ sessionId: 'codex:a' });
+  await column(page, 'claude').click();
+  expect(await page.evaluate(() => window.__islandOpenTarget)).toEqual({ sessionId: 'claude:b' });
+});
+
 test('opens the thread shown at pointer-down', async ({ page }) => {
   await openIsland(page, 'working');
-  const box = await page.locator('.dynamic-island__pill').boundingBox();
-  if (box === null) throw new Error('The island has no bounds');
+  const box = await column(page, 'codex').boundingBox();
+  if (box === null) throw new Error('The Codex column has no bounds');
   await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
   await page.mouse.down();
-  // Another thread starts waiting for input between pointer-down and click.
+  // Another Codex thread starts waiting for input between pointer-down and click.
   await page.evaluate(
-    (session) => window.__setIslandSessions?.([session]),
-    workingSession({ id: 'claude:later', provider: 'claude', status: 'needs-input', updatedAt: 9 }),
+    (sessions) => window.__setIslandSessions?.(sessions),
+    [
+      workingSession({ id: 'codex:a' }),
+      workingSession({ id: 'codex:later', status: 'needs-input', updatedAt: 9 }),
+    ],
   );
-  await expect.poll(() => columns(page)).toEqual(['Codex:idle', 'Claude:needs-input']);
+  await expect.poll(() => columns(page)).toEqual(['Codex:needs-input', 'Claude:idle']);
   await page.mouse.up();
   expect(await page.evaluate(() => window.__islandOpenTarget)).toEqual({ sessionId: 'codex:a' });
 });
 
-test('does nothing when an idle island is clicked', async ({ page }) => {
+test('opens the just-finished thread while its green cue shows', async ({ page }) => {
   await openIsland(page, 'idle');
-  const pill = page.locator('.dynamic-island__pill');
-  await expect(pill).toHaveAttribute('aria-disabled', 'true');
-  // aria-disabled keeps the idle island out of Playwright's actionability checks.
-  await pill.click({ force: true });
+  const running = [
+    workingSession({ id: 'codex:a' }),
+    workingSession({ id: 'codex:b', updatedAt: 3 }),
+  ];
+  await page.evaluate((sessions) => window.__setIslandSessions?.(sessions), running);
+  await expect.poll(() => columns(page)).toEqual(['Codex:working', 'Claude:idle']);
+  await page.evaluate(
+    (sessions) => window.__setIslandSessions?.(sessions),
+    [
+      workingSession({ id: 'codex:a', status: 'unread', completionId: 'done-a' }),
+      workingSession({ id: 'codex:b', updatedAt: 3 }),
+    ],
+  );
+  await expect.poll(() => columns(page)).toEqual(['Codex:finished', 'Claude:idle']);
+  await column(page, 'codex').click();
+  expect(await page.evaluate(() => window.__islandOpenTarget)).toEqual({
+    sessionId: 'codex:a',
+    completionId: 'done-a',
+  });
+});
+
+test("opens an idle harness's latest thread and nothing for a harness without one", async ({
+  page,
+}) => {
+  await openIsland(page, 'idle');
+  await page.evaluate(
+    (sessions) => window.__setIslandSessions?.(sessions),
+    [
+      workingSession({ id: 'codex:old', status: 'idle', updatedAt: 1 }),
+      workingSession({ id: 'codex:new', status: 'idle', updatedAt: 5 }),
+    ],
+  );
+  await column(page, 'codex').click();
+  expect(await page.evaluate(() => window.__islandOpenTarget)).toEqual({ sessionId: 'codex:new' });
+  await page.evaluate(() => {
+    window.__islandOpenTarget = undefined;
+  });
+  const claude = column(page, 'claude');
+  await expect(claude).toHaveAttribute('aria-disabled', 'true');
+  // aria-disabled keeps the empty column out of Playwright's actionability checks.
+  await claude.click({ force: true });
   expect(await page.evaluate(() => window.__islandOpenTarget)).toBeUndefined();
 });
 
 test('takes keyboard focus from the menu bar entry and leaves it on Escape', async ({ page }) => {
-  await openIsland(page, 'needs-input');
+  await openIsland(page, 'mixed');
   await page.evaluate(() => window.__triggerKeyboardEntry?.());
-  const pill = page.locator('.dynamic-island__pill');
-  await expect(pill).toBeFocused();
+  // Focus lands on the harness waiting for input.
+  const claude = column(page, 'claude');
+  await expect(claude).toBeFocused();
   await page.keyboard.press('Enter');
-  // A thread waiting for input is the most urgent one to open.
-  expect(await page.evaluate(() => window.__islandOpenTarget)).toEqual({
-    sessionId: 'codex:c',
-  });
-  await pill.focus();
+  expect(await page.evaluate(() => window.__islandOpenTarget)).toEqual({ sessionId: 'claude:b' });
+  await page.keyboard.press('Shift+Tab');
+  await expect(column(page, 'codex')).toBeFocused();
+  await page.keyboard.press('Enter');
+  expect(await page.evaluate(() => window.__islandOpenTarget)).toEqual({ sessionId: 'codex:a' });
   await page.keyboard.press('Escape');
-  await expect(pill).not.toBeFocused();
+  await expect(column(page, 'codex')).not.toBeFocused();
   expect(await page.evaluate(() => window.__islandKeyboardExits)).toBe(1);
 });
 
@@ -361,13 +425,13 @@ test('focuses the island once a keyboard entry that arrived early can land', asy
   await expect(page.locator('.dynamic-island')).toHaveCount(0);
   await page.evaluate(() => window.__triggerKeyboardEntry?.());
   await page.evaluate((session) => window.__setIslandSessions?.([session]), workingSession());
-  await expect(page.locator('.dynamic-island__pill')).toBeFocused();
+  await expect(column(page, 'codex')).toBeFocused();
 });
 
-test('leaves keyboard mode on Escape even when the pill lost focus', async ({ page }) => {
+test('leaves keyboard mode on Escape even when the column lost focus', async ({ page }) => {
   await openIsland(page, 'working');
   await page.evaluate(() => window.__triggerKeyboardEntry?.());
-  await expect(page.locator('.dynamic-island__pill')).toBeFocused();
+  await expect(column(page, 'codex')).toBeFocused();
   await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
   await page.keyboard.press('Escape');
   expect(await page.evaluate(() => window.__islandKeyboardExits)).toBe(1);
@@ -379,10 +443,10 @@ test('never opens a thread that cannot be opened', async ({ page }) => {
     (session) => window.__setIslandSessions?.([session]),
     workingSession({ canOpen: false }),
   );
-  const pill = page.locator('.dynamic-island__pill');
-  await expect(pill).toHaveAttribute('aria-disabled', 'true');
-  await pill.click({ force: true });
-  await pill.focus();
+  const codex = column(page, 'codex');
+  await expect(codex).toHaveAttribute('aria-disabled', 'true');
+  await codex.click({ force: true });
+  await codex.focus();
   await page.keyboard.press('Enter');
   expect(await page.evaluate(() => window.__islandOpenTarget)).toBeUndefined();
 });

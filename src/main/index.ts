@@ -66,9 +66,19 @@ import { ClaudeCliMonitor, ClaudeDesktopMonitor } from './providers/claude/surfa
 import { ClaudeJournalDiscovery } from './providers/claude/journal-discovery';
 import { ClaudeSessionNames } from './providers/claude/session-names';
 import { ClaudeJournalCollector, claudeRetainedSet } from './providers/claude/journal-collector';
+import {
+  MacOsNavigator,
+  TERMINAL_SELECTION_OPTIONS,
+  type NavigationResult,
+  type QualifiedNavigationTarget,
+  type TerminalApplication,
+} from './navigation/macos-navigator';
+import { openIslandSession, type SessionNavigator } from './navigation/session-opener';
 
 const hasSingleInstanceLock = app.requestSingleInstanceLock();
 const TEST_KEYBOARD_ENTRY_HOOK = Symbol.for('agent-status-tiles.test.keyboard-entry');
+/** Test runtime only: the navigation targets island clicks produced, newest last. */
+const TEST_NAVIGATIONS = Symbol.for('agent-status-tiles.test.navigations');
 let menuBar: MenuBarController | null = null;
 let overlayController: OverlayController | null = null;
 let removeOverlayIpcHandlers: (() => void) | null = null;
@@ -131,6 +141,54 @@ function claudeIntegration(): ClaudeIntegration | undefined {
     managed: defaultClaudeManagedLocations(),
     dataDirectory,
   };
+}
+
+const TERMINAL_HOSTS: ReadonlySet<string> = new Set<TerminalApplication>([
+  'terminal',
+  'iterm2',
+  'ghostty',
+  'warp',
+]);
+
+/** The terminal a Claude CLI session's hook journal recorded as its host. */
+function claudeTerminalOwner(host: string | undefined): TerminalApplication | 'unknown' {
+  return host !== undefined && TERMINAL_HOSTS.has(host) ? (host as TerminalApplication) : 'unknown';
+}
+
+let navigator: SessionNavigator | null = null;
+
+/**
+ * The real navigator runs `/usr/bin/open`; the test runtime records targets
+ * instead, so E2E runs never switch the developer's frontmost app.
+ */
+function sessionNavigator(): SessionNavigator {
+  if (navigator !== null) return navigator;
+  if (isTestRuntime()) {
+    const targets: QualifiedNavigationTarget[] = [];
+    Reflect.defineProperty(globalThis, TEST_NAVIGATIONS, { configurable: true, value: targets });
+    navigator = {
+      navigate: (target) => {
+        targets.push(target);
+        const result: NavigationResult =
+          target.provider === 'codex' && target.surface === 'desktop'
+            ? { status: 'dispatched', target: 'session', application: 'codex-desktop' }
+            : target.surface === 'desktop'
+              ? { status: 'dispatched', target: 'application', application: 'claude-desktop' }
+              : target.owner === 'unknown'
+                ? {
+                    status: 'selection-required',
+                    target: 'application',
+                    reason: 'unknown-owner',
+                    options: TERMINAL_SELECTION_OPTIONS,
+                  }
+                : { status: 'dispatched', target: 'application', application: target.owner };
+        return Promise.resolve(result);
+      },
+    };
+  } else {
+    navigator = new MacOsNavigator();
+  }
+  return navigator;
 }
 
 function isTestRuntime(): boolean {
@@ -293,6 +351,7 @@ if (!hasSingleInstanceLock) {
     removeRuntimeLifecycleListeners = null;
     void runtimeCoordinator?.stop();
     Reflect.deleteProperty(globalThis, TEST_KEYBOARD_ENTRY_HOOK);
+    Reflect.deleteProperty(globalThis, TEST_NAVIGATIONS);
     removeSettingsIpcHandlers?.();
     removeSettingsIpcHandlers = null;
     removeAppIpcHandlers?.();
@@ -441,6 +500,22 @@ if (!hasSingleInstanceLock) {
       setHitRegions: (regions) => overlayController?.setHitRegions(regions) ?? false,
       onKeyboardExit: () => overlayController?.exitKeyboardMode(),
       onRendererReady: () => overlayController?.setRendererReady(),
+      openSession: (request) =>
+        openIslandSession(request, {
+          navigator: sessionNavigator(),
+          getState: () => overlayState,
+          cliOwner: async (session) =>
+            session.provider === 'claude'
+              ? claudeTerminalOwner(
+                  (await claudeJournals.list()).find(
+                    (journal) => `claude:${journal.nativeSessionId}` === session.id,
+                  )?.host,
+                )
+              : // Codex records no launching terminal.
+                'unknown',
+          acknowledge: (sessionId, completionId) =>
+            runtimeCoordinator?.acknowledge(sessionId, completionId) ?? Promise.resolve(false),
+        }),
     });
     menuBar = createMenuBar({
       showOverlay: () => overlayController?.enterKeyboardMode(),

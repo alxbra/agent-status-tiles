@@ -46,3 +46,20 @@ emit `close` within the bounded termination grace period, the result is the
 explicit `cleanup-unconfirmed` failure and the runner retains ownership and
 refuses to spawn another child until that close is observed. No process output
 is returned in navigation results.
+
+## Island clicks
+
+Each island column is a button for its harness. Its click reaches the main
+process as an `overlay:open-session` request with the session ID (and, for a
+thread that just finished, the completion the click saw). `openIslandSession`
+in `src/main/navigation/session-opener.ts` accepts only a session in the
+island's current state whose `canOpen` is set, builds the qualified target
+from the session's provider and surface, and calls the navigator. A CLI
+session's owner comes from its harness: Claude's hook journal records the
+launching terminal as `host`; Codex records none, so its CLI threads return
+`selection-required` and nothing opens. A completion is acknowledged only
+after the navigator reports `dispatched`.
+
+The test runtime (`NODE_ENV=test`, unpackaged) swaps the navigator for one
+that records each target under `Symbol.for('agent-status-tiles.test.navigations')`,
+so E2E runs never switch the developer's frontmost app.

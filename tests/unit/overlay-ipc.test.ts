@@ -192,6 +192,33 @@ describe('overlay IPC handlers', () => {
     ).rejects.toThrow('Overlay dismiss-error request is invalid');
   });
 
+  it('hands a valid open-session request to the opener and returns its result', async () => {
+    const { registerOverlayIpcHandlers } = await import('../../src/main/overlay-ipc');
+    const { isOverlayActionResult } = await import('../../src/shared/overlay-ipc');
+    const window = overlayWindow();
+    const openSession = vi.fn(() => Promise.resolve({ handled: true as const }));
+    registerOverlayIpcHandlers({
+      getWindow: () => window as never,
+      getState: () => ({ sessions: [], reducedMotion: false }),
+      setHitRegions: vi.fn(() => true),
+      openSession,
+    });
+    const event = { sender: window.webContents, senderFrame: window.webContents.mainFrame };
+    await expect(
+      Promise.resolve().then(() =>
+        electronMocks.handlers.get(OVERLAY_IPC_CHANNELS.openSession)!(event, {
+          sessionId: 'codex:one',
+          completionId: 'c1',
+        }),
+      ),
+    ).resolves.toEqual({ handled: true });
+    expect(openSession).toHaveBeenCalledWith({ sessionId: 'codex:one', completionId: 'c1' });
+    expect(isOverlayActionResult({ handled: true })).toBe(true);
+    expect(isOverlayActionResult({ handled: false, reason: 'failed' })).toBe(true);
+    expect(isOverlayActionResult({ handled: true, reason: 'failed' })).toBe(false);
+    expect(isOverlayActionResult({ handled: false, reason: 'other' })).toBe(false);
+  });
+
   it('accepts only a no-payload keyboard exit from the overlay main frame', async () => {
     const { registerOverlayIpcHandlers } = await import('../../src/main/overlay-ipc');
     const window = overlayWindow();
