@@ -111,16 +111,34 @@ describe('compact island summary', () => {
     expect(summary.label).toBe('Claude needs input');
   });
 
-  it('breaks a cross-harness tie by the most recent update', () => {
+  it('says agents are working when every active harness works', () => {
     const summary = summarizeIsland([
       session({ status: 'working', updatedAt: 4 }),
       claude({ status: 'working', updatedAt: 2 }),
     ]);
-    expect(summary.dots).toEqual([
-      { provider: 'claude', tone: 'working' },
-      { provider: 'codex', tone: 'working' },
+    const steady = {
+      dots: [
+        { provider: 'codex', tone: 'working' },
+        { provider: 'claude', tone: 'working' },
+      ],
+      label: 'Agents are working',
+    };
+    expect(summary).toMatchObject(steady);
+    // Neither the label nor the dot order flips when the other harness updates.
+    expect(
+      summarizeIsland([
+        session({ status: 'working', updatedAt: 4 }),
+        claude({ status: 'working', updatedAt: 9 }),
+      ]),
+    ).toMatchObject(steady);
+  });
+
+  it('breaks a cross-harness tie by the most recent update', () => {
+    const summary = summarizeIsland([
+      session({ status: 'unread', completionId: 'c1', updatedAt: 4 }),
+      claude({ status: 'unread', completionId: 'c2', updatedAt: 2 }),
     ]);
-    expect(summary.label).toBe('Codex is working');
+    expect(summary.label).toBe('Codex is done');
   });
 
   it('ignores archived threads and spawned child threads', () => {

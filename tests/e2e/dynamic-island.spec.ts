@@ -76,6 +76,7 @@ function workingSession(overrides: Partial<SessionSnapshot> = {}): SessionSnapsh
 const CASES = [
   { state: 'idle', dots: ['idle'], label: null },
   { state: 'working', dots: ['working'], label: 'Codex is working' },
+  { state: 'both-working', dots: ['working', 'working'], label: 'Agents are working' },
   { state: 'done', dots: ['unread'], label: 'Claude is done' },
   { state: 'working-done', dots: ['working', 'unread'], label: 'Claude is done' },
   { state: 'needs-input', dots: ['unread', 'needs-input'], label: 'Codex needs input' },

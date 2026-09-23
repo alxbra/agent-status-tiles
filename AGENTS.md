@@ -28,7 +28,8 @@ particular:
 - The label names one harness, preferring what the user must act on: needs
   input, then done, then working (the most recent thread breaks ties):
   `Codex needs input`, `Claude is done`, or `Codex is working`. Its dot sits
-  next to the label, and idle shows no text. Nothing else: no icons, titles,
+  next to the label, and idle shows no text. When every active harness is
+  working, the label is `Agents are working` and the dots keep harness order. Nothing else: no icons, titles,
   counts, badges, or decorative copy.
 - The label uses bundled Fira Code at weight 500 and 12 px in one gray; the
   harness name is not highlighted.

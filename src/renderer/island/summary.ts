@@ -96,10 +96,17 @@ export function summarizeIsland(sessions: readonly SessionSnapshot[]): IslandSum
   }
   if (labeled === null) return { dots: [{ tone: 'idle' }], label: null, target: null };
 
-  const others = harnesses.filter((state) => state !== labeled);
+  // Several harnesses working share one steady label and keep their dots in
+  // harness order instead of flipping between them on every update.
+  const allWorking = harnesses.length > 1 && harnesses.every((state) => state.tone === 'working');
+  const ordered = allWorking
+    ? harnesses
+    : [...harnesses.filter((state) => state !== labeled), labeled];
   return {
-    dots: [...others, labeled].map(({ provider, tone }) => ({ provider, tone })),
-    label: `${ISLAND_PROVIDER_NAME[labeled.provider]} ${LABEL_VERB[labeled.tone]}`,
+    dots: ordered.map(({ provider, tone }) => ({ provider, tone })),
+    label: allWorking
+      ? 'Agents are working'
+      : `${ISLAND_PROVIDER_NAME[labeled.provider]} ${LABEL_VERB[labeled.tone]}`,
     target: labeled.session,
   };
 }

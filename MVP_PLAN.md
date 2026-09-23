@@ -100,6 +100,7 @@ The label follows the dots after a **10 CSS px** gap and names one harness, pref
 - `<Provider> needs input` for orange.
 - `<Provider> is done` for green, including green beside the other harness's blue.
 - `<Provider> is working` for blue.
+- `Agents are working` when every active harness is working, with the dots in fixed harness order (Codex, then Claude) so neither the label nor the dots flip on each update (the user asked for this on 2026-09-23).
 - No label for white.
 
 The label uses the bundled Fira Code typeface at weight 500 and 12 px in one gray (`#F1F1ED` at 62 % opacity); the harness name is not highlighted. Nothing else appears in the island: no thread titles, counts, badges, or decorative copy. Titles, which stay in session state for navigation, remain out of logs and diagnostics.
