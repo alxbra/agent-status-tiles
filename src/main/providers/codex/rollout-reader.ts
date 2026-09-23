@@ -526,8 +526,8 @@ export class CodexRolloutReader {
       let parts: Buffer[] = [];
       let lineLength = 0;
       let discarding = cursor.isDiscardingOversizedLine === true;
-      // Only a verdict made from the line's own prefix clears it. Resuming
-      // without one, as from an older cursor, stays a coverage issue.
+      // A resumed line is skipped quietly only when its cursor carries the
+      // activity-only verdict; an older cursor without it stays an issue.
       let discardingActivityOnly = discarding && cursor.isDiscardingActivityOnlyLine === true;
       let unprocessedCompleteLine = false;
       const fileEvents: CodexRolloutEvent[] = [];
