@@ -107,7 +107,7 @@ describe('Codex Desktop monitor', () => {
     const secondPath = join(dirname(rolloutPath), 'large.jsonl');
     await writeFile(
       secondPath,
-      `${JSON.stringify({ timestamp: '2026-09-15T10:00:00.000Z', type: 'session_meta', payload: { id: secondId, source: 'vscode', originator: 'Codex Desktop' } })}\n${JSON.stringify({ timestamp: '2026-09-15T10:00:01.000Z', type: 'event_msg', payload: { type: 'agent_message', message: 'x'.repeat(2 * 1024 * 1024) } })}\n`,
+      `${JSON.stringify({ timestamp: '2026-09-15T10:00:00.000Z', type: 'session_meta', payload: { id: secondId, source: 'vscode', originator: 'Codex Desktop' } })}\n${JSON.stringify({ timestamp: '2026-09-15T10:00:01.000Z', type: 'event_msg', payload: { type: 'task_complete', turn_id: 'turn-large', last_agent_message: 'x'.repeat(2 * 1024 * 1024) } })}\n`,
     );
     catalog.listThreads.mockResolvedValue({
       records: [
@@ -139,6 +139,53 @@ describe('Codex Desktop monitor', () => {
       const recovered = await monitor.discover();
       expect(recovered.sources.map((source) => source.nativeSessionId)).toEqual([record.nativeId]);
       expect(recovered.coverageIncomplete).toBe(true);
+    } finally {
+      await monitor.stop();
+    }
+  });
+
+  it('keeps a thread with oversized tool output visible and live', async () => {
+    const { monitor, catalog, record, rolloutPath } = await fixture();
+    const toolOutput = JSON.stringify({
+      timestamp: '2026-09-15T10:00:02.000Z',
+      ordinal: 2,
+      type: 'response_item',
+      payload: {
+        type: 'custom_tool_call_output',
+        call_id: 'call-large',
+        output: 'x'.repeat(3 * 1024 * 1024),
+      },
+    });
+    const completed = JSON.stringify({
+      timestamp: '2026-09-15T10:00:03.000Z',
+      type: 'event_msg',
+      payload: { type: 'task_complete', turn_id: 'turn-1' },
+    });
+    await appendFile(rolloutPath, `${toolOutput}\n${completed}\n`);
+    catalog.listThreads.mockResolvedValue({
+      records: [record],
+      nextCursor: null,
+      pagesRead: 1,
+      complete: true,
+    });
+    try {
+      await monitor.start();
+      const captured = await monitor.capture((await monitor.discover()).sources);
+      const read = await monitor.read({
+        sources: captured,
+        cursors: {},
+        sessions: {},
+        frozenCutoffs: {},
+        baseline: false,
+      });
+      expect(read.coverageIncomplete).toBeUndefined();
+      expect(read.unavailableSourceIds).toBeUndefined();
+      expect(read.events).toMatchObject([
+        { event: { type: 'turn-started' }, historical: false },
+        { event: { type: 'turn-completed' }, historical: false },
+      ]);
+      const recovered = await monitor.discover();
+      expect(recovered.sources.map((source) => source.nativeSessionId)).toEqual([record.nativeId]);
     } finally {
       await monitor.stop();
     }

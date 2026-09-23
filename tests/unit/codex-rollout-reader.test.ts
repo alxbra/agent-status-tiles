@@ -84,6 +84,23 @@ function eventTypes(events: readonly CodexRolloutEvent[]): string[] {
   return events.map(({ event: emitted }) => emitted.type);
 }
 
+async function readAll(
+  reader: CodexRolloutReader,
+  source: CodexRolloutSource,
+): Promise<{ events: CodexRolloutEvent[]; diagnostics: string[] }> {
+  const events: CodexRolloutEvent[] = [];
+  const diagnostics: string[] = [];
+  let cursors = {};
+  for (let batch = 0; batch < 8; batch += 1) {
+    const result = await reader.read([source], cursors);
+    events.push(...result.events);
+    diagnostics.push(...result.diagnostics.map(({ code }) => code));
+    if (result.complete) return { events, diagnostics };
+    cursors = result.cursors;
+  }
+  throw new Error('rollout-read-did-not-complete');
+}
+
 function sourceFor(
   file: string,
   nativeSessionId = SESSION_ID,
@@ -279,6 +296,67 @@ describe('CodexRolloutReader', () => {
     expect(JSON.stringify(result)).not.toContain('x'.repeat(128));
   });
 
+  it('skips oversized activity-only records without a coverage issue', async () => {
+    const root = await testRoot();
+    const file = path.join(root, `rollout-${SESSION_ID}.jsonl`);
+    const padding = 'PRIVATE_OUTPUT_'.repeat(Math.ceil(MAX_LINE_BYTES / 15));
+    const current = (ordinal: number, type: string, payload: Record<string, unknown>) =>
+      JSON.stringify({ timestamp: '2026-09-15T10:00:01Z', ordinal, type, payload });
+    await writeLines(file, [
+      sessionMeta(),
+      event('task_started', 'turn-large'),
+      current(2, 'response_item', { type: 'custom_tool_call_output', output: padding }),
+      current(3, 'event_msg', { type: 'item_completed', turn_id: 'turn-large', item: padding }),
+      current(4, 'compacted', { message: '', replacement_history: [padding] }),
+      response('message', { role: 'assistant', content: padding }),
+      event('task_complete', 'turn-large'),
+    ]);
+
+    const result = await readAll(new CodexRolloutReader(root), sourceFor(file));
+    expect(eventTypes(result.events)).toEqual(['turn-started', 'turn-completed']);
+    expect(result.diagnostics).toEqual([]);
+    expect(JSON.stringify(result)).not.toContain('PRIVATE_OUTPUT_');
+  });
+
+  it('reports oversized records that may carry status', async () => {
+    const root = await testRoot();
+    const file = path.join(root, `rollout-${SESSION_ID}.jsonl`);
+    const padding = 'x'.repeat(MAX_LINE_BYTES);
+    await writeLines(file, [
+      sessionMeta(),
+      event('task_started', 'turn-large'),
+      event('task_complete', 'turn-large', { last_agent_message: padding }),
+      response('function_call_output', { call_id: 'call-large', output: padding }),
+      response('function_call', { name: 'request_user_input', arguments: padding }),
+      record('unknown_record', { type: 'message', content: padding }),
+      `{"type":"response_item","timestamp":"2026-09-15T10:00:00Z","payload":{"type":"message","content":"${padding}"}}`,
+    ]);
+
+    const result = await readAll(new CodexRolloutReader(root), sourceFor(file));
+    expect(eventTypes(result.events)).toEqual(['turn-started']);
+    expect(result.diagnostics).toEqual(Array.from({ length: 5 }, () => 'oversized-line'));
+  });
+
+  it('skips an oversized activity-only record across batches', async () => {
+    const root = await testRoot();
+    const file = path.join(root, `rollout-${SESSION_ID}.jsonl`);
+    const output = response('custom_tool_call_output', {
+      output: 'x'.repeat(MAX_READ_BYTES + MAX_LINE_BYTES),
+    });
+    await writeLines(file, [output, event('task_started', 'after-oversized')]);
+    const source = sourceFor(file);
+    const reader = new CodexRolloutReader(root);
+    const first = await reader.read([source]);
+    const key = cursorKeyForPath(root, file);
+    expect(first.diagnostics).toEqual([]);
+    expect(first.cursors[key].isDiscardingOversizedLine).toBe(true);
+
+    const second = await reader.read([source], first.cursors);
+    expect(eventTypes(second.events)).toEqual(['turn-started']);
+    expect(second.diagnostics).toEqual([]);
+    expect(second.cursors[key].isDiscardingOversizedLine).toBeUndefined();
+  });
+
   it('reads a current-format status record above one MiB without retaining private padding', async () => {
     const root = await testRoot();
     const file = path.join(root, `rollout-${SESSION_ID}.jsonl`);
@@ -401,12 +479,14 @@ describe('CodexRolloutReader', () => {
     const first = await reader.read([source]);
     const key = cursorKeyForPath(root, file);
     expect(first.events).toEqual([]);
+    expect(first.diagnostics.map(({ code }) => code)).toEqual(['oversized-line']);
     expect(first.cursors[key].isDiscardingOversizedLine).toBe(true);
     expect(first.cursors[key].offset).toBe(MAX_READ_BYTES);
 
     await appendFile(file, `\n${event('task_started', 'after-oversized')}\n`);
     const second = await reader.read([source], first.cursors);
     expect(eventTypes(second.events)).toEqual(['turn-started']);
+    expect(second.diagnostics).toEqual([]);
     expect(second.cursors[key].isDiscardingOversizedLine).toBeUndefined();
   });
 
