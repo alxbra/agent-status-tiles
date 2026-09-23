@@ -26,10 +26,9 @@ it into one column per harness the same day; the reference states render from
   orange when one needs input, else pulsing blue while one works, else white
   for idle. There is no done state: a finished, failed, or unavailable thread
   is idle. Nothing else: no labels, icons, titles, counts, or badges.
-- When a turn finishes, the island plays Cuelume's `success` cue. If that
-  harness still has another thread working, its dot pulses green for
-  **5 seconds** and then returns to its real tone; a harness that went idle
-  simply turns white.
+- When a turn finishes, the island plays Cuelume's `success` cue and that
+  harness's dot pulses green for **5 seconds**, then shows its current tone
+  (white or blue). A harness waiting for input stays orange throughout.
 - Both names use bundled Fira Code at weight 500 and 12 px in one gray.
 - Width follows the content with one **420 ms** spring transition. Reduced
   motion stops the pulse and every transition, but not the sound.

@@ -66,19 +66,34 @@ export function islandTarget(columns: readonly HarnessColumn[]): SessionSnapshot
   return best?.target ?? null;
 }
 
-/** Each visible session's latest completion, used to notice a turn finishing. */
+/** Each seen session's latest completion, used to notice a turn finishing. */
 export type CompletionSnapshot = ReadonlyMap<string, string | undefined>;
 
-export function completionSnapshot(sessions: readonly SessionSnapshot[]): CompletionSnapshot {
-  return new Map(
-    visibleIslandSessions(sessions).map((session) => [session.id, session.completionId]),
-  );
+/** Sessions remembered across updates, so a thread can leave and rejoin the recent list. */
+export const MAX_REMEMBERED_COMPLETIONS = 256;
+
+/**
+ * Merge the visible sessions into the remembered completions. Sessions that
+ * left the recent list stay remembered, newest first, up to the cap.
+ */
+export function completionSnapshot(
+  previous: CompletionSnapshot | null,
+  sessions: readonly SessionSnapshot[],
+): CompletionSnapshot {
+  const next = new Map<string, string | undefined>();
+  for (const session of visibleIslandSessions(sessions)) next.set(session.id, session.completionId);
+  for (const [id, completionId] of previous ?? []) {
+    if (next.size >= MAX_REMEMBERED_COMPLETIONS) break;
+    if (!next.has(id)) next.set(id, completionId);
+  }
+  return next;
 }
 
 /**
- * The harnesses with a turn that finished since the previous snapshot. A
+ * The harnesses with a turn that finished live since the previous snapshot. A
  * session seen for the first time only seeds the snapshot, so launching the
- * app or a thread entering the recent list never counts as a completion.
+ * app never sounds. A completion that arrives already acknowledged, which is
+ * how the runtime baselines replayed history, is not a live finish either.
  */
 export function finishedHarnesses(
   previous: CompletionSnapshot | null,
@@ -87,7 +102,7 @@ export function finishedHarnesses(
   const finished = new Set<Provider>();
   if (previous === null) return finished;
   for (const session of visibleIslandSessions(sessions)) {
-    if (!previous.has(session.id)) continue;
+    if (!previous.has(session.id) || session.status === 'idle') continue;
     const completionId = session.completionId;
     if (completionId !== undefined && completionId !== previous.get(session.id)) {
       finished.add(session.provider);

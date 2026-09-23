@@ -10,6 +10,9 @@ const projectRoot = process.cwd();
 const VIEWPORT = { width: 360, height: 56 };
 let fixtureServer: ViteDevServer;
 
+// The native overlay runs with this autoplay policy and never takes focus.
+test.use({ launchOptions: { args: ['--autoplay-policy=no-user-gesture-required'] } });
+
 declare global {
   interface Window {
     __setIslandSessions?: (sessions: readonly SessionSnapshot[]) => void;
@@ -158,7 +161,9 @@ test('pulses only working dots and stills them under reduced motion', async ({ p
   ).toBe('none');
 });
 
-test('cues a finished turn, pulsing green only while the harness still works', async ({ page }) => {
+test('cues every finished turn with five seconds of green, then the current tone', async ({
+  page,
+}) => {
   await page.clock.install();
   await openIsland(page, 'idle');
   const codexA = workingSession({ id: 'codex:a' });
@@ -196,17 +201,66 @@ test('cues a finished turn, pulsing green only while the harness still works', a
   await page.clock.runFor(200);
   await expect.poll(() => columns(page)).toEqual(['Codex:working', 'Claude:working']);
 
-  // Claude finishes its only thread: the cue sounds, and it is simply idle.
+  // Claude finishes its only thread: green for five seconds, then idle.
   await page.evaluate((sessions) => window.__setIslandSessions?.(sessions), [doneA, codexB, doneC]);
-  await expect.poll(() => columns(page)).toEqual(['Codex:working', 'Claude:idle']);
+  await expect.poll(() => columns(page)).toEqual(['Codex:working', 'Claude:finished']);
   expect(await page.evaluate(() => window.__islandTurnsFinished)).toBe(2);
+  await page.clock.runFor(5_100);
+  await expect.poll(() => columns(page)).toEqual(['Codex:working', 'Claude:idle']);
+
+  // A question outranks the cue: Codex finishes a turn while another of its
+  // threads waits for input, so it sounds but stays orange.
+  const askingB = workingSession({ id: 'codex:b', updatedAt: 3, status: 'needs-input' });
+  const doneAgainA = workingSession({ id: 'codex:a', status: 'unread', completionId: 'done-a2' });
+  await page.evaluate(
+    (sessions) => window.__setIslandSessions?.(sessions),
+    [doneA, askingB, doneC],
+  );
+  await expect.poll(() => columns(page)).toEqual(['Codex:needs-input', 'Claude:idle']);
+  await page.evaluate(
+    (sessions) => window.__setIslandSessions?.(sessions),
+    [doneAgainA, askingB, doneC],
+  );
+  await expect.poll(() => page.evaluate(() => window.__islandTurnsFinished)).toBe(3);
+  expect(await columns(page)).toEqual(['Codex:needs-input', 'Claude:idle']);
 });
 
-test('does not cue completions that already existed when the island opened', async ({ page }) => {
+test('does not cue completions that already existed or re-cue on a re-render', async ({ page }) => {
   await openIsland(page, 'working');
-  await page.evaluate(() => window.__setIslandSessions?.([]));
+  // The same sessions again, as new objects, must not count as a finished turn.
+  await page.evaluate(() => {
+    const current = [
+      {
+        id: 'codex:a',
+        provider: 'codex',
+        surface: 'desktop',
+        title: 'Fixture a',
+        status: 'working',
+        updatedAt: 3,
+        lastTurnStartedAt: 3,
+        isTopLevel: true,
+        isArchived: false,
+        canOpen: true,
+      },
+      {
+        id: 'claude:b',
+        provider: 'claude',
+        surface: 'cli',
+        title: 'Fixture b',
+        status: 'unread',
+        completionId: 'completion-b',
+        updatedAt: 2,
+        lastTurnStartedAt: 2,
+        isTopLevel: true,
+        isArchived: false,
+        canOpen: true,
+      },
+    ] as const;
+    window.__setIslandSessions?.(current.map((session) => ({ ...session })));
+  });
   await page.waitForTimeout(100);
   expect(await page.evaluate(() => window.__islandTurnsFinished)).toBeUndefined();
+  expect(await columns(page)).toEqual(['Codex:working', 'Claude:idle']);
 });
 
 test('publishes the pill as the only hit region, centered at the top', async ({ page }) => {
@@ -327,4 +381,33 @@ test('republishes the hit region when the window width changes', async ({ page }
   };
   await expect.poll(pillCenter).toBe((VIEWPORT.width + 100) / 2);
   await expect.poll(offset).toBe(0);
+});
+
+test.describe('the success cue', () => {
+  test('synthesizes its three tones without any user gesture', async ({ page }) => {
+    await page.addInitScript(() => {
+      // Playwright's evaluate counts as a user gesture, so report the state of
+      // the never-focused overlay directly: no activation, ever.
+      Object.defineProperty(Navigator.prototype, 'userActivation', {
+        configurable: true,
+        get: () => ({ hasBeenActive: false, isActive: false }),
+      });
+      const created: number[] = [];
+      Reflect.set(window, '__oscillators', created);
+      const original = AudioContext.prototype.createOscillator;
+      AudioContext.prototype.createOscillator = function createOscillator(this: AudioContext) {
+        created.push(this.currentTime);
+        return original.call(this);
+      };
+    });
+    await openIsland(page, 'working', '&sound=real');
+    expect(await page.evaluate(() => navigator.userActivation.hasBeenActive)).toBe(false);
+    await page.evaluate(
+      (session) => window.__setIslandSessions?.([session]),
+      workingSession({ id: 'codex:a', status: 'unread', completionId: 'done-a' }),
+    );
+    await expect
+      .poll(() => page.evaluate(() => (Reflect.get(window, '__oscillators') as number[]).length))
+      .toBe(3);
+  });
 });

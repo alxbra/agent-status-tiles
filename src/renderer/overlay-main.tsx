@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type ReactElement } from 'react';
 import { createRoot } from 'react-dom/client';
-import { play } from 'cuelume';
 
 import type { OverlayHitRegion, OverlayState } from '../shared/overlay-ipc';
 import { createOverlayHitRegionPublisher } from './overlay-hit-region-publisher';
@@ -8,6 +7,7 @@ import { translateAndClipHitRegions } from './overlay-hit-regions';
 import { retryOverlayHandshake } from './overlay-readiness';
 import { DynamicIsland } from './island/DynamicIsland';
 import type { OpenSessionTarget } from './island/interaction';
+import { playSuccessCue } from './island/success-cue';
 import './styles.css';
 import './overlay.css';
 
@@ -99,8 +99,6 @@ export function OverlayApp(): ReactElement {
   const openSession = useCallback((target: OpenSessionTarget) => {
     return overlayApi.openSession(target);
   }, []);
-  // Cuelume synthesizes the success cue locally with Web Audio; no file loads.
-  const turnFinished = useCallback(() => play('success'), []);
   const keyboardExit = useCallback(() => {
     // The island has already blurred the focused element.
     void overlayApi.requestKeyboardExit().catch(() => undefined);
@@ -114,7 +112,7 @@ export function OverlayApp(): ReactElement {
       onHitRegionsChange={publishHitRegions}
       onKeyboardExit={keyboardExit}
       keyboardEntryRevision={keyboardEntryRevision}
-      onTurnFinished={turnFinished}
+      onTurnFinished={playSuccessCue}
     />
   );
 }

@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client';
 
 import type { SessionSnapshot, SessionStatus } from '../../src/shared/session';
 import { DynamicIsland } from '../../src/renderer/island/DynamicIsland';
+import { playSuccessCue } from '../../src/renderer/island/success-cue';
 import type { OpenSessionTarget } from '../../src/renderer/island/interaction';
 import './dynamic-island-fixture.css';
 
@@ -53,6 +54,7 @@ const FIXTURE_STATES: Record<string, readonly SessionSnapshot[]> = {
 const params = new URLSearchParams(window.location.search);
 document.body.dataset.fixtureTheme = params.get('theme') === 'light' ? 'light' : 'dark';
 const reducedMotion = params.get('motion') === 'reduced';
+const playsSound = params.get('sound') === 'real';
 
 function IslandFixture({ initial }: { initial: readonly SessionSnapshot[] }): ReactElement {
   const [sessions, setSessions] = useState(initial);
@@ -75,6 +77,7 @@ function IslandFixture({ initial }: { initial: readonly SessionSnapshot[] }): Re
       }}
       onTurnFinished={() => {
         window.__islandTurnsFinished = (window.__islandTurnsFinished ?? 0) + 1;
+        if (playsSound) playSuccessCue();
       }}
     />
   );

@@ -52,7 +52,7 @@ provider, baseline, signing, and release gates remain unchecked.
 
 ### Deferred
 
-Windows and Linux releases, other screen edges, manual pinning, project grouping, cloud/SSH monitoring, IDE-specific integrations, usage dashboards, dictation, task execution controls, sounds, account systems, and automatic updates.
+Windows and Linux releases, other screen edges, manual pinning, project grouping, cloud/SSH monitoring, IDE-specific integrations, usage dashboards, dictation, task execution controls, sounds beyond the finished-turn cue, account systems, and automatic updates.
 
 Public release publication and promotion from `staging` to `main` are separate final release actions. This implementation ends with a tested release candidate ready to publish.
 
@@ -69,7 +69,7 @@ Reuse the exact palette and status meanings from [the existing theme module](/Us
 | State | Color | Compact island |
 |---|---|---|
 | Idle / unavailable | `#F1F1ED` | White dot |
-| Completed | `#8FEA98` | Idle (white); a harness that still works pulses green for 5 s |
+| Completed | `#8FEA98` | Pulses green for 5 s, then the harness's current tone (idle is white) |
 | Working | `#8DCEF5` | Pulsing blue dot |
 | Waiting for input | `#FF8A3D` | Orange dot |
 | Error | `#FF6B73` | Reads as idle until the island expands |
@@ -99,7 +99,7 @@ Each dot shows its harness's most important recent thread:
 
 There is no done state: a finished, failed, or unavailable thread counts as idle. Nothing else appears in the island: no labels, thread titles, icons, counts, badges, or decorative copy. Both names use the bundled Fira Code typeface at weight 500 and 12 px in one gray (`#F1F1ED` at 62 % opacity).
 
-When a turn finishes (a thread already shown gains a new completion), the island plays the `success` cue from [Cuelume](https://cuelume.dev/) (MIT, bundled as the `cuelume` package and synthesized locally with Web Audio; no file loads at runtime). If that harness still has another thread working, its dot pulses green (`#8FEA98`) for **5 seconds** and then returns to its real tone; a harness that went idle simply turns white. Completions that existed before the island first saw a thread never sound. The overlay allows audio without a user gesture because it never takes focus.
+When a turn finishes live (a thread the island has seen gains a new, unacknowledged completion), the island plays the `success` cue from [Cuelume](https://cuelume.dev/). Its recipe is vendored in `src/renderer/island/success-cue.ts` (MIT) and synthesized locally with Web Audio, with no file loaded, because the Cuelume package refuses to play before a user gesture and the overlay never takes focus; the overlay window also allows audio without a gesture. That harness's dot pulses green (`#8FEA98`) for **5 seconds** and then shows its current tone, white or blue (the user extended the cue to every finished turn on 2026-09-23). Finishing again restarts the 5 seconds; a new turn starting or a question arriving ends the green early, and a harness waiting for input stays orange, because a question outranks a finished turn. The island remembers up to 256 threads' completions, including threads that left the recent list. Completions that existed before it first saw a thread, and replayed history that arrives already acknowledged, never sound; a brand-new thread whose first turn ends before the island ever shows it is also silent.
 
 Motion: the width changes with one **420 ms** spring transition, and a dot scales in whenever its tone changes. Reduced motion stops the pulse and every transition but keeps the sound.
 
@@ -111,7 +111,7 @@ The island does not expand yet. An expanded view needs explicit product authoriz
           menu bar ─────────╮                       ╭───────── menu bar
                   ╰─ ● Codex      Claude ● ─╯          both idle
                   ╰─ ◉ Codex      Claude ● ─╯          Codex working, Claude idle
-                  ╰─ ◉ Codex      Claude ● ─╯          Claude finished its only turn: sound, white
+                  ╰─ ◉ Codex      Claude ◉ ─╯          Claude finished its only turn: sound, green 5 s, then white
                   ╰─ ◉ Codex      Claude ◉ ─╯          both working
                   ╰─ ◉ Codex      Claude ◉ ─╯          Codex finished one of two: sound, green for 5 s
                   ╰─ ● Codex      Claude ● ─╯          Codex needs input (orange)
@@ -124,10 +124,7 @@ The notes to the right explain the mockup; they never appear in the island.
 - Sort eligible items by confirmed provider update or task activity, newest first, with a stable ID tie-break. Local acknowledgement and error dismissal do not change recency.
 - Apply the global Recent threads limit (default five, range one to ten) across connected harnesses, including idle items; the island summarizes only those items.
 - Items outside the configured recent limit remain in local state and return when they become recent enough.
-- A click opens the most urgent thread (waiting for input, else the newest working one), bound to the session captured on pointer-down.
-- Successful opening acknowledges the completion that was visible when clicked.
-- A newer completion arriving during navigation must remain unread.
-- Failed navigation must not acknowledge completion.
+- A click opens the most urgent thread (waiting for input, else the newest working one), bound to the session captured on pointer-down. Those threads have no completion, so opening from the island acknowledges nothing; unread completions stay in session state only, where they no longer show.
 - Errors remain in session state until a new turn. Explicit dismissal stays available over IPC for the future expanded island; the compact island has no context menu.
 - Dismissal affects only the companion's display, never the underlying task.
 
@@ -176,8 +173,8 @@ Rules:
 ### 2.6 Accessibility and desktop behavior
 
 - Hover must not activate the app or steal keyboard focus.
-- Support keyboard entry through the menu-bar action, which focuses the island; Enter opens the labeled thread and Escape leaves keyboard mode.
-- The island's accessible name is its label, or `All threads are idle`.
+- Support keyboard entry through the menu-bar action, which focuses the island; Enter opens the most urgent thread (waiting for input, else the newest working one), like a click, and Escape leaves keyboard mode.
+- The island's accessible name lists each harness and its tone, for example `Codex working, Claude idle`; it never includes thread titles.
 - Respect system reduced-motion settings; allow explicitly enabling reduced motion.
 - Reduced motion stops the pulse and every island transition.
 - Display disconnection moves the island to the primary display; reconnecting restores the selected display.
@@ -794,7 +791,7 @@ Record corrections made after review and the commit used for final validation.
 - [ ] All four local harness surfaces have live validation evidence.
 - [ ] The compact island hangs from the top center of the selected display at 32 pixels tall, above the menu bar.
 - [ ] The island shows Codex and Claude columns with one dot each (needs input, working, or idle) and no other text; working dots pulse.
-- [ ] A finished turn plays the success cue, and a harness that still works pulses green for 5 seconds.
+- [ ] A finished turn plays the success cue and pulses its harness green for 5 seconds before its current tone.
 - [ ] Clicking the island opens the most urgent thread; transparent space around it does not block underlying applications.
 - [ ] Settings use stock shadcn without redundant copy.
 - [ ] The configured number of recent eligible items appears, including idle and acknowledged items.

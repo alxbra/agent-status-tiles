@@ -78,11 +78,13 @@
 }
 
 .dynamic-island__content {
-  display: inline-flex;
+  /* Two equal columns keep the gap between Codex and Claude on the island's
+     center even though the names differ in length. */
+  display: inline-grid;
   flex: none;
+  grid-template-columns: 1fr 1fr;
   align-items: center;
-  /* The gap between the Codex and Claude columns sits on the island's center. */
-  gap: 28px;
+  column-gap: 28px;
   white-space: nowrap;
 }
 
@@ -90,6 +92,15 @@
   display: inline-flex;
   align-items: center;
   gap: 8px;
+}
+
+/* Each name hugs the center, so the columns mirror each other. */
+.dynamic-island__harness[data-side='start'] {
+  justify-content: flex-end;
+}
+
+.dynamic-island__harness[data-side='end'] {
+  justify-content: flex-start;
 }
 
 .dynamic-island__dot {

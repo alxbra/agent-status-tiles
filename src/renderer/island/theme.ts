@@ -21,5 +21,5 @@ export const TONE_COLOR: Record<DotTone, string> = {
   'needs-input': ISLAND_COLORS.orange,
 };
 
-/** How long a harness that still works shows the green cue after a turn finished. */
+/** How long a harness shows the green cue after one of its turns finished. */
 export const FINISHED_CUE_MS = 5_000;

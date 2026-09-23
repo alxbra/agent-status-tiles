@@ -24,6 +24,7 @@ import {
   summarizeHarnesses,
   type CompletionSnapshot,
   type HarnessColumn,
+  type HarnessTone,
 } from './summary';
 import { FINISHED_CUE_MS, TONE_COLOR, type DotTone } from './theme';
 import './island.css';
@@ -120,37 +121,41 @@ export function DynamicIsland({
   const columns = useMemo(() => summarizeHarnesses(sessions), [sessions]);
   const completionsRef = useRef<CompletionSnapshot | null>(null);
   const cueTimersRef = useRef(new Map<Provider, number>());
-  const [cued, setCued] = useState<ReadonlySet<Provider>>(() => new Set());
+  /** Harnesses showing the green cue, with the tone they had when their turn finished. */
+  const [cued, setCued] = useState<ReadonlyMap<Provider, HarnessTone>>(() => new Map());
   const hasSessions = visibleIslandSessions(sessions).length > 0;
   const width = Math.max(ISLAND_MIN_WIDTH, Math.ceil(contentWidth) + ISLAND_PADDING_X * 2);
 
-  useEffect(() => {
+  // A layout effect, so the green cue replaces the new tone before it paints.
+  useLayoutEffect(() => {
     const finished = finishedHarnesses(completionsRef.current, sessions);
-    completionsRef.current = completionSnapshot(sessions);
+    completionsRef.current = completionSnapshot(completionsRef.current, sessions);
     if (finished.size === 0) return;
     onTurnFinished?.();
-    // A harness that still works shows green for a moment, then its real tone;
-    // one that went idle is simply idle.
-    const stillWorking = summarizeHarnesses(sessions).filter(
-      (column) => column.tone === 'working' && finished.has(column.provider),
-    );
-    if (stillWorking.length === 0) return;
-    for (const { provider } of stillWorking) {
+    // Every harness that finished a turn shows green for a moment, then its
+    // current tone; finishing again restarts its moment.
+    for (const provider of finished) {
       window.clearTimeout(cueTimersRef.current.get(provider));
       cueTimersRef.current.set(
         provider,
         window.setTimeout(() => {
           cueTimersRef.current.delete(provider);
           setCued((current) => {
-            const next = new Set(current);
+            const next = new Map(current);
             next.delete(provider);
             return next;
           });
         }, FINISHED_CUE_MS),
       );
     }
-    setCued((current) => new Set([...current, ...stillWorking.map(({ provider }) => provider)]));
-  }, [sessions, onTurnFinished]);
+    setCued((current) => {
+      const next = new Map(current);
+      for (const column of columns) {
+        if (finished.has(column.provider)) next.set(column.provider, column.tone);
+      }
+      return next;
+    });
+  }, [sessions, columns, onTurnFinished]);
 
   useEffect(() => {
     const timers = cueTimersRef.current;
@@ -252,10 +257,13 @@ export function DynamicIsland({
   if (!hasSessions) return null;
 
   const target = islandTarget(columns);
-  // The green cue only replaces working: an idle harness is simply idle again,
-  // and a harness waiting for input keeps showing that.
+  // The green cue lasts while the harness keeps the tone it finished with: a
+  // new turn starting or a question arriving ends it early, and a harness
+  // waiting for input never turns green, because a question outranks it.
   const toneOf = (column: HarnessColumn): DotTone =>
-    column.tone === 'working' && cued.has(column.provider) ? 'finished' : column.tone;
+    column.tone !== 'needs-input' && cued.get(column.provider) === column.tone
+      ? 'finished'
+      : column.tone;
   const openableTarget = (): OpenSessionTarget | null =>
     target !== null && target.canOpen ? captureOpenTarget(target) : null;
 

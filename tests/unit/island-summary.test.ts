@@ -4,6 +4,7 @@ import type { SessionSnapshot } from '../../src/shared/session';
 import {
   completionSnapshot,
   finishedHarnesses,
+  MAX_REMEMBERED_COMPLETIONS,
   islandTarget,
   summarizeHarnesses,
 } from '../../src/renderer/island/summary';
@@ -110,7 +111,7 @@ describe('finished turns', () => {
   });
 
   it('reports a harness whose thread gained a new completion', () => {
-    const before = completionSnapshot([
+    const before = completionSnapshot(null, [
       session({ status: 'working' }),
       claude({ status: 'working' }),
     ]);
@@ -122,7 +123,7 @@ describe('finished turns', () => {
   });
 
   it('ignores unchanged completions and threads it has not seen before', () => {
-    const before = completionSnapshot([session({ status: 'unread', completionId: 'c1' })]);
+    const before = completionSnapshot(null, [session({ status: 'unread', completionId: 'c1' })]);
     expect(
       finishedHarnesses(before, [
         session({ status: 'unread', completionId: 'c1' }),
@@ -131,10 +132,41 @@ describe('finished turns', () => {
     ).toEqual(new Set());
   });
 
-  it('counts a second turn finishing on the same thread', () => {
-    const before = completionSnapshot([session({ status: 'working', completionId: 'c1' })]);
-    expect(finishedHarnesses(before, [session({ status: 'unread', completionId: 'c2' })])).toEqual(
-      new Set(['codex']),
+  it('ignores a completion that arrives already acknowledged, as replayed history does', () => {
+    const before = completionSnapshot(null, [session()]);
+    expect(finishedHarnesses(before, [session({ status: 'idle', completionId: 'old' })])).toEqual(
+      new Set(),
     );
+  });
+
+  it('counts each turn on the same thread, since a new turn clears the completion', () => {
+    let snapshot = completionSnapshot(null, [session({ status: 'unread', completionId: 'c1' })]);
+    const working = [session({ status: 'working' })];
+    expect(finishedHarnesses(snapshot, working)).toEqual(new Set());
+    snapshot = completionSnapshot(snapshot, working);
+    expect(
+      finishedHarnesses(snapshot, [session({ status: 'unread', completionId: 'c2' })]),
+    ).toEqual(new Set(['codex']));
+  });
+
+  it('remembers a thread that left the recent list and finishes when it returns', () => {
+    let snapshot = completionSnapshot(null, [session({ status: 'working' })]);
+    // The thread drops out of a one-item recent list while it keeps working.
+    snapshot = completionSnapshot(snapshot, [claude({ status: 'working' })]);
+    expect(
+      finishedHarnesses(snapshot, [
+        session({ status: 'unread', completionId: 'c1', updatedAt: 9 }),
+      ]),
+    ).toEqual(new Set(['codex']));
+  });
+
+  it('bounds how many threads it remembers', () => {
+    let snapshot = completionSnapshot(null, []);
+    for (let index = 0; index < MAX_REMEMBERED_COMPLETIONS + 10; index += 1) {
+      snapshot = completionSnapshot(snapshot, [session({ id: `codex:${String(index)}` })]);
+    }
+    expect(snapshot.size).toBe(MAX_REMEMBERED_COMPLETIONS);
+    expect(snapshot.has(`codex:${String(MAX_REMEMBERED_COMPLETIONS + 9)}`)).toBe(true);
+    expect(snapshot.has('codex:0')).toBe(false);
   });
 });
