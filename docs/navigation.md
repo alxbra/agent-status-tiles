@@ -50,20 +50,22 @@ is returned in navigation results.
 ## Island clicks
 
 Each island column is a button for its harness. Its click reaches the main
-process as an `overlay:open-session` request with the session ID (and, for a
-thread that just finished, the completion the click saw). The runtime's
-overlay projection sets `canOpen` from `canNavigateTo`: a Codex Desktop thread
-whose ID is a task UUID, any Claude Desktop thread, and a Claude CLI thread.
+process as an `overlay:open-session` request with the session ID and, when the
+opened thread has an unread completion, the completion the click saw. The
+runtime's overlay projection sets `canOpen` from `canNavigateTo`: a Codex
+Desktop thread whose ID is a task UUID (the catalog thread ID), any Claude
+Desktop thread, and a Claude CLI thread whose hook journal recorded a known
+terminal as its `host`. Codex CLI threads record no terminal and are never
+openable, so the navigator is not called for them.
+
 `openIslandSession` in `src/main/navigation/session-opener.ts` accepts only a
-top-level, unarchived session in the island's current state that passes both
-checks, builds the qualified target
-from the session's provider and surface, and calls the navigator. A CLI
-session's owner comes from its harness: Claude's hook journal records the
-launching terminal as `host`; Codex records none, so its CLI threads return
-`selection-required` and nothing opens. A completion is acknowledged only
-after the navigator reports `dispatched`. A successful open also ends keyboard
-mode without restoring the previously active app, since the harness is now in
-front.
+top-level, unarchived, openable session in the island's current state, builds
+the qualified target from the session's provider and surface (a Claude CLI
+thread's owner is the journal `host` from the last discovery listing), and
+calls the navigator. The completion is acknowledged only after the navigator
+reports `dispatched`, and only if it is still the thread's current completion.
+A successful open also ends keyboard mode, when it is active, without
+restoring the previously active app, since the harness is now in front.
 
 The test runtime (`NODE_ENV=test`, unpackaged) runs the real `MacOsNavigator`
 with a command runner that records each `/usr/bin/open` argument list under

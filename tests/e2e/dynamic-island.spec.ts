@@ -427,6 +427,17 @@ test('lands keyboard entry on a column that can open, then on the newest thread'
   );
   await page.evaluate(() => window.__triggerKeyboardEntry?.());
   await expect(column(page, 'claude')).toBeFocused();
+
+  // Both can open and both are idle: the harness with the newer thread wins.
+  await page.evaluate(
+    (sessions) => window.__setIslandSessions?.(sessions),
+    [
+      workingSession({ id: 'codex:new', status: 'idle', updatedAt: 9 }),
+      workingSession({ id: 'claude:old', provider: 'claude', status: 'idle', updatedAt: 1 }),
+    ],
+  );
+  await page.evaluate(() => window.__triggerKeyboardEntry?.());
+  await expect(column(page, 'codex')).toBeFocused();
 });
 
 test('renders nothing without visible sessions', async ({ page }) => {

@@ -312,6 +312,13 @@ describe('overlay controller', () => {
     // The harness the island opened is in front; nothing hands focus back.
     expect(electronMocks.app.hide).not.toHaveBeenCalled();
     expect(electronMocks.app.show).not.toHaveBeenCalled();
+
+    // After a mouse click there is no keyboard mode, and the window is left alone.
+    overlayWindow.blur.mockClear();
+    overlayWindow.setIgnoreMouseEvents.mockClear();
+    controller.exitKeyboardMode({ restoreFocus: false });
+    expect(overlayWindow.blur).not.toHaveBeenCalled();
+    expect(overlayWindow.setIgnoreMouseEvents).not.toHaveBeenCalled();
     controller.destroy();
   });
 

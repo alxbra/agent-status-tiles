@@ -328,8 +328,6 @@ export function DynamicIsland({
     };
   }, [onKeyboardExit]);
 
-  if (!hasSessions) return null;
-
   // The green cue lasts while the harness keeps the tone it finished with; a
   // harness waiting for input never turns green, because a question outranks it.
   const toneOf = (column: HarnessColumn): DotTone =>
@@ -341,7 +339,12 @@ export function DynamicIsland({
     const target = columnTarget(column, finished);
     return target !== null && target.canOpen ? captureOpenTarget(target) : null;
   };
-  openableTargetRef.current = openableTarget;
+  // The keyboard-entry frame reads the latest rule after this render commits.
+  useLayoutEffect(() => {
+    openableTargetRef.current = openableTarget;
+  });
+
+  if (!hasSessions) return null;
 
   const handlePointerDown = (
     column: HarnessColumn,

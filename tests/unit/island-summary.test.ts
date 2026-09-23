@@ -94,6 +94,12 @@ describe('harness columns', () => {
     const [idle] = summarizeHarnesses([done, session({ id: 'codex:old', updatedAt: 3 })]);
     expect(idle).toMatchObject({ tone: 'idle', latest: { id: 'codex:done' } });
     expect(columnTarget(idle!, undefined)?.id).toBe('codex:done');
+    // An idle harness opens its newest thread that can open.
+    const [preferOpenable] = summarizeHarnesses([
+      session({ id: 'codex:cli-new', surface: 'cli', canOpen: false, updatedAt: 9 }),
+      session({ id: 'codex:desktop-old', updatedAt: 2 }),
+    ]);
+    expect(columnTarget(preferOpenable!, undefined)?.id).toBe('codex:desktop-old');
     const [, claudeColumn] = summarizeHarnesses([done]);
     expect(columnTarget(claudeColumn!, undefined)).toBeNull();
   });

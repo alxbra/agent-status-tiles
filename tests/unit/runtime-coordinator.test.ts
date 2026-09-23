@@ -108,9 +108,10 @@ describe('runtime coordinator', () => {
     const runtime = createRuntimeCoordinator({
       appDataPath: dataPath,
       monitors: [
-        monitor('codex:desktop', [source(task, 4), source('not-a-task-id', 3)], read),
-        monitor('codex:cli', [source('cli-thread', 2)], read),
-        monitor('claude:desktop', [source('claude-thread', 1)], read),
+        monitor('codex:desktop', [source(task, 5), source('not-a-task-id', 4)], read),
+        monitor('codex:cli', [source('cli-thread', 3)], read),
+        monitor('claude:desktop', [source('claude-thread', 2)], read),
+        monitor('claude:cli', [source('claude-cli-thread', 1)], read),
       ],
     });
     try {
@@ -118,6 +119,7 @@ describe('runtime coordinator', () => {
       await runtime.connect('codex', 'desktop');
       await runtime.connect('codex', 'cli');
       await runtime.connect('claude', 'desktop');
+      await runtime.connect('claude', 'cli');
       expect(
         Object.fromEntries(
           runtime.getOverlayState().sessions.map((item) => [item.id, item.canOpen]),
@@ -127,6 +129,8 @@ describe('runtime coordinator', () => {
         'codex:not-a-task-id': false,
         'codex:cli-thread': false,
         'claude:claude-thread': true,
+        // Without an injected rule, no CLI terminal is known.
+        'claude:claude-cli-thread': false,
       });
     } finally {
       await runtime.stop();

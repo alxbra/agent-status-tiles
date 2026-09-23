@@ -33,16 +33,17 @@ function nativeSessionId(session: Pick<SessionSnapshot, 'id' | 'provider'>): str
 
 /**
  * Whether the navigator can bring this thread forward: a Codex Desktop thread
- * with a task UUID, any Claude Desktop thread, and a Claude CLI thread, whose
- * hook journal usually records its terminal. Codex CLI threads record none.
+ * with a task UUID, any Claude Desktop thread, and a Claude CLI thread whose
+ * launching terminal is known. Codex CLI threads record no terminal.
  */
 export function canNavigateTo(
   session: Pick<SessionSnapshot, 'id' | 'provider' | 'surface'>,
+  hasKnownTerminal: boolean,
 ): boolean {
   if (session.provider === 'codex') {
     return session.surface === 'desktop' && isCodexTaskId(nativeSessionId(session));
   }
-  return true;
+  return session.surface === 'desktop' || hasKnownTerminal;
 }
 
 async function navigationTarget(
@@ -86,7 +87,8 @@ export async function openIslandSession(
     !session.isTopLevel ||
     session.isArchived ||
     !session.canOpen ||
-    !canNavigateTo(session)
+    // The terminal of a CLI thread is resolved below.
+    !canNavigateTo(session, true)
   ) {
     return UNAVAILABLE;
   }

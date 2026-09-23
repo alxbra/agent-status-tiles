@@ -190,12 +190,13 @@ describe('island session opener', () => {
   });
 
   it('knows which threads the navigator can bring forward', () => {
-    expect(canNavigateTo(session())).toBe(true);
-    expect(canNavigateTo(session({ id: 'codex:not-a-task-id' }))).toBe(false);
-    expect(canNavigateTo(session({ surface: 'cli' }))).toBe(false);
-    expect(canNavigateTo(session({ id: 'claude:x', provider: 'claude' }))).toBe(true);
-    expect(canNavigateTo(session({ id: 'claude:x', provider: 'claude', surface: 'cli' }))).toBe(
-      true,
-    );
+    expect(canNavigateTo(session(), false)).toBe(true);
+    expect(canNavigateTo(session({ id: 'codex:not-a-task-id' }), true)).toBe(false);
+    expect(canNavigateTo(session({ surface: 'cli' }), true)).toBe(false);
+    expect(canNavigateTo(session({ id: 'claude:x', provider: 'claude' }), false)).toBe(true);
+    const claudeCli = session({ id: 'claude:x', provider: 'claude', surface: 'cli' });
+    // A Claude CLI thread opens only once its launching terminal is known.
+    expect(canNavigateTo(claudeCli, true)).toBe(true);
+    expect(canNavigateTo(claudeCli, false)).toBe(false);
   });
 });

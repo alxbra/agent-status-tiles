@@ -501,6 +501,9 @@ export function createOverlayController(options: OverlayControllerOptions = {}):
       syncVisibility();
     },
     exitKeyboardMode: (exitOptions) => {
+      // After a mouse click there is no keyboard mode to leave; blurring and
+      // re-ordering the window then would only disturb the island.
+      if (exitOptions?.restoreFocus === false && !keyboardMode && !keyboardWindowActivated) return;
       const shouldDeactivate = leaveKeyboardMode();
       syncVisibility();
       reapplyMousePassthrough();

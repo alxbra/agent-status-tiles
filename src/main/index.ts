@@ -71,7 +71,11 @@ import {
   MacOsNavigator,
   type TerminalApplication,
 } from './navigation/macos-navigator';
-import { openIslandSession, type SessionNavigator } from './navigation/session-opener';
+import {
+  canNavigateTo,
+  openIslandSession,
+  type SessionNavigator,
+} from './navigation/session-opener';
 
 const hasSingleInstanceLock = app.requestSingleInstanceLock();
 const TEST_KEYBOARD_ENTRY_HOOK = Symbol.for('agent-status-tiles.test.keyboard-entry');
@@ -141,25 +145,34 @@ function claudeIntegration(): ClaudeIntegration | undefined {
   };
 }
 
+/** The host a Claude session's hook journal recorded, from the last discovery listing. */
+function claudeJournalHost(
+  journals: ClaudeJournalDiscovery,
+  sessionId: string,
+): string | undefined {
+  return journals.summaries.find((journal) => `claude:${journal.nativeSessionId}` === sessionId)
+    ?.host;
+}
+
 /** The terminal a Claude CLI session's hook journal recorded as its host. */
 function claudeTerminalOwner(host: string | undefined): TerminalApplication | 'unknown' {
   return isTerminalApplication(host) ? host : 'unknown';
 }
 
-let navigator: SessionNavigator | null = null;
+let sessionNavigatorInstance: SessionNavigator | null = null;
 
 /**
  * The real navigator runs `/usr/bin/open`; the test runtime records targets
  * instead, so E2E runs never switch the developer's frontmost app.
  */
 function sessionNavigator(): SessionNavigator {
-  if (navigator !== null) return navigator;
+  if (sessionNavigatorInstance !== null) return sessionNavigatorInstance;
   if (isTestRuntime()) {
     // The real navigator with every /usr/bin/open command recorded instead of
     // run, so its target rules apply while E2E runs never switch apps.
     const commands: string[][] = [];
     Reflect.defineProperty(globalThis, TEST_NAVIGATIONS, { configurable: true, value: commands });
-    navigator = new MacOsNavigator(
+    sessionNavigatorInstance = new MacOsNavigator(
       (executable, args) => {
         commands.push([executable, ...args]);
         return Promise.resolve({
@@ -174,9 +187,9 @@ function sessionNavigator(): SessionNavigator {
       'darwin',
     );
   } else {
-    navigator = new MacOsNavigator();
+    sessionNavigatorInstance = new MacOsNavigator();
   }
-  return navigator;
+  return sessionNavigatorInstance;
 }
 
 function isTestRuntime(): boolean {
@@ -458,6 +471,13 @@ if (!hasSingleInstanceLock) {
           };
     runtimeCoordinator = createRuntimeCoordinator({
       appDataPath: app.getPath('userData'),
+      // A Claude CLI thread opens only when its journal recorded the terminal.
+      isOpenable: (session) =>
+        canNavigateTo(
+          session,
+          session.provider === 'claude' &&
+            claudeTerminalOwner(claudeJournalHost(claudeJournals, session.id)) !== 'unknown',
+        ),
       recentThreadLimit: preferences.recentThreadLimit,
       monitors: [
         new CodexDesktopMonitor(desktopMonitorOptions()),
@@ -496,11 +516,7 @@ if (!hasSingleInstanceLock) {
           cliOwner: (session) =>
             Promise.resolve(
               session.provider === 'claude'
-                ? claudeTerminalOwner(
-                    claudeJournals.summaries.find(
-                      (journal) => `claude:${journal.nativeSessionId}` === session.id,
-                    )?.host,
-                  )
+                ? claudeTerminalOwner(claudeJournalHost(claudeJournals, session.id))
                 : // Codex records no launching terminal.
                   'unknown',
             ),
