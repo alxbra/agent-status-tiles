@@ -17,7 +17,7 @@ The first publishable release targets macOS and supports:
 
 Each eligible top-level thread or task is tracked locally. The overlay considers the five most recently updated items across connected harnesses by default, configurable from one to ten. Spawned subagents remain represented by their parent.
 
-The main interface is a compact dynamic island: one black, notch-style shape hanging from the top center of the selected display, over the menu bar. It collapses every recent thread into one status dot (two when a done thread shows while another works) and a short monospace label such as `Codex is working`. Clicking foregrounds the owning harness of the labeled thread and selects the specific session where supported. The user authorized this island on 2026-09-23, replacing the document-tab dock of 2026-09-17 (which had itself replaced the rounded-square tiles and Dock-style magnification); the reference states render from `tests/fixtures/dynamic-island.html`. The island does not expand yet.
+The main interface is a compact dynamic island: one black, notch-style shape hanging from the top center of the selected display, over the menu bar. It shows two mirrored columns, Codex on the left and Claude on the right, each with one status dot (needs input, working, or idle) beside the harness name, and it plays a short success cue when a turn finishes. Clicking foregrounds the harness of the most urgent thread and selects the specific session where supported. The user authorized this island on 2026-09-23, replacing the document-tab dock of 2026-09-17 (which had itself replaced the rounded-square tiles and Dock-style magnification); the reference states render from `tests/fixtures/dynamic-island.html`. The same day, the user split it into per-harness columns and removed the done state. The island does not expand yet.
 
 ### Fixed scope
 
@@ -52,7 +52,7 @@ provider, baseline, signing, and release gates remain unchecked.
 
 ### Deferred
 
-Windows and Linux releases, other screen edges, manual pinning, project grouping, cloud/SSH monitoring, IDE-specific integrations, usage dashboards, dictation, task execution controls, sounds, account systems, and automatic updates.
+Windows and Linux releases, other screen edges, manual pinning, project grouping, cloud/SSH monitoring, IDE-specific integrations, usage dashboards, dictation, task execution controls, sounds beyond the finished-turn cue, account systems, and automatic updates.
 
 Public release publication and promotion from `staging` to `main` are separate final release actions. This implementation ends with a tested release candidate ready to publish.
 
@@ -68,67 +68,63 @@ Reuse the exact palette and status meanings from [the existing theme module](/Us
 
 | State | Color | Compact island |
 |---|---|---|
-| Idle / unavailable | `#F1F1ED` | White dot, no label |
-| Completed, unread | `#8FEA98` | Green dot, `<Provider> is done` |
-| Working | `#8DCEF5` | Pulsing blue dot, `<Provider> is working` |
-| Waiting for input | `#FF8A3D` | Orange dot, `<Provider> needs input` |
+| Idle / unavailable | `#F1F1ED` | White dot |
+| Completed | `#8FEA98` | Pulses green for 5 s, then the harness's current tone (idle is white) |
+| Working | `#8DCEF5` | Pulsing blue dot |
+| Waiting for input | `#FF8A3D` | Orange dot |
 | Error | `#FF6B73` | Reads as idle until the island expands |
 
-Unavailable status stays distinct from idle in session state and is used when a previously observed item can no longer be observed reliably; the compact island shows both as white. Errors likewise stay in session state and keep their color for the future expanded island.
+Session state still distinguishes unread completions, unavailable items, and errors; the compact island shows all three as idle. Unavailable is used when a previously observed item can no longer be observed reliably, and errors keep their color for the future expanded island.
 
 ### 2.2 Compact island
 
 - The island is one black (`#000`) shape hanging from the top edge of the selected display, centered horizontally over the menu bar's empty center: **32 CSS px** tall, a flat top with **8 CSS px** concave shoulders on both sides, and a fully rounded bottom (16 px radius).
-- Its width follows its content with **14 CSS px** of horizontal padding and a minimum of **48 CSS px**.
+- Its width follows its two columns with **14 CSS px** of horizontal padding and a minimum of **48 CSS px**.
 - The native window is **360 × 56 CSS px** at the display's top edge and sits above the menu bar at the status window level. Transparent space outside the island surface passes mouse events to applications underneath; the island surface is the only native hit region.
 - No title, toolbar, legend, settings button, icon, frosted backdrop, or native vibrancy window.
 - If no sessions qualify, hide the island completely. The menu-bar icon remains available.
 
-### 2.3 Dots and label
+### 2.3 Harness columns
 
-Compact mode shows one **8 CSS px** dot chosen in this priority order:
+The island always shows one column per harness (the user authorized this on 2026-09-23), mirrored around its center with a **28 CSS px** gap:
 
-1. Orange when any recent thread needs input.
-2. Green when any recent thread is done and unread.
-3. Blue when any recent thread is working.
-4. White otherwise.
+- Codex on the left: an **8 CSS px** dot, then `Codex`, **8 CSS px** apart.
+- Claude on the right: `Claude`, then its dot.
 
-When the green dot shows while another thread still works, a blue dot sits on its left, **6 CSS px** apart. Only blue dots pulse (a breathing dot with a soft expanding ring). Errors and unavailable threads read as idle in compact mode.
+Each dot shows its harness's most important recent thread:
 
-The label follows the dots after a **10 CSS px** gap and names the provider (`Codex` or `Claude`) of the most recently updated thread in the shown state:
+1. Orange when one of its threads needs input.
+2. Else blue, pulsing (a breathing dot with a soft expanding ring), while one of its threads works.
+3. Else white for idle.
 
-- `<Provider> needs input` for orange.
-- `<Provider> is done` for green, including the blue-and-green pair.
-- `<Provider> is working` for blue.
-- No label for white.
+There is no done state: a finished, failed, or unavailable thread counts as idle. Nothing else appears in the island: no labels, thread titles, icons, counts, badges, or decorative copy. Both names use the bundled Fira Code typeface at weight 500 and 12 px in one gray (`#F1F1ED` at 62 % opacity).
 
-The label uses the bundled Fira Code typeface at weight 500 and 12 px; the provider name is full white (`#F1F1ED`) and the rest is dimmed. Nothing else appears in the island: no thread titles, counts, badges, or decorative copy. Titles, which stay in session state for navigation, remain out of logs and diagnostics.
+When a turn finishes live (a thread the island has seen gains a new, unacknowledged completion), the island plays the `success` cue from [Cuelume](https://cuelume.dev/). Its recipe is vendored in `src/renderer/island/success-cue.ts` (MIT) and synthesized locally with Web Audio, with no file loaded, because the Cuelume package refuses to play before a user gesture and the overlay never takes focus; the overlay window also allows audio without a gesture. That harness's dot pulses green (`#8FEA98`) for **5 seconds** and then shows its current tone, white or blue (the user extended the cue to every finished turn on 2026-09-23). Finishing again restarts the 5 seconds. The green ends early, for good, once the harness's tone changes from the one it finished with (it starts or stops working, or a question arrives); a harness waiting for input stays orange, because a question outranks a finished turn. The island remembers up to 256 threads' completions, including threads that left the recent list. Completions that existed before it first saw a thread, and replayed history that arrives already acknowledged, never sound; a brand-new thread whose first turn ends before the island ever shows it is also silent, as is a turn that finished while its thread was pruned from the runtime's recent set, because the runtime baselines a returning thread's history as acknowledged.
 
-Motion: the width changes with one **420 ms** spring transition, a new label fades in, and a new dot scales in. Reduced motion stops the pulse and every transition.
+Motion: the width changes with one **420 ms** spring transition, and a dot scales in whenever its tone changes. Reduced motion stops the pulse and every transition but keeps the sound.
 
 The island does not expand yet. An expanded view needs explicit product authorization.
 
 #### Interaction mockup
 
 ```text
-          menu bar ─────────╮         ╭───────── menu bar
-                             ╰─ ● ────╯                       idle
-                    ╰─ ◉ Codex is working ─╯                  working
-                   ╰─ ◉ ● Claude is done ─╯                   working + done
-                   ╰─ ● Codex needs input ─╯                  needs input
+          menu bar ─────────╮                       ╭───────── menu bar
+                  ╰─ ● Codex      Claude ● ─╯          both idle
+                  ╰─ ◉ Codex      Claude ● ─╯          Codex working, Claude idle
+                  ╰─ ◉ Codex      Claude ◉ ─╯          Claude finished its only turn: sound, green 5 s, then white
+                  ╰─ ◉ Codex      Claude ◉ ─╯          both working
+                  ╰─ ◉ Codex      Claude ◉ ─╯          Codex finished one of two: sound, green for 5 s
+                  ╰─ ● Codex      Claude ● ─╯          Codex needs input (orange)
 ```
 
-The labels to the right explain the mockup; they never appear in the island.
+The notes to the right explain the mockup; they never appear in the island.
 
 ### 2.4 Recency, opening, and errors
 
 - Sort eligible items by confirmed provider update or task activity, newest first, with a stable ID tie-break. Local acknowledgement and error dismissal do not change recency.
 - Apply the global Recent threads limit (default five, range one to ten) across connected harnesses, including idle items; the island summarizes only those items.
 - Items outside the configured recent limit remain in local state and return when they become recent enough.
-- Bind a click to the labeled session and the completion captured on pointer-down.
-- Successful opening acknowledges the completion that was visible when clicked.
-- A newer completion arriving during navigation must remain unread.
-- Failed navigation must not acknowledge completion.
+- A click opens the most urgent thread (waiting for input, else the newest working one), bound to the session captured on pointer-down. Those threads have no completion, so opening from the island acknowledges nothing; unread completions stay in session state only, where they no longer show.
 - Errors remain in session state until a new turn. Explicit dismissal stays available over IPC for the future expanded island; the compact island has no context menu.
 - Dismissal affects only the companion's display, never the underlying task.
 
@@ -177,8 +173,8 @@ Rules:
 ### 2.6 Accessibility and desktop behavior
 
 - Hover must not activate the app or steal keyboard focus.
-- Support keyboard entry through the menu-bar action, which focuses the island; Enter opens the labeled thread and Escape leaves keyboard mode.
-- The island's accessible name is its label, or `All threads are idle`.
+- Support keyboard entry through the menu-bar action, which focuses the island; Enter opens the most urgent thread (waiting for input, else the newest working one), like a click, and Escape leaves keyboard mode.
+- The island's accessible name lists each harness and its tone, for example `Codex working, Claude idle`; it never includes thread titles.
 - Respect system reduced-motion settings; allow explicitly enabling reduced motion.
 - Reduced motion stops the pulse and every island transition.
 - Display disconnection moves the island to the primary display; reconnecting restores the selected display.
@@ -798,8 +794,9 @@ Record corrections made after review and the commit used for final validation.
 
 - [ ] All four local harness surfaces have live validation evidence.
 - [ ] The compact island hangs from the top center of the selected display at 32 pixels tall, above the menu bar.
-- [ ] The island shows the priority dot (or the blue-and-green pair) and only the provider status label; blue dots pulse and idle shows no text.
-- [ ] Clicking the island opens the labeled thread; transparent space around it does not block underlying applications.
+- [ ] The island shows Codex and Claude columns with one dot each (needs input, working, or idle) and no other text; working dots pulse.
+- [ ] A finished turn plays the success cue and pulses its harness green for 5 seconds before its current tone.
+- [ ] Clicking the island opens the most urgent thread; transparent space around it does not block underlying applications.
 - [ ] Settings use stock shadcn without redundant copy.
 - [ ] The configured number of recent eligible items appears, including idle and acknowledged items.
 - [ ] Clicks foreground the correct owning app.

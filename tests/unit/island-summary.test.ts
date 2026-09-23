@@ -1,7 +1,13 @@
 import { describe, expect, it } from 'vitest';
 
 import type { SessionSnapshot } from '../../src/shared/session';
-import { summarizeIsland } from '../../src/renderer/island/summary';
+import {
+  completionSnapshot,
+  finishedHarnesses,
+  MAX_REMEMBERED_COMPLETIONS,
+  islandTarget,
+  summarizeHarnesses,
+} from '../../src/renderer/island/summary';
 
 function session(overrides: Partial<SessionSnapshot> = {}): SessionSnapshot {
   return {
@@ -19,74 +25,148 @@ function session(overrides: Partial<SessionSnapshot> = {}): SessionSnapshot {
   };
 }
 
-describe('compact island summary', () => {
-  it('shows one white dot and no label while every thread is idle', () => {
-    expect(summarizeIsland([session(), session({ id: 'claude:two', provider: 'claude' })])).toEqual(
-      { dots: ['idle'], label: null, target: null },
-    );
+function claude(overrides: Partial<SessionSnapshot> = {}): SessionSnapshot {
+  return session({ id: 'claude:one', provider: 'claude', surface: 'cli', ...overrides });
+}
+
+function tones(sessions: readonly SessionSnapshot[]): readonly string[] {
+  return summarizeHarnesses(sessions).map((column) => `${column.provider}:${column.tone}`);
+}
+
+describe('harness columns', () => {
+  it('always shows Codex then Claude, idle when nothing runs', () => {
+    expect(tones([])).toEqual(['codex:idle', 'claude:idle']);
+    expect(tones([session(), claude()])).toEqual(['codex:idle', 'claude:idle']);
   });
 
-  it('treats errors and unavailable threads as idle in compact mode', () => {
-    const summary = summarizeIsland([
-      session({ status: 'error' }),
-      session({ id: 'claude:two', provider: 'claude', status: 'unavailable' }),
-    ]);
-    expect(summary.dots).toEqual(['idle']);
-    expect(summary.label).toBeNull();
+  it('treats done, failed, and unavailable threads as idle', () => {
+    expect(
+      tones([
+        session({ status: 'unread', completionId: 'c1' }),
+        claude({ status: 'error' }),
+        claude({ id: 'claude:two', status: 'unavailable' }),
+      ]),
+    ).toEqual(['codex:idle', 'claude:idle']);
   });
 
-  it('names the most recently updated working thread', () => {
-    const summary = summarizeIsland([
-      session({ status: 'working', updatedAt: 5 }),
-      session({ id: 'claude:two', provider: 'claude', status: 'working', updatedAt: 9 }),
-    ]);
-    expect(summary.dots).toEqual(['working']);
-    expect(summary.label).toBe('Claude is working');
-    expect(summary.target?.id).toBe('claude:two');
+  it('shows a harness as working while any of its threads runs, even beside a done one', () => {
+    expect(
+      tones([
+        session({ id: 'codex:done', status: 'unread', completionId: 'c1', updatedAt: 9 }),
+        session({ id: 'codex:running', status: 'working', updatedAt: 2 }),
+      ]),
+    ).toEqual(['codex:working', 'claude:idle']);
   });
 
-  it('shows a lone green dot for a done thread with nothing working', () => {
-    const summary = summarizeIsland([
-      session({ status: 'unread', completionId: 'c1' }),
-      session({ id: 'claude:two', provider: 'claude' }),
+  it('lets needs input outrank working within a harness', () => {
+    const columns = summarizeHarnesses([
+      claude({ id: 'claude:running', status: 'working', updatedAt: 9 }),
+      claude({ id: 'claude:asking', status: 'needs-input', updatedAt: 1 }),
     ]);
-    expect(summary.dots).toEqual(['unread']);
-    expect(summary.label).toBe('Codex is done');
-    expect(summary.target?.completionId).toBe('c1');
+    expect(columns[1]).toMatchObject({ tone: 'needs-input', target: { id: 'claude:asking' } });
   });
 
-  it('pairs blue on the left with green on the right and keeps the done label', () => {
-    const summary = summarizeIsland([
-      session({ status: 'working', updatedAt: 20 }),
-      session({
-        id: 'claude:two',
-        provider: 'claude',
-        status: 'unread',
-        completionId: 'c2',
-        updatedAt: 3,
-      }),
+  it('keeps the harnesses independent', () => {
+    expect(tones([session({ status: 'working' }), claude({ status: 'needs-input' })])).toEqual([
+      'codex:working',
+      'claude:needs-input',
     ]);
-    expect(summary.dots).toEqual(['working', 'unread']);
-    expect(summary.label).toBe('Claude is done');
-    expect(summary.target?.id).toBe('claude:two');
-  });
-
-  it('lets needs input win over done and working threads', () => {
-    const summary = summarizeIsland([
-      session({ status: 'working', updatedAt: 30 }),
-      session({ id: 'codex:two', status: 'unread', completionId: 'c2', updatedAt: 40 }),
-      session({ id: 'claude:three', provider: 'claude', status: 'needs-input', updatedAt: 1 }),
-    ]);
-    expect(summary.dots).toEqual(['needs-input']);
-    expect(summary.label).toBe('Claude needs input');
-    expect(summary.target?.id).toBe('claude:three');
   });
 
   it('ignores archived threads and spawned child threads', () => {
-    const summary = summarizeIsland([
-      session({ status: 'needs-input', isArchived: true }),
-      session({ id: 'codex:child', status: 'working', isTopLevel: false }),
+    expect(
+      tones([
+        session({ status: 'needs-input', isArchived: true }),
+        session({ id: 'codex:child', status: 'working', isTopLevel: false }),
+      ]),
+    ).toEqual(['codex:idle', 'claude:idle']);
+  });
+
+  it('opens a thread waiting for input first, then the newest working one', () => {
+    expect(
+      islandTarget(
+        summarizeHarnesses([
+          session({ status: 'working', updatedAt: 9 }),
+          claude({ status: 'needs-input', updatedAt: 1 }),
+        ]),
+      )?.id,
+    ).toBe('claude:one');
+    expect(
+      islandTarget(
+        summarizeHarnesses([
+          session({ status: 'working', updatedAt: 2 }),
+          claude({ status: 'working', updatedAt: 7 }),
+        ]),
+      )?.id,
+    ).toBe('claude:one');
+    expect(islandTarget(summarizeHarnesses([session()]))).toBeNull();
+  });
+});
+
+describe('finished turns', () => {
+  it('seeds silently on the first snapshot', () => {
+    expect(finishedHarnesses(null, [session({ status: 'unread', completionId: 'c1' })])).toEqual(
+      new Set(),
+    );
+  });
+
+  it('reports a harness whose thread gained a new completion', () => {
+    const before = completionSnapshot(null, [
+      session({ status: 'working' }),
+      claude({ status: 'working' }),
     ]);
-    expect(summary).toEqual({ dots: ['idle'], label: null, target: null });
+    const finished = finishedHarnesses(before, [
+      session({ status: 'unread', completionId: 'c1' }),
+      claude({ status: 'working' }),
+    ]);
+    expect(finished).toEqual(new Set(['codex']));
+  });
+
+  it('ignores unchanged completions and threads it has not seen before', () => {
+    const before = completionSnapshot(null, [session({ status: 'unread', completionId: 'c1' })]);
+    expect(
+      finishedHarnesses(before, [
+        session({ status: 'unread', completionId: 'c1' }),
+        claude({ status: 'unread', completionId: 'c9' }),
+      ]),
+    ).toEqual(new Set());
+  });
+
+  it('ignores a completion that arrives already acknowledged, as replayed history does', () => {
+    const before = completionSnapshot(null, [session()]);
+    expect(finishedHarnesses(before, [session({ status: 'idle', completionId: 'old' })])).toEqual(
+      new Set(),
+    );
+  });
+
+  it('counts each turn on the same thread, since a new turn clears the completion', () => {
+    let snapshot = completionSnapshot(null, [session({ status: 'unread', completionId: 'c1' })]);
+    const working = [session({ status: 'working' })];
+    expect(finishedHarnesses(snapshot, working)).toEqual(new Set());
+    snapshot = completionSnapshot(snapshot, working);
+    expect(
+      finishedHarnesses(snapshot, [session({ status: 'unread', completionId: 'c2' })]),
+    ).toEqual(new Set(['codex']));
+  });
+
+  it('remembers a thread that left the recent list and finishes when it returns', () => {
+    let snapshot = completionSnapshot(null, [session({ status: 'working' })]);
+    // The thread drops out of a one-item recent list while it keeps working.
+    snapshot = completionSnapshot(snapshot, [claude({ status: 'working' })]);
+    expect(
+      finishedHarnesses(snapshot, [
+        session({ status: 'unread', completionId: 'c1', updatedAt: 9 }),
+      ]),
+    ).toEqual(new Set(['codex']));
+  });
+
+  it('bounds how many threads it remembers', () => {
+    let snapshot = completionSnapshot(null, []);
+    for (let index = 0; index < MAX_REMEMBERED_COMPLETIONS + 10; index += 1) {
+      snapshot = completionSnapshot(snapshot, [session({ id: `codex:${String(index)}` })]);
+    }
+    expect(snapshot.size).toBe(MAX_REMEMBERED_COMPLETIONS);
+    expect(snapshot.has(`codex:${String(MAX_REMEMBERED_COMPLETIONS + 9)}`)).toBe(true);
+    expect(snapshot.has('codex:0')).toBe(false);
   });
 });

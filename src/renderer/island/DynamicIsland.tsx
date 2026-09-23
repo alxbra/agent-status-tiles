@@ -14,10 +14,19 @@ import {
 import '@fontsource/fira-code/latin-500.css';
 
 import type { OverlayHitRegion } from '../../shared/overlay-ipc';
-import type { SessionSnapshot } from '../../shared/session';
+import type { Provider, SessionSnapshot } from '../../shared/session';
 import { captureOpenTarget, visibleIslandSessions, type OpenSessionTarget } from './interaction';
-import { summarizeIsland } from './summary';
-import { TONE_COLOR } from './theme';
+import {
+  completionSnapshot,
+  finishedHarnesses,
+  HARNESS_NAME,
+  islandTarget,
+  summarizeHarnesses,
+  type CompletionSnapshot,
+  type HarnessColumn,
+  type HarnessTone,
+} from './summary';
+import { FINISHED_CUE_MS, TONE_COLOR, type DotTone } from './theme';
 import './island.css';
 
 export interface DynamicIslandProps {
@@ -28,6 +37,8 @@ export interface DynamicIslandProps {
   /** Monotonic signal from the native menu-bar keyboard-entry action. */
   keyboardEntryRevision?: number;
   reducedMotion?: boolean;
+  /** Called once for every update in which at least one turn finished. */
+  onTurnFinished?: () => void;
 }
 
 const ISLAND_HEIGHT = 32;
@@ -49,11 +60,42 @@ function usePrefersReducedMotion(): boolean {
   return prefersReducedMotion;
 }
 
-function IslandLabel({ label }: { label: string }): ReactElement {
-  const [provider, ...rest] = label.split(' ');
+const TONE_WORDS: Record<DotTone, string> = {
+  idle: 'idle',
+  working: 'working',
+  finished: 'finished a turn',
+  'needs-input': 'needs input',
+};
+
+function HarnessCell({
+  column,
+  tone,
+  side,
+}: {
+  column: HarnessColumn;
+  tone: DotTone;
+  side: 'start' | 'end';
+}): ReactElement {
+  const dot = (
+    <span
+      // A tone change is a new dot, so it scales in again.
+      key={tone}
+      className="dynamic-island__dot"
+      data-tone={tone}
+      style={{ '--dynamic-island-dot': TONE_COLOR[tone] } as CSSProperties}
+    />
+  );
+  const name = <span className="dynamic-island__name">{HARNESS_NAME[column.provider]}</span>;
+  // The columns mirror each other around the island's center.
   return (
-    <span className="dynamic-island__label">
-      <span className="dynamic-island__provider">{provider}</span> {rest.join(' ')}
+    <span
+      className="dynamic-island__harness"
+      data-provider={column.provider}
+      data-tone={tone}
+      data-side={side}
+    >
+      {side === 'start' ? dot : name}
+      {side === 'start' ? name : dot}
     </span>
   );
 }
@@ -65,6 +107,7 @@ export function DynamicIsland({
   onKeyboardExit,
   keyboardEntryRevision,
   reducedMotion,
+  onTurnFinished,
 }: DynamicIslandProps): ReactElement | null {
   const rootRef = useRef<HTMLDivElement>(null);
   const pillRef = useRef<HTMLButtonElement>(null);
@@ -75,9 +118,70 @@ export function DynamicIsland({
   const prefersReducedMotion = usePrefersReducedMotion();
   const motionReduced = prefersReducedMotion || reducedMotion === true;
 
-  const summary = useMemo(() => summarizeIsland(sessions), [sessions]);
+  const columns = useMemo(() => summarizeHarnesses(sessions), [sessions]);
+  const completionsRef = useRef<CompletionSnapshot | null>(null);
+  const cueTimersRef = useRef(new Map<Provider, number>());
+  /** Harnesses showing the green cue, with the tone they had when their turn finished. */
+  const [cued, setCued] = useState<ReadonlyMap<Provider, HarnessTone>>(() => new Map());
   const hasSessions = visibleIslandSessions(sessions).length > 0;
   const width = Math.max(ISLAND_MIN_WIDTH, Math.ceil(contentWidth) + ISLAND_PADDING_X * 2);
+
+  // A layout effect, so the green cue replaces the new tone before it paints.
+  useLayoutEffect(() => {
+    const finished = finishedHarnesses(completionsRef.current, sessions);
+    completionsRef.current = completionSnapshot(completionsRef.current, sessions);
+    if (finished.size === 0) return;
+    onTurnFinished?.();
+    // Every harness that finished a turn shows green for a moment, then its
+    // current tone; finishing again restarts its moment.
+    for (const provider of finished) {
+      window.clearTimeout(cueTimersRef.current.get(provider));
+      cueTimersRef.current.set(
+        provider,
+        window.setTimeout(() => {
+          cueTimersRef.current.delete(provider);
+          setCued((current) => {
+            const next = new Map(current);
+            next.delete(provider);
+            return next;
+          });
+        }, FINISHED_CUE_MS),
+      );
+    }
+    setCued((current) => {
+      const next = new Map(current);
+      for (const column of columns) {
+        if (finished.has(column.provider)) next.set(column.provider, column.tone);
+      }
+      return next;
+    });
+  }, [sessions, columns, onTurnFinished]);
+
+  // Once a harness's tone moves away from the one it finished with, its green
+  // moment is over for good, even if the tone later comes back.
+  useLayoutEffect(() => {
+    const ended = columns.filter(
+      (column) => cued.has(column.provider) && cued.get(column.provider) !== column.tone,
+    );
+    if (ended.length === 0) return;
+    for (const { provider } of ended) {
+      window.clearTimeout(cueTimersRef.current.get(provider));
+      cueTimersRef.current.delete(provider);
+    }
+    setCued((current) => {
+      const next = new Map(current);
+      for (const { provider } of ended) next.delete(provider);
+      return next;
+    });
+  }, [columns, cued]);
+
+  useEffect(() => {
+    const timers = cueTimersRef.current;
+    return () => {
+      for (const timer of timers.values()) window.clearTimeout(timer);
+      timers.clear();
+    };
+  }, []);
 
   useLayoutEffect(() => {
     const content = contentRef.current;
@@ -170,7 +274,13 @@ export function DynamicIsland({
 
   if (!hasSessions) return null;
 
-  const target = summary.target;
+  const target = islandTarget(columns);
+  // The green cue lasts while the harness keeps the tone it finished with; a
+  // harness waiting for input never turns green, because a question outranks it.
+  const toneOf = (column: HarnessColumn): DotTone =>
+    column.tone !== 'needs-input' && cued.get(column.provider) === column.tone
+      ? 'finished'
+      : column.tone;
   const openableTarget = (): OpenSessionTarget | null =>
     target !== null && target.canOpen ? captureOpenTarget(target) : null;
 
@@ -187,7 +297,9 @@ export function DynamicIsland({
     void Promise.resolve(onOpenSession(clicked)).catch(() => undefined);
   };
 
-  const ariaLabel = summary.label ?? 'All threads are idle';
+  const ariaLabel = columns
+    .map((column) => `${HARNESS_NAME[column.provider]} ${TONE_WORDS[toneOf(column)]}`)
+    .join(', ');
 
   return (
     <div
@@ -217,17 +329,14 @@ export function DynamicIsland({
           onClick={handleClick}
         >
           <span ref={contentRef} className="dynamic-island__content">
-            <span className="dynamic-island__dots">
-              {summary.dots.map((tone) => (
-                <span
-                  key={tone}
-                  className="dynamic-island__dot"
-                  data-tone={tone}
-                  style={{ '--dynamic-island-dot': TONE_COLOR[tone] } as CSSProperties}
-                />
-              ))}
-            </span>
-            {summary.label !== null && <IslandLabel key={summary.label} label={summary.label} />}
+            {columns.map((column, index) => (
+              <HarnessCell
+                key={column.provider}
+                column={column}
+                tone={toneOf(column)}
+                side={index === 0 ? 'start' : 'end'}
+              />
+            ))}
           </span>
         </button>
       </div>

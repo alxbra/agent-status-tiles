@@ -7,6 +7,7 @@ import { translateAndClipHitRegions } from './overlay-hit-regions';
 import { retryOverlayHandshake } from './overlay-readiness';
 import { DynamicIsland } from './island/DynamicIsland';
 import type { OpenSessionTarget } from './island/interaction';
+import { playSuccessCue } from './island/success-cue';
 import './styles.css';
 import './overlay.css';
 
@@ -111,6 +112,7 @@ export function OverlayApp(): ReactElement {
       onHitRegionsChange={publishHitRegions}
       onKeyboardExit={keyboardExit}
       keyboardEntryRevision={keyboardEntryRevision}
+      onTurnFinished={playSuccessCue}
     />
   );
 }

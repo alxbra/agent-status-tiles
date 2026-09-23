@@ -78,17 +78,29 @@
 }
 
 .dynamic-island__content {
-  display: inline-flex;
+  /* Two equal columns keep the gap between Codex and Claude on the island's
+     center even though the names differ in length. */
+  display: inline-grid;
   flex: none;
+  grid-template-columns: 1fr 1fr;
   align-items: center;
-  gap: 10px;
+  column-gap: 28px;
   white-space: nowrap;
 }
 
-.dynamic-island__dots {
+.dynamic-island__harness {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
+}
+
+/* Each name hugs the center, so the columns mirror each other. */
+.dynamic-island__harness[data-side='start'] {
+  justify-content: flex-end;
+}
+
+.dynamic-island__harness[data-side='end'] {
+  justify-content: flex-start;
 }
 
 .dynamic-island__dot {
@@ -101,14 +113,16 @@
   animation: dynamic-island-dot-in 320ms var(--dynamic-island-spring) both;
 }
 
-/* Working dots breathe and throw a soft ring. */
-.dynamic-island__dot[data-tone='working'] {
+/* Working dots, and the green cue after a turn finished, breathe and throw a soft ring. */
+.dynamic-island__dot[data-tone='working'],
+.dynamic-island__dot[data-tone='finished'] {
   animation:
     dynamic-island-dot-in 320ms var(--dynamic-island-spring) both,
     dynamic-island-breathe 1.6s ease-in-out 320ms infinite;
 }
 
-.dynamic-island__dot[data-tone='working']::after {
+.dynamic-island__dot[data-tone='working']::after,
+.dynamic-island__dot[data-tone='finished']::after {
   content: '';
   position: absolute;
   inset: 0;
@@ -117,7 +131,7 @@
   animation: dynamic-island-ring 1.6s cubic-bezier(0.2, 0, 0, 1) infinite;
 }
 
-.dynamic-island__label {
+.dynamic-island__name {
   font:
     500 12px/1 'Fira Code',
     ui-monospace,
@@ -128,12 +142,8 @@
     'calt' 1,
     'liga' 1;
   letter-spacing: -0.01em;
+  /* One gray for both harness names. */
   color: rgb(241 241 237 / 0.62);
-  animation: dynamic-island-label-in 360ms cubic-bezier(0.2, 0, 0, 1) both;
-}
-
-.dynamic-island__provider {
-  color: var(--dynamic-island-text);
 }
 
 @keyframes dynamic-island-dot-in {
@@ -166,18 +176,9 @@
   }
 }
 
-@keyframes dynamic-island-label-in {
-  from {
-    opacity: 0;
-    filter: blur(4px);
-    transform: translateY(3px);
-  }
-}
-
 .dynamic-island--reduced-motion .dynamic-island__shape,
 .dynamic-island--reduced-motion .dynamic-island__dot,
-.dynamic-island--reduced-motion .dynamic-island__dot::after,
-.dynamic-island--reduced-motion .dynamic-island__label {
+.dynamic-island--reduced-motion .dynamic-island__dot::after {
   animation: none;
   transition: none;
 }

@@ -1,4 +1,7 @@
-import type { IslandTone } from './summary';
+import type { HarnessTone } from './summary';
+
+/** What a dot shows: the harness tone, or the brief green cue after a turn finished. */
+export type DotTone = HarnessTone | 'finished';
 
 /**
  * The status colors are shared with codex-status-actions
@@ -11,9 +14,12 @@ const ISLAND_COLORS = {
   orange: '#FF8A3D',
 } as const;
 
-export const TONE_COLOR: Record<IslandTone, string> = {
+export const TONE_COLOR: Record<DotTone, string> = {
   idle: ISLAND_COLORS.neutral,
   working: ISLAND_COLORS.blue,
-  unread: ISLAND_COLORS.green,
+  finished: ISLAND_COLORS.green,
   'needs-input': ISLAND_COLORS.orange,
 };
+
+/** How long a harness shows the green cue after one of its turns finished. */
+export const FINISHED_CUE_MS = 5_000;
