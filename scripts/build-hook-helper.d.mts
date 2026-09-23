@@ -7,7 +7,7 @@ export interface BuildOptions {
   cargoPath: string;
   /** False when Cargo comes from the default lookup rather than configuration. */
   cargoExplicit: boolean;
-  ifMissing: boolean;
+  ifStale: boolean;
   optional: boolean;
   architectures: HelperArch[];
 }

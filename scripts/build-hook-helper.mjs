@@ -34,13 +34,13 @@ function isSupportedArchitecture(arch) {
 }
 
 const usage = `Usage: node scripts/build-hook-helper.mjs [--arch arm64|x64|both|host] [--cargo PATH]
-       [--if-missing] [--optional]
+       [--if-stale] [--optional]
 
 Builds the macOS hook-helper resource for the selected Electron architectures.
 The default is both supported architectures; host builds only this Mac's.
 Without HOOK_HELPER_CARGO, CARGO, or --cargo, Cargo is looked up on PATH, in
 ~/.cargo/bin, and in the stable rustup toolchains.
---if-missing skips the build when a valid helper newer than the Rust sources
+--if-stale skips the build when a valid helper newer than the Rust sources
 is already in place.
 --optional reports a failed build as a warning and exits successfully.`;
 
@@ -57,7 +57,7 @@ export function parseBuildOptions(argv, environment = process.env, processArch =
   const configuredCargo = environment.HOOK_HELPER_CARGO ?? environment.CARGO;
   let cargoPath = configuredCargo ?? 'cargo';
   let cargoExplicit = configuredCargo !== undefined;
-  let ifMissing = false;
+  let ifStale = false;
   let optional = false;
 
   for (let index = 0; index < argv.length; index += 1) {
@@ -77,8 +77,8 @@ export function parseBuildOptions(argv, environment = process.env, processArch =
         throw new Error('--cargo requires an executable path');
       }
       cargoExplicit = true;
-    } else if (argument === '--if-missing') {
-      ifMissing = true;
+    } else if (argument === '--if-stale') {
+      ifStale = true;
     } else if (argument === '--optional') {
       optional = true;
     } else if (argument !== '--help' && argument !== '-h') {
@@ -90,7 +90,7 @@ export function parseBuildOptions(argv, environment = process.env, processArch =
     arch,
     cargoPath,
     cargoExplicit,
-    ifMissing,
+    ifStale,
     optional,
     architectures: arch === 'both' ? ['arm64', 'x64'] : [arch],
   };
@@ -245,6 +245,21 @@ function prepareOutputRoot() {
     }
   }
   mkdirSync(outputRoot, { recursive: true, mode: 0o755 });
+  // An interrupted install can leave a staged copy; it must never be packaged.
+  for (const arch of Object.keys(ARCHITECTURES)) {
+    const architectureDirectory = join(outputRoot, arch);
+    let entries;
+    try {
+      entries = readdirSync(architectureDirectory);
+    } catch {
+      continue;
+    }
+    for (const entry of entries) {
+      if (/^hook-helper\.\d+\.tmp$/u.test(entry)) {
+        rmSync(join(architectureDirectory, entry), { force: true });
+      }
+    }
+  }
 }
 
 /**
@@ -370,13 +385,23 @@ function main() {
     return;
   }
   const options = parseBuildOptions(argv);
-  if (options.ifMissing && helpersInPlace(options.architectures)) return;
+  if (options.ifStale && helpersInPlace(options.architectures)) return;
   try {
     buildHookHelper(options);
   } catch (error) {
     if (!options.optional) throw error;
+    const kept = options.architectures.every((arch) => {
+      try {
+        validateBuiltHelper(arch);
+        return true;
+      } catch {
+        return false;
+      }
+    });
     logger.warn(
-      `hook-helper was not built (${error.message}); Claude Code cannot connect until \`pnpm build:hook-helper -- --arch host\` succeeds.`,
+      kept
+        ? `hook-helper was not rebuilt (${error.message}); the existing helper is older than the Rust sources until \`pnpm build:hook-helper -- --arch host\` succeeds.`
+        : `hook-helper was not built (${error.message}); Claude Code cannot connect until \`pnpm build:hook-helper -- --arch host\` succeeds.`,
     );
     return;
   }

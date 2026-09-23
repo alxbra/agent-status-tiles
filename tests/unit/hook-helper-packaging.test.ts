@@ -280,12 +280,12 @@ describe('hook-helper packaging contract', () => {
       architectures: ['arm64'],
       cargoPath: 'cargo',
       cargoExplicit: false,
-      ifMissing: false,
+      ifStale: false,
       optional: false,
     });
     expect(
-      parseBuildOptions(['--arch', 'host', '--if-missing', '--optional'], {}, 'x64'),
-    ).toMatchObject({ architectures: ['x64'], ifMissing: true, optional: true });
+      parseBuildOptions(['--arch', 'host', '--if-stale', '--optional'], {}, 'x64'),
+    ).toMatchObject({ architectures: ['x64'], ifStale: true, optional: true });
     expect(parseBuildOptions([], { HOOK_HELPER_CARGO: '/opt/cargo' })).toMatchObject({
       cargoPath: '/opt/cargo',
       cargoExplicit: true,
@@ -336,7 +336,7 @@ describe('hook-helper packaging contract', () => {
     ).toHaveLength(32);
   });
 
-  it('skips a valid helper with --if-missing and only warns with --optional', () => {
+  it('skips a valid helper with --if-stale and only warns with --optional', () => {
     const { directory, buildScript, fakeCargo, cargoLog } = createBuildFixture();
     const env = { ...process.env, FAKE_CARGO_LOG: cargoLog };
     const build = (...args: string[]) =>
@@ -354,12 +354,12 @@ describe('hook-helper packaging contract', () => {
 
     expect(build('--cargo', fakeCargo).status).toBe(0);
     rmSync(cargoLog);
-    const skipped = build('--cargo', missingCargo, '--if-missing');
+    const skipped = build('--cargo', missingCargo, '--if-stale');
     expect(skipped.status).toBe(0);
     expect(() => readFileSync(cargoLog)).toThrow();
   });
 
-  it('rebuilds a wrong-architecture or out-of-date helper despite --if-missing', () => {
+  it('rebuilds a wrong-architecture or out-of-date helper despite --if-stale', () => {
     const { directory, buildScript, fakeCargo, cargoLog } = createBuildFixture();
     const build = (...args: string[]) =>
       spawnSync(process.execPath, [buildScript, '--arch', 'arm64', '--cargo', fakeCargo, ...args], {
@@ -372,13 +372,13 @@ describe('hook-helper packaging contract', () => {
     expect(build().status).toBe(0);
     copyFileSync(writeMachO(directory, 'x64'), helper);
     rmSync(cargoLog);
-    expect(build('--if-missing').status).toBe(0);
+    expect(build('--if-stale').status).toBe(0);
     expect(readFileSync(cargoLog, 'utf8')).toContain('aarch64-apple-darwin');
 
     const later = new Date(Date.now() + 60_000);
     utimesSync(join(directory, 'crates', 'hook-helper', 'Cargo.toml'), later, later);
     rmSync(cargoLog);
-    expect(build('--if-missing').status).toBe(0);
+    expect(build('--if-stale').status).toBe(0);
     expect(readFileSync(cargoLog, 'utf8')).toContain('aarch64-apple-darwin');
   });
 
@@ -398,6 +398,39 @@ describe('hook-helper packaging contract', () => {
         readFileSync(join(directory, 'build', 'hook-helper', arch, 'hook-helper')),
       ).toHaveLength(32);
     }
+  });
+
+  it('removes staged copies left by an interrupted install', () => {
+    const { directory, buildScript, fakeCargo, cargoLog } = createBuildFixture();
+    const leftover = join(directory, 'build', 'hook-helper', 'x64', 'hook-helper.4242.tmp');
+    mkdirSync(join(directory, 'build', 'hook-helper', 'x64'), { recursive: true });
+    writeFileSync(leftover, 'partial');
+
+    const result = spawnSync(
+      process.execPath,
+      [buildScript, '--arch', 'arm64', '--cargo', fakeCargo],
+      { cwd: directory, encoding: 'utf8', env: { ...process.env, FAKE_CARGO_LOG: cargoLog } },
+    );
+
+    expect(result.status).toBe(0);
+    expect(() => readFileSync(leftover)).toThrow();
+  });
+
+  it('says an existing helper was kept when an optional rebuild fails', () => {
+    const { directory, buildScript, fakeCargo, cargoLog } = createBuildFixture();
+    const build = (...args: string[]) =>
+      spawnSync(process.execPath, [buildScript, '--arch', 'arm64', ...args], {
+        cwd: directory,
+        encoding: 'utf8',
+        env: { ...process.env, FAKE_CARGO_LOG: cargoLog },
+      });
+    expect(build('--cargo', fakeCargo).status).toBe(0);
+    const later = new Date(Date.now() + 60_000);
+    utimesSync(join(directory, 'crates', 'hook-helper', 'Cargo.toml'), later, later);
+
+    const result = build('--cargo', join(directory, 'no-cargo'), '--if-stale', '--optional');
+    expect(result.status).toBe(0);
+    expect(result.stderr).toContain('the existing helper is older than the Rust sources');
   });
 
   it('still fails malformed arguments under --optional', () => {
