@@ -20,17 +20,20 @@ particular:
   selected display, centered horizontally over the menu bar: **32 px tall**, a
   flat top with **8 px** concave shoulders, a fully rounded bottom, at least
   **48 px** wide, and **14 px** of horizontal padding around its content.
-- Compact mode shows one **8 px** indicator dot chosen in this priority order:
-  orange when any thread needs input, green when any thread is done and
-  unread, blue when any thread is working, otherwise white. When the green dot
-  shows while another thread works, a blue dot sits on its left. Only blue
-  dots pulse. Errors and unavailable threads read as idle in compact mode.
-- The label names the provider of the most recently updated thread in the
-  shown state: `Codex is working`, `Claude is done`, or `Codex needs input`.
-  The blue-and-green pair shows only the done label, and idle shows no text.
-  Nothing else: no icons, titles, counts, badges, or decorative copy.
-- The label uses bundled Fira Code at weight 500 and 12 px; the provider name
-  is full white and the rest is dimmed.
+- Each harness (Codex, Claude) shows at most one **8 px** dot for its most
+  important thread: orange when it needs input, else blue while it works, else
+  green when it is done and unread. A harness with nothing else shows no dot;
+  one white dot appears only when every harness is idle. Only blue dots pulse.
+  Errors and unavailable threads read as idle in compact mode.
+- The label names one harness, preferring what the user must act on: needs
+  input, then done, then working (the most recent thread breaks ties):
+  `Codex needs input`, `Claude is done`, or `Codex is working`. Its dot sits
+  next to the label, and idle shows no text. Nothing else: no icons, titles,
+  counts, badges, or decorative copy.
+- The label uses bundled Fira Code at weight 500 and 12 px in one gray; the
+  harness name is not highlighted.
+- Done clears when its harness app becomes frontmost: Codex or Claude Desktop
+  for their own threads, any qualified terminal for CLI threads.
 - Width follows the content with one **420 ms** spring transition; a new label
   fades in. Reduced motion stops the pulse and every transition.
 - Clicking the island opens the labeled thread and acknowledges the completion

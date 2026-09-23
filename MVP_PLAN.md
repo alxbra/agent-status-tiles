@@ -17,7 +17,7 @@ The first publishable release targets macOS and supports:
 
 Each eligible top-level thread or task is tracked locally. The overlay considers the five most recently updated items across connected harnesses by default, configurable from one to ten. Spawned subagents remain represented by their parent.
 
-The main interface is a compact dynamic island: one black, notch-style shape hanging from the top center of the selected display, over the menu bar. It collapses every recent thread into one status dot (two when a done thread shows while another works) and a short monospace label such as `Codex is working`. Clicking foregrounds the owning harness of the labeled thread and selects the specific session where supported. The user authorized this island on 2026-09-23, replacing the document-tab dock of 2026-09-17 (which had itself replaced the rounded-square tiles and Dock-style magnification); the reference states render from `tests/fixtures/dynamic-island.html`. The island does not expand yet.
+The main interface is a compact dynamic island: one black, notch-style shape hanging from the top center of the selected display, over the menu bar. It collapses the recent threads into one status dot per active harness (a single white dot when all are idle) and a short monospace label such as `Codex is working`. Clicking foregrounds the owning harness of the labeled thread and selects the specific session where supported. The user authorized this island on 2026-09-23, replacing the document-tab dock of 2026-09-17 (which had itself replaced the rounded-square tiles and Dock-style magnification); the reference states render from `tests/fixtures/dynamic-island.html`. The island does not expand yet.
 
 ### Fixed scope
 
@@ -86,23 +86,23 @@ Unavailable status stays distinct from idle in session state and is used when a 
 
 ### 2.3 Dots and label
 
-Compact mode shows one **8 CSS px** dot chosen in this priority order:
+Each harness (Codex, Claude) shows at most one **8 CSS px** dot for its most important recent thread (the user authorized per-harness dots on 2026-09-23):
 
-1. Orange when any recent thread needs input.
-2. Green when any recent thread is done and unread.
-3. Blue when any recent thread is working.
-4. White otherwise.
+1. Orange when one of its threads needs input.
+2. Else blue while one of its threads is working.
+3. Else green when one of its threads is done and unread.
+4. Else no dot.
 
-When the green dot shows while another thread still works, a blue dot sits on its left, **6 CSS px** apart. Only blue dots pulse (a breathing dot with a soft expanding ring). Errors and unavailable threads read as idle in compact mode.
+A single white dot appears only when every harness is idle. Dots sit **6 CSS px** apart, and only blue dots pulse (a breathing dot with a soft expanding ring). Errors and unavailable threads read as idle in compact mode.
 
-The label follows the dots after a **10 CSS px** gap and names the provider (`Codex` or `Claude`) of the most recently updated thread in the shown state:
+The label follows the dots after a **10 CSS px** gap and names one harness, preferring what the user must act on: needs input, then done, then working, with the most recently updated thread breaking ties. The labeled harness's dot sits next to the label and the other harness's dot on its left:
 
 - `<Provider> needs input` for orange.
-- `<Provider> is done` for green, including the blue-and-green pair.
+- `<Provider> is done` for green, including green beside the other harness's blue.
 - `<Provider> is working` for blue.
 - No label for white.
 
-The label uses the bundled Fira Code typeface at weight 500 and 12 px; the provider name is full white (`#F1F1ED`) and the rest is dimmed. Nothing else appears in the island: no thread titles, counts, badges, or decorative copy. Titles, which stay in session state for navigation, remain out of logs and diagnostics.
+The label uses the bundled Fira Code typeface at weight 500 and 12 px in one gray (`#F1F1ED` at 62 % opacity); the harness name is not highlighted. Nothing else appears in the island: no thread titles, counts, badges, or decorative copy. Titles, which stay in session state for navigation, remain out of logs and diagnostics.
 
 Motion: the width changes with one **420 ms** spring transition, a new label fades in, and a new dot scales in. Reduced motion stops the pulse and every transition.
 
@@ -112,10 +112,10 @@ The island does not expand yet. An expanded view needs explicit product authoriz
 
 ```text
           menu bar ─────────╮         ╭───────── menu bar
-                             ╰─ ● ────╯                       idle
-                    ╰─ ◉ Codex is working ─╯                  working
-                   ╰─ ◉ ● Claude is done ─╯                   working + done
-                   ╰─ ● Codex needs input ─╯                  needs input
+                             ╰─ ● ────╯                       all idle
+                    ╰─ ◉ Codex is working ─╯                  Codex working, Claude idle
+                   ╰─ ◉ ● Claude is done ─╯                   Codex working, Claude done
+                 ╰─ ● ● Codex needs input ─╯                  Claude done, Codex needs input
 ```
 
 The labels to the right explain the mockup; they never appear in the island.
@@ -127,6 +127,7 @@ The labels to the right explain the mockup; they never appear in the island.
 - Items outside the configured recent limit remain in local state and return when they become recent enough.
 - Bind a click to the labeled session and the completion captured on pointer-down.
 - Successful opening acknowledges the completion that was visible when clicked.
+- Switching to a harness counts as seeing what it finished: when an app becomes frontmost, the unread completions of the surfaces it shows are acknowledged (Codex Desktop and Claude Desktop for their own Desktop threads; Terminal, iTerm2, Ghostty, or Warp for both providers' CLI threads until terminal ownership is tracked). A completion that arrives while its app is already frontmost stays unread until the next switch to it. The user chose this on 2026-09-23 because neither harness reports when a thread was read. Activations come from `/usr/bin/lsappinfo listen +becameFrontmost`, which needs no extra macOS permission.
 - A newer completion arriving during navigation must remain unread.
 - Failed navigation must not acknowledge completion.
 - Errors remain in session state until a new turn. Explicit dismissal stays available over IPC for the future expanded island; the compact island has no context menu.
@@ -794,7 +795,7 @@ Record corrections made after review and the commit used for final validation.
 
 - [ ] All four local harness surfaces have live validation evidence.
 - [ ] The compact island hangs from the top center of the selected display at 32 pixels tall, above the menu bar.
-- [ ] The island shows the priority dot (or the blue-and-green pair) and only the provider status label; blue dots pulse and idle shows no text.
+- [ ] The island shows one dot per active harness and only the provider status label; blue dots pulse, idle shows no text, and switching to a harness clears its done threads.
 - [ ] Clicking the island opens the labeled thread; transparent space around it does not block underlying applications.
 - [ ] Settings use stock shadcn without redundant copy.
 - [ ] The configured number of recent eligible items appears, including idle and acknowledged items.

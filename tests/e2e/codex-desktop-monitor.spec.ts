@@ -240,6 +240,35 @@ process.stdin.on('data', chunk => {
         ),
       )
       .toContain('unread');
+    // Switching to Codex counts as seeing what it finished; a terminal only
+    // stands for CLI sessions, so it leaves this Desktop completion unread.
+    const activate = async (bundleId: string): Promise<void> => {
+      await application!.evaluate((_electron, id) => {
+        const hook = Reflect.get(globalThis, Symbol.for('agent-status-tiles.test.front-app'));
+        if (typeof hook !== 'function') throw new Error('Front-app test hook is unavailable');
+        (hook as (bundleId: string) => void)(id);
+      }, bundleId);
+    };
+    await expect
+      .poll(async () => {
+        await activate('com.apple.Terminal');
+        return restartedOverlay.evaluate(async () =>
+          (await window.agentStatusTilesOverlay.getState()).sessions.map(
+            (session) => session.status,
+          ),
+        );
+      })
+      .toContain('unread');
+    await activate('com.openai.codex');
+    await expect
+      .poll(() =>
+        restartedOverlay.evaluate(async () =>
+          (await window.agentStatusTilesOverlay.getState()).sessions.map(
+            (session) => session.status,
+          ),
+        ),
+      )
+      .not.toContain('unread');
     // Settings never opens by itself; keep activating until the runtime listens.
     await expect
       .poll(async () => {

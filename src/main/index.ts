@@ -66,9 +66,12 @@ import { ClaudeCliMonitor, ClaudeDesktopMonitor } from './providers/claude/surfa
 import { ClaudeJournalDiscovery } from './providers/claude/journal-discovery';
 import { ClaudeSessionNames } from './providers/claude/session-names';
 import { ClaudeJournalCollector, claudeRetainedSet } from './providers/claude/journal-collector';
+import { startFrontAppMonitor, type FrontAppMonitor } from './navigation/front-app-monitor';
+import { completionsSeenOnActivation } from './runtime/front-app-acknowledgement';
 
 const hasSingleInstanceLock = app.requestSingleInstanceLock();
 const TEST_KEYBOARD_ENTRY_HOOK = Symbol.for('agent-status-tiles.test.keyboard-entry');
+const TEST_FRONT_APP_HOOK = Symbol.for('agent-status-tiles.test.front-app');
 let menuBar: MenuBarController | null = null;
 let overlayController: OverlayController | null = null;
 let removeOverlayIpcHandlers: (() => void) | null = null;
@@ -79,6 +82,7 @@ let overlayState: OverlayState = createStartupOverlayState(app.isPackaged);
 let requestedLoginItemState: boolean | undefined;
 let removeRuntimeLifecycleListeners: (() => void) | null = null;
 let runtimeCoordinator: RuntimeCoordinator | null = null;
+let frontAppMonitor: FrontAppMonitor | null = null;
 let runtimeStartPromise: Promise<void> | null = null;
 let monitoringCoverageWarning: string | undefined;
 let isQuitting = false;
@@ -131,6 +135,18 @@ function claudeIntegration(): ClaudeIntegration | undefined {
     managed: defaultClaudeManagedLocations(),
     dataDirectory,
   };
+}
+
+/** Acknowledge the unread completions of the surfaces an activated app shows. */
+function acknowledgeCompletionsSeenIn(bundleId: string): void {
+  const coordinator = runtimeCoordinator;
+  if (coordinator === null) return;
+  for (const { sessionId, completionId } of completionsSeenOnActivation(
+    bundleId,
+    coordinator.getOverlayState().sessions,
+  )) {
+    void coordinator.acknowledge(sessionId, completionId).catch(() => undefined);
+  }
 }
 
 function isTestRuntime(): boolean {
@@ -283,6 +299,8 @@ if (!hasSingleInstanceLock) {
     isQuitting = true;
     removeRuntimeLifecycleListeners?.();
     removeRuntimeLifecycleListeners = null;
+    frontAppMonitor?.stop();
+    frontAppMonitor = null;
     void runtimeCoordinator?.stop();
     overlayController?.destroy();
   });
@@ -291,8 +309,11 @@ if (!hasSingleInstanceLock) {
     isQuitting = true;
     removeRuntimeLifecycleListeners?.();
     removeRuntimeLifecycleListeners = null;
+    frontAppMonitor?.stop();
+    frontAppMonitor = null;
     void runtimeCoordinator?.stop();
     Reflect.deleteProperty(globalThis, TEST_KEYBOARD_ENTRY_HOOK);
+    Reflect.deleteProperty(globalThis, TEST_FRONT_APP_HOOK);
     removeSettingsIpcHandlers?.();
     removeSettingsIpcHandlers = null;
     removeAppIpcHandlers?.();
@@ -448,6 +469,16 @@ if (!hasSingleInstanceLock) {
       openSettings: openSettingsWindow,
       quit: () => app.quit(),
     });
+    // Switching to a harness counts as seeing what it finished. Tests drive
+    // activations through a hook instead of the user's real app switches.
+    if (isTestRuntime()) {
+      Reflect.defineProperty(globalThis, TEST_FRONT_APP_HOOK, {
+        configurable: true,
+        value: acknowledgeCompletionsSeenIn,
+      });
+    } else if (process.platform === 'darwin') {
+      frontAppMonitor = startFrontAppMonitor(acknowledgeCompletionsSeenIn);
+    }
     if (isKeyboardEntryTestHookEnabled(process.argv, process.env.NODE_ENV, app.isPackaged)) {
       Reflect.defineProperty(globalThis, TEST_KEYBOARD_ENTRY_HOOK, {
         configurable: true,

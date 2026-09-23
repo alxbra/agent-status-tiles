@@ -78,7 +78,7 @@ const CASES = [
   { state: 'working', dots: ['working'], label: 'Codex is working' },
   { state: 'done', dots: ['unread'], label: 'Claude is done' },
   { state: 'working-done', dots: ['working', 'unread'], label: 'Claude is done' },
-  { state: 'needs-input', dots: ['needs-input'], label: 'Codex needs input' },
+  { state: 'needs-input', dots: ['unread', 'needs-input'], label: 'Codex needs input' },
 ] as const;
 
 for (const { state, dots, label } of CASES) {
@@ -110,7 +110,13 @@ test('uses the fixed status palette and a Fira Code label', async ({ page }) => 
       .evaluateAll((elements) =>
         elements.map((element) => getComputedStyle(element).backgroundColor),
       );
-  expect(await colors()).toEqual(['rgb(255, 138, 61)']);
+  expect(await colors()).toEqual(['rgb(143, 234, 152)', 'rgb(255, 138, 61)']);
+  // The whole label is one gray; the harness name is not highlighted.
+  const label = page.locator('.dynamic-island__label');
+  expect(await label.evaluate((element) => element.childElementCount)).toBe(0);
+  expect(await label.evaluate((element) => getComputedStyle(element).color)).toBe(
+    'rgba(241, 241, 237, 0.62)',
+  );
   await page.evaluate(() => {
     window.__setIslandSessions?.([
       {

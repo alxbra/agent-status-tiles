@@ -49,15 +49,6 @@ function usePrefersReducedMotion(): boolean {
   return prefersReducedMotion;
 }
 
-function IslandLabel({ label }: { label: string }): ReactElement {
-  const [provider, ...rest] = label.split(' ');
-  return (
-    <span className="dynamic-island__label">
-      <span className="dynamic-island__provider">{provider}</span> {rest.join(' ')}
-    </span>
-  );
-}
-
 export function DynamicIsland({
   sessions,
   onOpenSession,
@@ -218,16 +209,21 @@ export function DynamicIsland({
         >
           <span ref={contentRef} className="dynamic-island__content">
             <span className="dynamic-island__dots">
-              {summary.dots.map((tone) => (
+              {summary.dots.map(({ provider, tone }) => (
                 <span
-                  key={tone}
+                  key={provider ?? 'idle'}
                   className="dynamic-island__dot"
+                  data-provider={provider}
                   data-tone={tone}
                   style={{ '--dynamic-island-dot': TONE_COLOR[tone] } as CSSProperties}
                 />
               ))}
             </span>
-            {summary.label !== null && <IslandLabel key={summary.label} label={summary.label} />}
+            {summary.label !== null && (
+              <span key={summary.label} className="dynamic-island__label">
+                {summary.label}
+              </span>
+            )}
           </span>
         </button>
       </div>
