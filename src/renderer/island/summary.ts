@@ -37,7 +37,8 @@ const HARNESS_RANK: Record<ActiveTone, number> = { 'needs-input': 0, working: 1,
 /** Across harnesses, the label favors what the user has to act on. */
 const LABEL_RANK: Record<ActiveTone, number> = { 'needs-input': 0, unread: 1, working: 2 };
 
-const HARNESS_ORDER: readonly Provider[] = ['codex', 'claude'];
+/** Every provider, left to right; derived so a new provider cannot be left out. */
+const HARNESS_ORDER = Object.keys(ISLAND_PROVIDER_NAME) as readonly Provider[];
 
 interface HarnessState {
   provider: Provider;

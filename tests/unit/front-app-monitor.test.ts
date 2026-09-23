@@ -90,6 +90,54 @@ describe('front app monitor', () => {
     expect(children).toHaveLength(2);
   });
 
+  it('restarts once when a child reports both error and exit', () => {
+    const children: FakeProcess[] = [];
+    const timers: (() => void)[] = [];
+    const monitor = startFrontAppMonitor(() => undefined, {
+      spawnProcess: () => {
+        const child = new FakeProcess();
+        children.push(child);
+        return child;
+      },
+      setTimer: (callback) => {
+        timers.push(callback);
+        return callback;
+      },
+      clearTimer: () => undefined,
+    });
+    children[0]!.emit('error');
+    children[0]!.emit('exit');
+    expect(timers).toHaveLength(1);
+    monitor.stop();
+  });
+
+  it('resets the backoff once a notification arrives', () => {
+    const children: FakeProcess[] = [];
+    const delays: number[] = [];
+    const timers: (() => void)[] = [];
+    const monitor = startFrontAppMonitor(() => undefined, {
+      spawnProcess: () => {
+        const child = new FakeProcess();
+        children.push(child);
+        return child;
+      },
+      setTimer: (callback, delayMs) => {
+        delays.push(delayMs);
+        timers.push(callback);
+        return callback;
+      },
+      clearTimer: () => undefined,
+    });
+    children[0]!.emit('exit');
+    timers[0]!();
+    children[1]!.emit('exit');
+    timers[1]!();
+    children[2]!.stdout.write(`${BECAME_FRONTMOST}\n`);
+    children[2]!.emit('exit');
+    expect(delays).toEqual([1_000, 5_000, 1_000]);
+    monitor.stop();
+  });
+
   it.runIf(process.platform === 'darwin')(
     'uses an lsappinfo notification code macOS accepts',
     () => {

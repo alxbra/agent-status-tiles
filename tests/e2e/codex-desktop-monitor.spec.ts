@@ -249,16 +249,14 @@ process.stdin.on('data', chunk => {
         (hook as (bundleId: string) => void)(id);
       }, bundleId);
     };
-    await expect
-      .poll(async () => {
-        await activate('com.apple.Terminal');
-        return restartedOverlay.evaluate(async () =>
-          (await window.agentStatusTilesOverlay.getState()).sessions.map(
-            (session) => session.status,
-          ),
-        );
-      })
-      .toContain('unread');
+    await activate('com.apple.Terminal');
+    // Acknowledgement is asynchronous; give a wrong one time to land.
+    await new Promise((resolve) => setTimeout(resolve, 750));
+    expect(
+      await restartedOverlay.evaluate(async () =>
+        (await window.agentStatusTilesOverlay.getState()).sessions.map((session) => session.status),
+      ),
+    ).toContain('unread');
     await activate('com.openai.codex');
     await expect
       .poll(() =>
