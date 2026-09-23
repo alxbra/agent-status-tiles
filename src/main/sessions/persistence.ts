@@ -217,7 +217,7 @@ function sanitizeCursor(value: unknown, label: string): FileCursor {
     !hasOnlyKeys(
       value,
       ['identity', 'offset'],
-      ['baselineUntilOffset', 'isDiscardingOversizedLine'],
+      ['baselineUntilOffset', 'isDiscardingOversizedLine', 'isDiscardingActivityOnlyLine'],
     )
   ) {
     throw new SessionPersistenceError('corrupt', `${label} is malformed.`);
@@ -230,6 +230,9 @@ function sanitizeCursor(value: unknown, label: string): FileCursor {
   if (value.isDiscardingOversizedLine !== undefined) {
     assertBoolean(value.isDiscardingOversizedLine, `${label}.isDiscardingOversizedLine`);
   }
+  if (value.isDiscardingActivityOnlyLine !== undefined) {
+    assertBoolean(value.isDiscardingActivityOnlyLine, `${label}.isDiscardingActivityOnlyLine`);
+  }
   return {
     identity: value.identity,
     offset: value.offset,
@@ -239,6 +242,9 @@ function sanitizeCursor(value: unknown, label: string): FileCursor {
     ...(value.isDiscardingOversizedLine === undefined
       ? {}
       : { isDiscardingOversizedLine: value.isDiscardingOversizedLine }),
+    ...(value.isDiscardingActivityOnlyLine === undefined
+      ? {}
+      : { isDiscardingActivityOnlyLine: value.isDiscardingActivityOnlyLine }),
   };
 }
 

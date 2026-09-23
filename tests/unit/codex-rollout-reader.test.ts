@@ -351,11 +351,21 @@ describe('CodexRolloutReader', () => {
     const key = cursorKeyForPath(root, file);
     expect(first.diagnostics).toEqual([]);
     expect(first.cursors[key].isDiscardingOversizedLine).toBe(true);
+    expect(first.cursors[key].isDiscardingActivityOnlyLine).toBe(true);
 
     const second = await reader.read([source], first.cursors);
     expect(eventTypes(second.events)).toEqual(['turn-started']);
     expect(second.diagnostics).toEqual([]);
     expect(second.cursors[key].isDiscardingOversizedLine).toBeUndefined();
+    expect(second.cursors[key].isDiscardingActivityOnlyLine).toBeUndefined();
+
+    // A cursor without the verdict, as written before it existed, cannot
+    // prove the rest of the line is activity only.
+    const legacy = await reader.read([source], {
+      [key]: { ...first.cursors[key], isDiscardingActivityOnlyLine: undefined },
+    });
+    expect(eventTypes(legacy.events)).toEqual(['turn-started']);
+    expect(legacy.diagnostics.map(({ code }) => code)).toEqual(['oversized-line']);
   });
 
   it('reads a current-format status record above one MiB without retaining private padding', async () => {
@@ -482,12 +492,13 @@ describe('CodexRolloutReader', () => {
     expect(first.events).toEqual([]);
     expect(first.diagnostics.map(({ code }) => code)).toEqual(['oversized-line']);
     expect(first.cursors[key].isDiscardingOversizedLine).toBe(true);
+    expect(first.cursors[key].isDiscardingActivityOnlyLine).toBeUndefined();
     expect(first.cursors[key].offset).toBe(MAX_READ_BYTES);
 
     await appendFile(file, `\n${event('task_started', 'after-oversized')}\n`);
     const second = await reader.read([source], first.cursors);
     expect(eventTypes(second.events)).toEqual(['turn-started']);
-    expect(second.diagnostics).toEqual([]);
+    expect(second.diagnostics.map(({ code }) => code)).toEqual(['oversized-line']);
     expect(second.cursors[key].isDiscardingOversizedLine).toBeUndefined();
   });
 

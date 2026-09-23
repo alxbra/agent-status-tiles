@@ -273,6 +273,7 @@ function validCursor(value: unknown): value is {
   offset: number;
   baselineUntilOffset?: number;
   isDiscardingOversizedLine?: boolean;
+  isDiscardingActivityOnlyLine?: boolean;
 } {
   if (value === null || typeof value !== 'object') return false;
   const cursor = value as Record<string, unknown>;
@@ -281,7 +282,9 @@ function validCursor(value: unknown): value is {
     validTimestamp(cursor.offset) &&
     (cursor.baselineUntilOffset === undefined || validTimestamp(cursor.baselineUntilOffset)) &&
     (cursor.isDiscardingOversizedLine === undefined ||
-      typeof cursor.isDiscardingOversizedLine === 'boolean')
+      typeof cursor.isDiscardingOversizedLine === 'boolean') &&
+    (cursor.isDiscardingActivityOnlyLine === undefined ||
+      typeof cursor.isDiscardingActivityOnlyLine === 'boolean')
   );
 }
 
@@ -519,6 +522,7 @@ function mergeReadCursors(
       offset: number;
       baselineUntilOffset?: number;
       isDiscardingOversizedLine?: boolean;
+      isDiscardingActivityOnlyLine?: boolean;
     }
   > = {
     ...previous,

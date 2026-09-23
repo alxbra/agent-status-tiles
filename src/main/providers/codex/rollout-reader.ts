@@ -526,6 +526,9 @@ export class CodexRolloutReader {
       let parts: Buffer[] = [];
       let lineLength = 0;
       let discarding = cursor.isDiscardingOversizedLine === true;
+      // Only a verdict made from the line's own prefix clears it. Resuming
+      // without one, as from an older cursor, stays a coverage issue.
+      let discardingActivityOnly = discarding && cursor.isDiscardingActivityOnlyLine === true;
       let unprocessedCompleteLine = false;
       const fileEvents: CodexRolloutEvent[] = [];
       const eventsBeforeFile = budget.eventsEmitted;
@@ -552,11 +555,10 @@ export class CodexRolloutReader {
             if (lineLength + segment.length > MAX_LINE_BYTES) {
               // Large local tool output is routine and carries no status, so
               // only an oversized line whose prefix does not prove that stays
-              // a coverage issue. The verdict is reported once, here, because
-              // a later batch resumes past the prefix.
-              if (!isActivityOnlyRecordPrefix(recordPrefix([...parts, segment]))) {
-                this.addDiagnostic(diagnostics, 'oversized-line', pathKey, lineStart);
-              }
+              // a coverage issue.
+              discardingActivityOnly = isActivityOnlyRecordPrefix(
+                recordPrefix([...parts, segment]),
+              );
               discarding = true;
               parts = [];
               lineLength = 0;
@@ -568,7 +570,10 @@ export class CodexRolloutReader {
           if (newline < 0) break;
 
           const newlineOffset = chunkStart + newline;
-          if (!discarding) {
+          if (discarding) {
+            if (!discardingActivityOnly)
+              this.addDiagnostic(diagnostics, 'oversized-line', pathKey, lineStart);
+          } else {
             const line = Buffer.concat(parts, lineLength).toString('utf8');
             const estimatedEvents = canResolveInputOnLine(line, context) ? 2 : 1;
             if (budget.eventsEmitted + estimatedEvents > MAX_EVENTS_PER_READ) {
@@ -592,18 +597,24 @@ export class CodexRolloutReader {
           parts = [];
           lineLength = 0;
           discarding = false;
+          discardingActivityOnly = false;
           start = newline + 1;
         }
         if (budget.bytesRead >= MAX_READ_BYTES && position < boundary) budget.isExhausted = true;
       }
       if (discarding) {
+        if (!discardingActivityOnly)
+          this.addDiagnostic(diagnostics, 'oversized-line', pathKey, lineStart);
         // A line cannot become readable after it exceeds the bound.
-        // Advance the cursor while retaining discard mode so a later batch
-        // resumes at the current byte rather than rescanning its prefix.
+        // Advance the cursor while retaining discard mode and its verdict so a
+        // later batch resumes at the current byte rather than its prefix.
         cursor.offset = position;
         cursor.isDiscardingOversizedLine = true;
+        if (discardingActivityOnly) cursor.isDiscardingActivityOnlyLine = true;
+        else delete cursor.isDiscardingActivityOnlyLine;
       } else {
         delete cursor.isDiscardingOversizedLine;
+        delete cursor.isDiscardingActivityOnlyLine;
       }
       if (baselineUntilOffset !== undefined && cursor.offset < baselineUntilOffset) {
         cursor.baselineUntilOffset = baselineUntilOffset;
@@ -1020,6 +1031,9 @@ export class CodexRolloutReader {
         ? { baselineUntilOffset }
         : {}),
       ...(cursor.isDiscardingOversizedLine === true ? { isDiscardingOversizedLine: true } : {}),
+      ...(cursor.isDiscardingOversizedLine === true && cursor.isDiscardingActivityOnlyLine === true
+        ? { isDiscardingActivityOnlyLine: true }
+        : {}),
     };
   }
 

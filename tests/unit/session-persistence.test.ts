@@ -65,6 +65,7 @@ const cursorMap: FileCursorMap = {
     offset: 42,
     baselineUntilOffset: 64,
     isDiscardingOversizedLine: true,
+    isDiscardingActivityOnlyLine: true,
   },
 };
 const temporaryDirectories: string[] = [];
