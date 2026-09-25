@@ -28,3 +28,16 @@ body[data-fixture-theme='dark'] {
   border-radius: 8px;
   background: linear-gradient(180deg, #2b2b2e 0 24px, #1c1c1e 24px);
 }
+
+.fixture-sleeper {
+  position: absolute;
+  top: 0;
+  left: 50%;
+  display: flex;
+  align-items: center;
+  height: 32px;
+  padding: 0 14px;
+  border-radius: 0 0 16px 16px;
+  background: #000;
+  transform: translateX(-50%);
+}

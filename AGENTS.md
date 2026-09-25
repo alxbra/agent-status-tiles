@@ -15,7 +15,8 @@ Keep the exact status palette and meanings in `MVP_PLAN.md`. The user replaced
 the document-tab dock with a compact dynamic island on 2026-09-23 and split
 it into one column per harness the same day, then on 2026-09-25 hid idle
 harnesses, colored the names, lengthened the green cue, and added a sleeping
-empty state; the reference states render from
+empty state, drawn as their own fawn French bulldog the same day; the
+reference states render from
 `tests/fixtures/dynamic-island.html`. In particular:
 
 - The island is one black, notch-style shape hanging from the top edge of the
@@ -37,9 +38,11 @@ empty state; the reference states render from
 - Both names use bundled Fira Code at weight 500 and 12 px, each in its dot's
   color.
 - When sessions exist but no harness is active, the island shows only a
-  sleeping pixel cat (a two-frame breath under drifting pixel z's); it opens
-  nothing, and reduced motion holds it still under one z. With no sessions at
-  all, the island is hidden.
+  sleeping pixel frenchie in fawn, picked at random from five poses each time
+  it falls asleep and never the same pose twice in a row (a two-frame breath
+  and a brief ear or paw twitch under drifting pixel z's). Its fur colors are
+  decoration, never status colors. It opens nothing, and reduced motion holds
+  it still under one z. With no sessions at all, the island is hidden.
 - Width follows the content with one **420 ms** spring transition. Reduced
   motion stops the pulse and every transition, but not the sound.
 - Each column is its own button that opens its harness's Desktop app at the

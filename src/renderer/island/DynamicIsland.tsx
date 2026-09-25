@@ -28,6 +28,7 @@ import {
   type HarnessColumn,
   type HarnessTone,
 } from './summary';
+import { pickSleepingPose } from './frenchie-poses';
 import { SleepingSprite } from './SleepingSprite';
 import { FINISHED_CUE_MS, TONE_COLOR, type DotTone } from './theme';
 import './island.css';
@@ -198,6 +199,18 @@ export function DynamicIsland({
     () => columns.filter((column) => displayTone(column, cued) !== 'idle'),
     [columns, cued],
   );
+  // Hidden without sessions, the island is not asleep, so reappearing idle
+  // counts as falling asleep again.
+  const isAsleep = hasSessions && shownColumns.length === 0;
+  // Each time the island falls asleep it shows another frenchie; a layout
+  // effect, so the new pose replaces the old one before it paints.
+  const [sleepingPose, setSleepingPose] = useState(() => pickSleepingPose(undefined));
+  const wasAsleepRef = useRef(isAsleep);
+  useLayoutEffect(() => {
+    if (isAsleep && !wasAsleepRef.current)
+      setSleepingPose((previous) => pickSleepingPose(previous));
+    wasAsleepRef.current = isAsleep;
+  }, [isAsleep]);
 
   // A layout effect, so the green cue replaces the new tone before it paints.
   useLayoutEffect(() => {
@@ -316,7 +329,7 @@ export function DynamicIsland({
     // does; it only counts as handled once a column actually takes focus.
     if (pillRef.current === null) return undefined;
     // A sleeping island has nothing to focus, so keyboard mode ends at once.
-    if (shownColumns.length === 0) {
+    if (isAsleep) {
       handledKeyboardEntryRevisionRef.current = keyboardEntryRevision;
       onKeyboardExit();
       return undefined;
@@ -330,7 +343,7 @@ export function DynamicIsland({
       cell.focus();
     });
     return () => window.cancelAnimationFrame(frame);
-  }, [keyboardEntryRevision, hasSessions, shownColumns, onKeyboardExit]);
+  }, [keyboardEntryRevision, hasSessions, isAsleep, shownColumns, onKeyboardExit]);
 
   useEffect(() => {
     const pill = pillRef.current;
@@ -432,7 +445,7 @@ export function DynamicIsland({
             className="dynamic-island__content"
             data-columns={shownColumns.length}
           >
-            {shownColumns.length === 0 && <SleepingSprite />}
+            {isAsleep && <SleepingSprite pose={sleepingPose} />}
             {shownColumns.map((column) => (
               <HarnessCell
                 key={column.provider}

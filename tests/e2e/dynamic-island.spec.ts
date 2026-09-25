@@ -39,16 +39,18 @@ test.afterAll(async () => {
   await fixtureServer.close();
 });
 
-async function openIsland(page: Page, state: string, query = ''): Promise<void> {
+function fixtureUrl(state: string, query = ''): string {
   const address = fixtureServer.httpServer?.address();
   if (address === null || address === undefined || typeof address === 'string') {
     throw new Error('The island fixture server did not start');
   }
   const { port } = address as AddressInfo;
+  return `http://127.0.0.1:${String(port)}/tests/fixtures/dynamic-island.html?state=${state}${query}`;
+}
+
+async function openIsland(page: Page, state: string, query = ''): Promise<void> {
   await page.setViewportSize(VIEWPORT);
-  await page.goto(
-    `http://127.0.0.1:${String(port)}/tests/fixtures/dynamic-island.html?state=${state}${query}`,
-  );
+  await page.goto(fixtureUrl(state, query));
   await expect(page.locator('.dynamic-island__pill')).toBeVisible();
   await page.evaluate(() => document.fonts.ready);
   // Let the width spring settle so pointer tests aim at columns that stay put.
@@ -383,12 +385,16 @@ test('hides idle harnesses and sleeps when none is active', async ({ page }) => 
   expect(await page.evaluate(() => window.__islandOpenTarget)).toBeUndefined();
   const animations = (): Promise<readonly string[]> =>
     page
-      .locator('.dynamic-island__sleeper-cat, .dynamic-island__z')
+      .locator(
+        '.dynamic-island__sleeper-sprite, .dynamic-island__sleeper-frame, .dynamic-island__sleeper-twitch, .dynamic-island__z',
+      )
       .evaluateAll((elements) =>
         elements.map((element) => getComputedStyle(element).animationName),
       );
   expect(await animations()).toEqual([
     'dynamic-island-sleep-breathe',
+    'dynamic-island-sleep-rest',
+    'dynamic-island-sleep-twitch',
     'dynamic-island-z',
     'dynamic-island-z',
   ]);
@@ -399,8 +405,62 @@ test('hides idle harnesses and sleeps when none is active', async ({ page }) => 
   await expect.poll(() => columns(page)).toEqual(['Codex:working']);
   await expect(sleeper).toHaveCount(0);
 
+  // Under reduced motion the frenchie rests still: the twitch never shows.
   await openIsland(page, 'idle', '&motion=reduced');
-  expect(await animations()).toEqual(['none', 'none', 'none']);
+  expect(await animations()).toEqual(['none', 'none', 'none', 'none', 'none']);
+  expect(
+    await page
+      .locator('.dynamic-island__sleeper-twitch')
+      .evaluate((twitch) => getComputedStyle(twitch).visibility),
+  ).toBe('hidden');
+});
+
+test('shows a different frenchie each time the island falls asleep', async ({ page }) => {
+  await openIsland(page, 'idle');
+  const pose = (): Promise<string | null> =>
+    page.locator('.dynamic-island__sleeper').getAttribute('data-pose');
+  const names = ['head-on-paws', 'curled-up', 'belly-up', 'donut-bed', 'sploot'];
+  let previous = await pose();
+  expect(names).toContain(previous);
+  const seen = new Set([previous]);
+  for (let nap = 0; nap < 12; nap += 1) {
+    await page.evaluate((session) => window.__setIslandSessions?.([session]), workingSession());
+    await expect.poll(() => columns(page)).toEqual(['Codex:working']);
+    await page.evaluate(
+      (session) => window.__setIslandSessions?.([session]),
+      workingSession({ status: 'idle' }),
+    );
+    await expect(page.locator('.dynamic-island__sleeper')).toBeVisible();
+    const next = await pose();
+    expect(names).toContain(next);
+    expect(next).not.toBe(previous);
+    seen.add(next);
+    previous = next;
+  }
+  expect(seen.size).toBeGreaterThan(1);
+
+  // Reappearing idle after the island hid without sessions is a new nap too.
+  await page.evaluate(() => window.__setIslandSessions?.([]));
+  await expect(page.locator('.dynamic-island')).toHaveCount(0);
+  await page.evaluate(
+    (session) => window.__setIslandSessions?.([session]),
+    workingSession({ status: 'idle' }),
+  );
+  await expect(page.locator('.dynamic-island__sleeper')).toBeVisible();
+  expect(await pose()).not.toBe(previous);
+});
+
+test('draws every frenchie pose inside the island', async ({ page }) => {
+  await page.setViewportSize({ width: VIEWPORT.width, height: 360 });
+  await page.goto(fixtureUrl('sleepers'));
+  const poses = page.locator('.dynamic-island__sleeper');
+  await expect(poses).toHaveCount(5);
+  // Every pose fits the island's 24 px content height.
+  const heights = await page
+    .locator('.dynamic-island__sleeper-sprite')
+    .evaluateAll((sprites) => sprites.map((sprite) => sprite.getBoundingClientRect().height));
+  expect(heights.every((height) => height <= 24)).toBe(true);
+  await page.screenshot({ path: screenshotPath('sleepers'), animations: 'disabled' });
 });
 
 test('takes keyboard focus from the menu bar entry and leaves it on Escape', async ({ page }) => {
