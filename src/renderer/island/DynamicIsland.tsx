@@ -176,6 +176,11 @@ export function DynamicIsland({
   /** The latest render's target rule, for the keyboard-entry frame callback. */
   const openableTargetRef = useRef<(column: HarnessColumn) => OpenSessionTarget | null>(() => null);
   const handledKeyboardEntryRevisionRef = useRef(0);
+  /** The latest exit callback, so a pending focus repair survives a re-render. */
+  const keyboardExitRef = useRef(onKeyboardExit);
+  useLayoutEffect(() => {
+    keyboardExitRef.current = onKeyboardExit;
+  });
   const [contentWidth, setContentWidth] = useState(0);
   const prefersReducedMotion = usePrefersReducedMotion();
   const motionReduced = prefersReducedMotion || reducedMotion === true;
@@ -326,6 +331,35 @@ export function DynamicIsland({
     });
     return () => window.cancelAnimationFrame(frame);
   }, [keyboardEntryRevision, hasSessions, shownColumns, onKeyboardExit]);
+
+  useEffect(() => {
+    const pill = pillRef.current;
+    if (pill === null) return undefined;
+    // A focused column that hides, because its harness went idle, leaves
+    // keyboard focus nowhere: move it to the other column, or end keyboard
+    // mode once the island sleeps. This listens natively, because React drops
+    // the blur a removal fires during its commit; Escape and clicks keep the
+    // column mounted, so they never get here.
+    let frame = 0;
+    const handleFocusOut = (event: globalThis.FocusEvent): void => {
+      const cell = event.target;
+      if (!(cell instanceof HTMLElement) || !cell.classList.contains('dynamic-island__harness')) {
+        return;
+      }
+      window.cancelAnimationFrame(frame);
+      frame = window.requestAnimationFrame(() => {
+        if (cell.isConnected || document.activeElement !== document.body) return;
+        const remaining = [...cellRefs.current.values()].find((other) => other.isConnected);
+        if (remaining === undefined) keyboardExitRef.current();
+        else remaining.focus();
+      });
+    };
+    pill.addEventListener('focusout', handleFocusOut);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      pill.removeEventListener('focusout', handleFocusOut);
+    };
+  }, [hasSessions]);
 
   useEffect(() => {
     // Keyboard mode ends from anywhere in the focused overlay, not only the pill.

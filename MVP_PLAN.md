@@ -83,7 +83,7 @@ Session state still distinguishes unread completions, unavailable items, and err
 - The native window is **360 × 56 CSS px** at the display's top edge and sits above the menu bar at the status window level. Transparent space outside the island surface passes mouse events to applications underneath; the island surface is the only native hit region.
 - No title, toolbar, legend, settings button, icon, frosted backdrop, or native vibrancy window.
 - If no sessions qualify, hide the island completely. The menu-bar icon remains available.
-- If sessions qualify but no harness is active, the island shows only a sleeping pixel cat (the user asked for this empty state on 2026-09-25): a 16 × 8 cat on a 2 CSS px grid in `#F1F1ED` with closed eyes in the island's black, breathing in two frames (one pixel row taller, 2.4 s) under two 5-pixel z's that drift up and fade in turn, in the names' former gray. It is not a button and opens nothing; keyboard entry ends at once. Reduced motion holds the cat still under one z.
+- If sessions qualify but no harness is active, the island shows only a sleeping pixel cat (the user asked for this empty state on 2026-09-25): a 17 × 8 cat on a 2 CSS px grid in `#F1F1ED` with closed eyes in the island's black, breathing in two frames (one pixel row taller, 2.4 s) under two 5-pixel z's that drift up and fade in turn, in the names' former gray. It is not a button and opens nothing; keyboard entry ends at once. Reduced motion holds the cat still under one z.
 
 ### 2.3 Harness columns
 

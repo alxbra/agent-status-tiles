@@ -457,6 +457,31 @@ test('ends keyboard mode at once when the island is asleep', async ({ page }) =>
   await expect(column(page, 'codex')).not.toBeFocused();
 });
 
+test('keeps keyboard focus on the island when a focused column hides', async ({ page }) => {
+  await openIsland(page, 'mixed');
+  await page.evaluate(() => window.__triggerKeyboardEntry?.());
+  await expect(column(page, 'claude')).toBeFocused();
+  // Claude's question is answered and it goes idle: focus moves to Codex.
+  await page.evaluate(
+    (sessions) => window.__setIslandSessions?.(sessions),
+    [
+      workingSession({ id: 'codex:a', updatedAt: 5 }),
+      workingSession({ id: 'claude:b', provider: 'claude', status: 'idle', updatedAt: 4 }),
+    ],
+  );
+  await expect(column(page, 'codex')).toBeFocused();
+  expect(await page.evaluate(() => window.__islandKeyboardExits)).toBeUndefined();
+  // Codex goes idle too: the island sleeps and keyboard mode ends.
+  await page.evaluate(
+    (sessions) => window.__setIslandSessions?.(sessions),
+    [
+      workingSession({ id: 'codex:a', status: 'idle', updatedAt: 5 }),
+      workingSession({ id: 'claude:b', provider: 'claude', status: 'idle', updatedAt: 4 }),
+    ],
+  );
+  await expect.poll(() => page.evaluate(() => window.__islandKeyboardExits)).toBe(1);
+});
+
 test('renders nothing without visible sessions', async ({ page }) => {
   await openIsland(page, 'idle');
   await page.evaluate(() => window.__setIslandSessions?.([]));
