@@ -35,10 +35,22 @@ function colorPaths(rows: readonly string[]): readonly (readonly [FrenchieColor,
   return [...paths];
 }
 
-function Frame({ rows, className }: { rows: readonly string[]; className: string }): ReactElement {
+/** The poses never change, so their paths are drawn once. */
+const POSE_PATHS = SLEEPING_POSES.map(({ frame, twitch }) => ({
+  frame: colorPaths(frame),
+  twitch: colorPaths(twitch),
+}));
+
+function Frame({
+  paths,
+  className,
+}: {
+  paths: readonly (readonly [FrenchieColor, string])[];
+  className: string;
+}): ReactElement {
   return (
     <g className={className}>
-      {colorPaths(rows).map(([color, d]) => (
+      {paths.map(([color, d]) => (
         <path key={color} d={d} fill={FRENCHIE_COLORS[color]} />
       ))}
     </g>
@@ -50,7 +62,9 @@ function Frame({ rows, className }: { rows: readonly string[]; className: string
  * poses, breathing and now and then twitching under drifting z's.
  */
 export function SleepingSprite({ pose }: { pose: number }): ReactElement {
-  const { name, frame, twitch }: SleepingPose = SLEEPING_POSES[pose] ?? SLEEPING_POSES[0]!;
+  const index = SLEEPING_POSES[pose] === undefined ? 0 : pose;
+  const { name, frame }: SleepingPose = SLEEPING_POSES[index]!;
+  const paths = POSE_PATHS[index]!;
   const width = frame[0]?.length ?? 0;
   const height = frame.length;
   return (
@@ -68,19 +82,19 @@ export function SleepingSprite({ pose }: { pose: number }): ReactElement {
         shapeRendering="crispEdges"
         aria-hidden="true"
       >
-        <Frame rows={frame} className="dynamic-island__sleeper-frame" />
-        <Frame rows={twitch} className="dynamic-island__sleeper-twitch" />
+        <Frame paths={paths.frame} className="dynamic-island__sleeper-frame" />
+        <Frame paths={paths.twitch} className="dynamic-island__sleeper-twitch" />
       </svg>
       <span className="dynamic-island__sleeper-z" aria-hidden="true">
-        {[0, 1].map((index) => (
+        {[0, 1].map((z) => (
           <svg
-            key={index}
+            key={z}
             className="dynamic-island__z"
             width={Z_SIZE * Z_PIXEL}
             height={Z_SIZE * Z_PIXEL}
             viewBox={`0 0 ${String(Z_SIZE)} ${String(Z_SIZE)}`}
             shapeRendering="crispEdges"
-            style={{ animationDelay: `${String(index * 1200)}ms` }}
+            style={{ animationDelay: `${String(z * 1200)}ms` }}
           >
             <path d="M0 0h5v1H0zM3 1h1v1H3zM2 2h1v1H2zM1 3h1v1H1zM0 4h5v1H0z" />
           </svg>

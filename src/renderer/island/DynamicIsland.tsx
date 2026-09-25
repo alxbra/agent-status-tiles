@@ -199,7 +199,9 @@ export function DynamicIsland({
     () => columns.filter((column) => displayTone(column, cued) !== 'idle'),
     [columns, cued],
   );
-  const isAsleep = shownColumns.length === 0;
+  // Hidden without sessions, the island is not asleep, so reappearing idle
+  // counts as falling asleep again.
+  const isAsleep = hasSessions && shownColumns.length === 0;
   // Each time the island falls asleep it shows another frenchie; a layout
   // effect, so the new pose replaces the old one before it paints.
   const [sleepingPose, setSleepingPose] = useState(() => pickSleepingPose(undefined));

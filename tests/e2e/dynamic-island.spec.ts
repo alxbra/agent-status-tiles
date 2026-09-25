@@ -438,6 +438,16 @@ test('shows a different frenchie each time the island falls asleep', async ({ pa
     previous = next;
   }
   expect(seen.size).toBeGreaterThan(1);
+
+  // Reappearing idle after the island hid without sessions is a new nap too.
+  await page.evaluate(() => window.__setIslandSessions?.([]));
+  await expect(page.locator('.dynamic-island')).toHaveCount(0);
+  await page.evaluate(
+    (session) => window.__setIslandSessions?.([session]),
+    workingSession({ status: 'idle' }),
+  );
+  await expect(page.locator('.dynamic-island__sleeper')).toBeVisible();
+  expect(await pose()).not.toBe(previous);
 });
 
 test('draws every frenchie pose inside the island', async ({ page }) => {
