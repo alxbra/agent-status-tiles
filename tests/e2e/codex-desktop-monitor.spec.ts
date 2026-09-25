@@ -341,6 +341,7 @@ test('native overlay fills five recent slots when catalog originator needs rollo
     await mkdir(sessionsRoot);
     // The live page carries six threads: four with a catalog originator, one
     // whose originator needs rollout proof, and one whose proof contradicts.
+    // Threads 2 and 5 carry the originator newer Desktop builds write.
     const records = await Promise.all(
       Array.from({ length: 6 }, async (_, index) => {
         const id = `00000000-0000-7000-8000-${String(index + 1).padStart(12, '0')}`;
@@ -350,7 +351,12 @@ test('native overlay fills five recent slots when catalog originator needs rollo
           line('2026-09-15T10:00:00.000Z', 'session_meta', {
             id,
             source: 'vscode',
-            originator: index === 5 ? 'Other Editor' : 'Codex Desktop',
+            originator:
+              index === 5
+                ? 'Other Editor'
+                : index === 1 || index === 4
+                  ? 'codex_work_desktop'
+                  : 'Codex Desktop',
           }),
         );
         return {
@@ -362,7 +368,7 @@ test('native overlay fills five recent slots when catalog originator needs rollo
           path,
           cliVersion: 'test',
           source: 'vscode',
-          originator: index >= 4 ? null : 'Codex Desktop',
+          originator: index >= 4 ? null : index === 1 ? 'codex_work_desktop' : 'Codex Desktop',
           parentThreadId: null,
           ephemeral: false,
         };
