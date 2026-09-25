@@ -128,7 +128,7 @@ for (const { state, columns: expected, label } of CASES) {
   });
 }
 
-test('mirrors Codex on the left and Claude on the right, each name in its dot color', async ({
+test('puts Codex on the left and Claude on the right, each dot before its name', async ({
   page,
 }) => {
   await openIsland(page, 'mixed');
@@ -141,7 +141,7 @@ test('mirrors Codex on the left and Claude on the right, each name in its dot co
   );
   expect(layout).toEqual([
     { side: 'start', order: ['dynamic-island__dot', 'dynamic-island__name'] },
-    { side: 'end', order: ['dynamic-island__name', 'dynamic-island__dot'] },
+    { side: 'end', order: ['dynamic-island__dot', 'dynamic-island__name'] },
   ]);
   const colors = await page
     .locator('.dynamic-island__name')
