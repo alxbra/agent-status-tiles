@@ -85,6 +85,15 @@ describe('macOS application navigation', () => {
       { kind: 'application', application: 'codex-desktop', nativeSessionId: codexId },
       { kind: 'session', nativeSessionId: codexId },
       Object.create({ kind: 'codex-thread', nativeSessionId: codexId }),
+      // An inherited kind with two own fields still fails.
+      Object.assign(Object.create({ kind: 'codex-thread' }), {
+        nativeSessionId: codexId,
+        application: 'codex-desktop',
+      }),
+      Object.assign(Object.create({ kind: 'application' }), {
+        application: 'claude-desktop',
+        extra: true,
+      }),
       null,
     ]) {
       await expect(navigator.navigate(target)).resolves.toMatchObject({

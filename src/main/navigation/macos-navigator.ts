@@ -93,15 +93,23 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object';
 }
 
+/** Exactly these own keys, so nothing inherited or extra reaches the navigator. */
+function hasOnlyOwnKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {
+  const own = Object.keys(value);
+  return own.length === keys.length && keys.every((key) => Object.hasOwn(value, key));
+}
+
 function isValidTarget(value: unknown): value is QualifiedNavigationTarget {
   if (!isRecord(value)) return false;
   try {
     if (value.kind === 'codex-thread') {
-      return Object.keys(value).length === 2 && isCodexTaskId(value.nativeSessionId);
+      return (
+        hasOnlyOwnKeys(value, ['kind', 'nativeSessionId']) && isCodexTaskId(value.nativeSessionId)
+      );
     }
     if (value.kind === 'application') {
       return (
-        Object.keys(value).length === 2 &&
+        hasOnlyOwnKeys(value, ['kind', 'application']) &&
         (value.application === 'codex-desktop' || value.application === 'claude-desktop')
       );
     }
