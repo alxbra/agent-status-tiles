@@ -1,4 +1,5 @@
 import type { CodexCatalogRecord } from './catalog-client';
+import { isCodexDesktopOriginator } from './originators';
 
 /**
  * Qualification intentionally exposes a fixed issue vocabulary. In
@@ -35,7 +36,6 @@ export interface CodexDesktopCatalogQualification {
   issues: readonly CodexQualificationIssue[];
 }
 
-const CODEX_DESKTOP_ORIGINATOR = 'Codex Desktop';
 const CONFIDENTLY_UNRELATED_SOURCES = new Set([
   'cli',
   'exec',
@@ -74,19 +74,19 @@ export function qualifyCodexDesktopRecord(record: CodexCatalogRecord): CodexQual
   }
 
   if (source !== 'vscode') {
-    if (originator === CODEX_DESKTOP_ORIGINATOR) return ambiguous();
+    if (isCodexDesktopOriginator(originator)) return ambiguous();
     if (CONFIDENTLY_UNRELATED_SOURCES.has(source)) return { kind: 'skip' };
     // `unknown`, `custom`, and future source values cannot be used to infer a
     // surface. Missing evidence remains an explicit coverage issue; a known
     // non-Desktop originator is confidently unrelated.
-    return originator === undefined || originator === CODEX_DESKTOP_ORIGINATOR
+    return originator === undefined || isCodexDesktopOriginator(originator)
       ? ambiguous()
       : { kind: 'skip' };
   }
   if (originator === undefined) {
     return { kind: 'needs-rollout-proof', session: qualifiedSession(record) };
   }
-  if (originator !== CODEX_DESKTOP_ORIGINATOR) return { kind: 'skip' };
+  if (!isCodexDesktopOriginator(originator)) return { kind: 'skip' };
 
   return { kind: 'qualified', session: qualifiedSession(record) };
 }

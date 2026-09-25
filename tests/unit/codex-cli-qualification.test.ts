@@ -66,9 +66,11 @@ describe('Codex CLI catalog qualification', () => {
   });
 
   it('skips known Desktop/subagent records and all non-top-level records', () => {
-    expect(
-      qualifyCodexCliRecord(record({ source: 'vscode', originator: 'Codex Desktop' })),
-    ).toEqual({ kind: 'skip' });
+    for (const originator of ['Codex Desktop', 'codex_work_desktop']) {
+      expect(qualifyCodexCliRecord(record({ source: 'vscode', originator }))).toEqual({
+        kind: 'skip',
+      });
+    }
     expect(
       qualifyCodexCliRecord(record({ source: 'subAgentReview', originator: undefined })),
     ).toEqual({ kind: 'skip' });

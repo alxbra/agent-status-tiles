@@ -83,6 +83,15 @@ describe('Codex Desktop monitor', () => {
       expect(confirmed.sources.map((source) => source.nativeSessionId)).toEqual([catalogId]);
       expect(confirmed.coverageIncomplete).toBeUndefined();
 
+      // Newer Desktop builds write a different originator into the rollout.
+      await writeFile(
+        rolloutPath,
+        `${JSON.stringify({ type: 'session_meta', payload: { id: nativeId, source: 'vscode', originator: 'codex_work_desktop' } })}\n`,
+      );
+      const newer = await monitor.discover();
+      expect(newer.sources.map((source) => source.nativeSessionId)).toEqual([catalogId]);
+      expect(newer.coverageIncomplete).toBeUndefined();
+
       for (const [source, originator] of [
         ['vscode', 'Other Editor'],
         ['vscode', undefined],

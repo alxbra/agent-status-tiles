@@ -16,6 +16,7 @@ import {
 } from './bundled-binary-resolver';
 import { CodexCatalogClient, type CodexCatalogRecord } from './catalog-client';
 import { qualifyCodexDesktopCatalog } from './catalog-qualification';
+import { isCodexDesktopOriginator } from './originators';
 import { CodexRolloutReader, cursorKeyForPath, hashPath } from './rollout-reader';
 import type { CodexRolloutSource } from './events';
 
@@ -225,7 +226,7 @@ export class CodexSurfaceMonitor implements ProviderSurfaceMonitor {
       }
       if (
         proofCandidates.has(session) &&
-        (meta.source !== 'vscode' || meta.originator !== 'Codex Desktop')
+        (meta.source !== 'vscode' || !isCodexDesktopOriginator(meta.originator))
       ) {
         coverageIncomplete = true;
         continue;

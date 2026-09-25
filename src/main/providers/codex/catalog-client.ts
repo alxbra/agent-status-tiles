@@ -1,6 +1,8 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { basename, isAbsolute } from 'node:path';
 
+import { isCodexDesktopOriginator } from './originators';
+
 const MAX_PENDING_REQUESTS = 32;
 const MAX_REQUEST_TIMEOUT_MS = 30_000;
 const DEFAULT_REQUEST_TIMEOUT_MS = 10_000;
@@ -389,7 +391,7 @@ function hasConfidentSubagentEvidence(value: Record<string, unknown>): boolean {
  */
 function isConfidentlyUnrelatedDesktopSource(value: unknown): boolean {
   if (!isRecord(value)) return false;
-  if (value.originator === 'Codex Desktop' && value.source !== 'vscode') return false;
+  if (isCodexDesktopOriginator(value.originator) && value.source !== 'vscode') return false;
   if (value.originator === 'codex_cli_rs' && value.source !== 'vscode') return true;
   if (hasConfidentSubagentEvidence(value)) return true;
   const source = value.source;
@@ -409,7 +411,7 @@ function isConfidentlyUnrelatedCliSource(value: unknown): boolean {
   if (!isRecord(value)) return false;
   if (hasConfidentSubagentEvidence(value)) return true;
   if (value.originator === 'codex_cli_rs') return false;
-  if (value.originator === 'Codex Desktop') return value.source !== 'cli';
+  if (isCodexDesktopOriginator(value.originator)) return value.source !== 'cli';
 
   const source = value.source;
   if (typeof source === 'string') {
