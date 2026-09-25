@@ -11,8 +11,6 @@ export interface HarnessColumn {
   target: SessionSnapshot | null;
   /** The harness's most recently updated visible thread, whatever its status. */
   latest: SessionSnapshot | null;
-  /** The newest visible thread that can be opened, for an idle harness's click. */
-  latestOpenable: SessionSnapshot | null;
 }
 
 export const HARNESS_NAME: Record<Provider, string> = {
@@ -42,18 +40,11 @@ export function summarizeHarnesses(sessions: readonly SessionSnapshot[]): readon
       tone: 'idle',
       target: null,
       latest: null,
-      latestOpenable: null,
     };
     for (const session of visible) {
       if (session.provider !== provider) continue;
       if (column.latest === null || session.updatedAt > column.latest.updatedAt) {
         column = { ...column, latest: session };
-      }
-      if (
-        session.canOpen &&
-        (column.latestOpenable === null || session.updatedAt > column.latestOpenable.updatedAt)
-      ) {
-        column = { ...column, latestOpenable: session };
       }
       const tone = toneOf(session.status);
       if (tone === 'idle') continue;
@@ -70,16 +61,16 @@ export function summarizeHarnesses(sessions: readonly SessionSnapshot[]): readon
 }
 
 /**
- * The thread a click on a harness's column opens: the one waiting for input,
- * else the one that just finished while its green cue shows, else the newest
- * working one, else the harness's newest thread that can open.
+ * The thread a click on a shown harness column opens: the one waiting for
+ * input, else the one that just finished while its green cue shows, else the
+ * newest working one. An idle harness shows no column to click.
  */
 export function columnTarget(
   column: HarnessColumn,
   finished: SessionSnapshot | undefined,
 ): SessionSnapshot | null {
   if (column.tone === 'needs-input') return column.target;
-  return finished ?? column.target ?? column.latestOpenable ?? column.latest;
+  return finished ?? column.target;
 }
 
 /** Each seen session's latest completion, used to notice a turn finishing. */

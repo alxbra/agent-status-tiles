@@ -22,4 +22,4 @@ export const TONE_COLOR: Record<DotTone, string> = {
 };
 
 /** How long a harness shows the green cue after one of its turns finished. */
-export const FINISHED_CUE_MS = 5_000;
+export const FINISHED_CUE_MS = 10_000;

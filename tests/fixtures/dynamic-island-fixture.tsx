@@ -41,6 +41,7 @@ function session(
 
 const FIXTURE_STATES: Record<string, readonly SessionSnapshot[]> = {
   idle: [session('a', 'codex', 'idle', 1), session('b', 'claude', 'idle', 2)],
+  'claude-only': [session('a', 'codex', 'idle', 1), session('b', 'claude', 'working', 2)],
   working: [session('a', 'codex', 'working', 3), session('b', 'claude', 'unread', 2)],
   'both-working': [session('a', 'codex', 'working', 5), session('b', 'claude', 'working', 4)],
   'needs-input': [

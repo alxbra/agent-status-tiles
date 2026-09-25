@@ -82,7 +82,7 @@ describe('harness columns', () => {
     ).toEqual(['codex:idle', 'claude:idle']);
   });
 
-  it('opens a question first, then a just-finished thread, then work, then the latest thread', () => {
+  it('opens a question first, then a just-finished thread, then work', () => {
     const asking = session({ id: 'codex:asking', status: 'needs-input', updatedAt: 1 });
     const running = session({ id: 'codex:running', status: 'working', updatedAt: 2 });
     const done = session({ id: 'codex:done', status: 'unread', completionId: 'c1', updatedAt: 9 });
@@ -93,15 +93,8 @@ describe('harness columns', () => {
     expect(columnTarget(working!, undefined)?.id).toBe('codex:running');
     const [idle] = summarizeHarnesses([done, session({ id: 'codex:old', updatedAt: 3 })]);
     expect(idle).toMatchObject({ tone: 'idle', latest: { id: 'codex:done' } });
-    expect(columnTarget(idle!, undefined)?.id).toBe('codex:done');
-    // An idle harness opens its newest thread that can open.
-    const [preferOpenable] = summarizeHarnesses([
-      session({ id: 'codex:cli-new', surface: 'cli', canOpen: false, updatedAt: 9 }),
-      session({ id: 'codex:desktop-old', updatedAt: 2 }),
-    ]);
-    expect(columnTarget(preferOpenable!, undefined)?.id).toBe('codex:desktop-old');
-    const [, claudeColumn] = summarizeHarnesses([done]);
-    expect(columnTarget(claudeColumn!, undefined)).toBeNull();
+    // An idle harness's column is hidden, so it has nothing to open.
+    expect(columnTarget(idle!, undefined)).toBeNull();
   });
 });
 

@@ -584,11 +584,10 @@ for (const testSessionCount of [0, 1, 12, 30]) {
       } else {
         // Test sessions alternate Codex and Claude while cycling working,
         // needs input, done, and error: Codex keeps a working thread, and
-        // Claude's needs input outranks its failed one once it has two.
+        // Claude's needs input outranks its failed one once it has two. An
+        // idle harness shows no column.
         const expectedLabel =
-          testSessionCount === 1
-            ? 'Codex working, Claude idle'
-            : 'Codex working, Claude needs input';
+          testSessionCount === 1 ? 'Codex working' : 'Codex working, Claude needs input';
         await expect
           .poll(async () =>
             (
@@ -598,14 +597,16 @@ for (const testSessionCount of [0, 1, 12, 30]) {
             ).join(', '),
           )
           .toBe(expectedLabel);
-        await expect(page.locator('.dynamic-island__name')).toHaveText(['Codex', 'Claude']);
+        await expect(page.locator('.dynamic-island__name')).toHaveText(
+          testSessionCount === 1 ? ['Codex'] : ['Codex', 'Claude'],
+        );
         await expect
           .poll(() =>
             page
               .locator('.dynamic-island__harness')
               .evaluateAll((cells) => cells.map((cell) => cell.getAttribute('data-tone'))),
           )
-          .toEqual(testSessionCount === 1 ? ['working', 'idle'] : ['working', 'needs-input']);
+          .toEqual(testSessionCount === 1 ? ['working'] : ['working', 'needs-input']);
         if (testSessionCount === 1) {
           // A click reaches main's real navigator, whose /usr/bin/open
           // commands the test runtime records instead of running.
