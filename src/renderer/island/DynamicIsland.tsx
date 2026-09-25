@@ -329,7 +329,7 @@ export function DynamicIsland({
     // does; it only counts as handled once a column actually takes focus.
     if (pillRef.current === null) return undefined;
     // A sleeping island has nothing to focus, so keyboard mode ends at once.
-    if (shownColumns.length === 0) {
+    if (isAsleep) {
       handledKeyboardEntryRevisionRef.current = keyboardEntryRevision;
       onKeyboardExit();
       return undefined;
@@ -343,7 +343,7 @@ export function DynamicIsland({
       cell.focus();
     });
     return () => window.cancelAnimationFrame(frame);
-  }, [keyboardEntryRevision, hasSessions, shownColumns, onKeyboardExit]);
+  }, [keyboardEntryRevision, hasSessions, isAsleep, shownColumns, onKeyboardExit]);
 
   useEffect(() => {
     const pill = pillRef.current;
