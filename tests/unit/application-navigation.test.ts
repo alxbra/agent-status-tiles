@@ -94,6 +94,10 @@ describe('macOS application navigation', () => {
         application: 'claude-desktop',
         extra: true,
       }),
+      Object.assign(Object.create({ application: 'claude-desktop' }), {
+        kind: 'application',
+        extra: true,
+      }),
       null,
     ]) {
       await expect(navigator.navigate(target)).resolves.toMatchObject({
