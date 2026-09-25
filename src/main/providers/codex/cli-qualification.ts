@@ -1,4 +1,5 @@
 import type { CodexCatalogRecord } from './catalog-client';
+import { isCodexDesktopOriginator } from './originators';
 
 /** Qualification exposes only fixed issue codes and never private metadata. */
 export type CodexCliQualificationIssueCode = 'coverage-ambiguous';
@@ -31,7 +32,6 @@ export interface CodexCliCatalogQualification {
 }
 
 const CODEX_CLI_ORIGINATOR = 'codex_cli_rs';
-const CODEX_DESKTOP_ORIGINATOR = 'Codex Desktop';
 
 // These source values identify another Codex surface or a child task. They
 // must never be promoted to CLI sessions, even if another field is malformed.
@@ -92,13 +92,13 @@ export function qualifyCodexCliRecord(record: CodexCatalogRecord): CodexCliQuali
     }
     // A known Desktop originator is unrelated; any other missing CLI
     // originator is plausible but unconfirmed and therefore a coverage issue.
-    return originator === CODEX_DESKTOP_ORIGINATOR ? { kind: 'skip' } : ambiguous();
+    return isCodexDesktopOriginator(originator) ? { kind: 'skip' } : ambiguous();
   }
 
   // A CLI originator under a non-CLI source is conflicting evidence. It could
   // be a newly introduced source spelling, so fail closed with coverage data.
   if (originator === CODEX_CLI_ORIGINATOR) return ambiguous();
-  if (originator === CODEX_DESKTOP_ORIGINATOR) return { kind: 'skip' };
+  if (isCodexDesktopOriginator(originator)) return { kind: 'skip' };
   if (CONFIDENTLY_UNRELATED_SOURCES.has(source)) return { kind: 'skip' };
 
   // Unknown/custom source values with no originator cannot be safely mapped to
