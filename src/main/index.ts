@@ -66,16 +66,8 @@ import { ClaudeCliMonitor, ClaudeDesktopMonitor } from './providers/claude/surfa
 import { ClaudeJournalDiscovery } from './providers/claude/journal-discovery';
 import { ClaudeSessionNames } from './providers/claude/session-names';
 import { ClaudeJournalCollector, claudeRetainedSet } from './providers/claude/journal-collector';
-import {
-  isTerminalApplication,
-  MacOsNavigator,
-  type TerminalApplication,
-} from './navigation/macos-navigator';
-import {
-  canNavigateTo,
-  openIslandSession,
-  type SessionNavigator,
-} from './navigation/session-opener';
+import { MacOsNavigator } from './navigation/macos-navigator';
+import { openIslandSession, type SessionNavigator } from './navigation/session-opener';
 
 const hasSingleInstanceLock = app.requestSingleInstanceLock();
 const TEST_KEYBOARD_ENTRY_HOOK = Symbol.for('agent-status-tiles.test.keyboard-entry');
@@ -143,20 +135,6 @@ function claudeIntegration(): ClaudeIntegration | undefined {
     managed: defaultClaudeManagedLocations(),
     dataDirectory,
   };
-}
-
-/** The host a Claude session's hook journal recorded, from the last discovery listing. */
-function claudeJournalHost(
-  journals: ClaudeJournalDiscovery,
-  sessionId: string,
-): string | undefined {
-  return journals.summaries.find((journal) => `claude:${journal.nativeSessionId}` === sessionId)
-    ?.host;
-}
-
-/** The terminal a Claude CLI session's hook journal recorded as its host. */
-function claudeTerminalOwner(host: string | undefined): TerminalApplication | 'unknown' {
-  return isTerminalApplication(host) ? host : 'unknown';
 }
 
 let sessionNavigatorInstance: SessionNavigator | null = null;
@@ -471,13 +449,6 @@ if (!hasSingleInstanceLock) {
           };
     runtimeCoordinator = createRuntimeCoordinator({
       appDataPath: app.getPath('userData'),
-      // A Claude CLI thread opens only when its journal recorded the terminal.
-      isOpenable: (session) =>
-        canNavigateTo(
-          session,
-          session.provider === 'claude' &&
-            claudeTerminalOwner(claudeJournalHost(claudeJournals, session.id)) !== 'unknown',
-        ),
       recentThreadLimit: preferences.recentThreadLimit,
       monitors: [
         new CodexDesktopMonitor(desktopMonitorOptions()),
@@ -512,14 +483,6 @@ if (!hasSingleInstanceLock) {
         const result = await openIslandSession(request, {
           navigator: sessionNavigator(),
           getState: () => overlayState,
-          // The monitors' last journal listing, refreshed every discovery pass.
-          cliOwner: (session) =>
-            Promise.resolve(
-              session.provider === 'claude'
-                ? claudeTerminalOwner(claudeJournalHost(claudeJournals, session.id))
-                : // Codex records no launching terminal.
-                  'unknown',
-            ),
           acknowledge: (sessionId, completionId) =>
             runtimeCoordinator?.acknowledge(sessionId, completionId) ?? Promise.resolve(false),
         });

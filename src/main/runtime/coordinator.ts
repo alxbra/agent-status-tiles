@@ -30,7 +30,6 @@ import {
 } from '../sessions/persistence';
 import { reduceSessionState, selectSessionSnapshots } from '../sessions/reducer';
 import { DEFAULT_RECENT_THREAD_LIMIT, isRecentThreadLimit } from '../../shared/settings';
-import { canNavigateTo } from '../navigation/session-opener';
 
 /** Catalog/source limits intentionally mirror the persistence bounds. */
 export const MAX_RUNTIME_SOURCES = 512;
@@ -63,7 +62,7 @@ export interface RuntimeMonitorSource {
   updatedAt: number;
   isTopLevel: boolean;
   isArchived: boolean;
-  /** Ignored: the overlay projection decides openability from the navigator's rules. */
+  /** Ignored: the overlay projection marks every shown thread openable. */
   canOpen?: false;
   /** A monitor may provide a fixed source EOF during baseline capture. */
   endOffset?: number;
@@ -157,8 +156,6 @@ export interface RuntimeCoordinatorOptions {
   maxRetryIntervalMs?: number;
   /** State is published only after its corresponding checkpoint succeeds. */
   onOverlayState?: (state: OverlayState) => void;
-  /** Whether the island may open a thread; defaults to the navigator's rules without terminals. */
-  isOpenable?: (session: SessionSnapshot) => boolean;
   /** A bounded count is sufficient for Settings; no session metadata crosses this callback. */
   onCoverageWarning?: (omittedCount: number) => void;
   onHealthChanged?: (key: SurfaceKey, health: RuntimeSurfaceHealth) => void;
@@ -636,7 +633,6 @@ function overlaySessions(
   health: Readonly<Record<SurfaceKey, RuntimeSurfaceHealth>>,
   surfaces: ReadonlyMap<SurfaceKey, SurfaceRuntime>,
   limit: number = MAX_OVERLAY_RUNTIME_SESSIONS,
-  isOpenable: (session: SessionSnapshot) => boolean = (session) => canNavigateTo(session, false),
 ): { sessions: readonly SessionSnapshot[]; omittedCount: number } {
   const sessionState = effectiveSessionState(monitoring, health);
   const visible = selectSessionSnapshots(sessionState).filter(
@@ -685,9 +681,9 @@ function overlaySessions(
   );
   const mapped = ordered.map((snapshot) => {
     const owner = ownerFor(snapshot.id);
-    // Session records never carry openability; the island may open what the
-    // navigator can bring forward.
-    const projected = { ...snapshot, canOpen: isOpenable(snapshot) };
+    // Session records never carry openability. Every thread the island shows
+    // opens its harness's Desktop app, so every projected thread can open.
+    const projected = { ...snapshot, canOpen: true };
     return owner !== undefined &&
       (health[owner].status !== 'available' ||
         unavailableIds.get(owner)?.has(snapshot.id) ||
@@ -783,13 +779,7 @@ export function createRuntimeCoordinator(options: RuntimeCoordinatorOptions): Ru
   }
 
   const publish = (): void => {
-    const projected = overlaySessions(
-      monitoring,
-      health,
-      surfaces,
-      recentThreadLimit,
-      options.isOpenable,
-    );
+    const projected = overlaySessions(monitoring, health, surfaces, recentThreadLimit);
     overlay = { sessions: projected.sessions, reducedMotion: overlay.reducedMotion };
     coverageWarning =
       projected.omittedCount > 0

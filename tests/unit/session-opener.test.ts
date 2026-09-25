@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import {
-  canNavigateTo,
+  navigationTarget,
   openIslandSession,
   type SessionOpenerOptions,
 } from '../../src/main/navigation/session-opener';
@@ -36,15 +36,12 @@ function options(
 ): SessionOpenerOptions & {
   navigate: ReturnType<typeof vi.fn>;
   acknowledge: ReturnType<typeof vi.fn>;
-  cliOwner: ReturnType<typeof vi.fn>;
 } {
   const navigate = vi.fn(() => Promise.resolve(result));
   const acknowledge = vi.fn(() => Promise.resolve(true));
-  const cliOwner = vi.fn(() => Promise.resolve('ghostty' as const));
   return {
     navigator: { navigate },
     getState: () => ({ sessions, reducedMotion: false }),
-    cliOwner,
     acknowledge,
     navigate,
   };
@@ -57,10 +54,8 @@ describe('island session opener', () => {
       handled: true,
     });
     expect(opener.navigate).toHaveBeenCalledWith({
-      provider: 'codex',
-      surface: 'desktop',
+      kind: 'codex-thread',
       nativeSessionId: CODEX_ID,
-      owner: 'codex-desktop',
     });
     expect(opener.acknowledge).not.toHaveBeenCalled();
   });
@@ -73,28 +68,22 @@ describe('island session opener', () => {
     });
     await openIslandSession({ sessionId: 'claude:abc' }, opener);
     expect(opener.navigate).toHaveBeenCalledWith({
-      provider: 'claude',
-      surface: 'desktop',
-      nativeSessionId: 'abc',
-      owner: 'claude-desktop',
+      kind: 'application',
+      application: 'claude-desktop',
     });
   });
 
-  it('asks for the terminal that launched a CLI thread', async () => {
-    const cli = session({ id: 'claude:cli-1', provider: 'claude', surface: 'cli' });
-    const opener = options([cli], {
-      status: 'dispatched',
-      target: 'application',
-      application: 'ghostty',
-    });
-    await openIslandSession({ sessionId: 'claude:cli-1' }, opener);
-    expect(opener.cliOwner).toHaveBeenCalledWith(cli);
-    expect(opener.navigate).toHaveBeenCalledWith({
-      provider: 'claude',
-      surface: 'cli',
-      nativeSessionId: 'cli-1',
-      owner: 'ghostty',
-    });
+  it('opens the Desktop app for CLI threads instead of their terminal', async () => {
+    for (const [cli, application] of [
+      [session({ id: 'claude:cli-1', provider: 'claude', surface: 'cli' }), 'claude-desktop'],
+      [session({ id: `codex:${CODEX_ID}`, surface: 'cli' }), 'codex-desktop'],
+    ] as const) {
+      const opener = options([cli], { status: 'dispatched', target: 'application', application });
+      await expect(openIslandSession({ sessionId: cli.id }, opener)).resolves.toEqual({
+        handled: true,
+      });
+      expect(opener.navigate).toHaveBeenCalledWith({ kind: 'application', application });
+    }
   });
 
   it('acknowledges the completion the click saw only after dispatch', async () => {
@@ -116,7 +105,7 @@ describe('island session opener', () => {
     expect(failing.acknowledge).not.toHaveBeenCalled();
   });
 
-  it('refuses threads it was not shown, threads that cannot open, and unknown terminals', async () => {
+  it('refuses threads it was not shown and threads that cannot open', async () => {
     const opener = options([session({ canOpen: false })]);
     await expect(openIslandSession({ sessionId: 'codex:other' }, opener)).resolves.toEqual({
       handled: false,
@@ -127,17 +116,6 @@ describe('island session opener', () => {
       reason: 'unavailable',
     });
     expect(opener.navigate).not.toHaveBeenCalled();
-
-    const unknown = options([session({ id: 'codex:cli', surface: 'cli' })], {
-      status: 'selection-required',
-      target: 'application',
-      reason: 'unknown-owner',
-      options: ['terminal', 'ghostty', 'warp', 'iterm2'],
-    });
-    await expect(openIslandSession({ sessionId: 'codex:cli' }, unknown)).resolves.toEqual({
-      handled: false,
-      reason: 'unavailable',
-    });
   });
 
   it('reports a thrown navigation as failed', async () => {
@@ -164,22 +142,8 @@ describe('island session opener', () => {
     }
   });
 
-  it('reports a failed terminal lookup as failed', async () => {
-    const opener = options([session({ id: 'claude:cli-1', provider: 'claude', surface: 'cli' })]);
-    opener.cliOwner.mockRejectedValueOnce(new Error('listing failed'));
-    await expect(openIslandSession({ sessionId: 'claude:cli-1' }, opener)).resolves.toEqual({
-      handled: false,
-      reason: 'failed',
-    });
-    expect(opener.navigate).not.toHaveBeenCalled();
-  });
-
-  it('never opens archived, child, or non-navigable threads', async () => {
-    for (const hidden of [
-      session({ isArchived: true }),
-      session({ isTopLevel: false }),
-      session({ id: 'codex:not-a-task-id' }),
-    ]) {
+  it('never opens archived or child threads', async () => {
+    for (const hidden of [session({ isArchived: true }), session({ isTopLevel: false })]) {
       const opener = options([hidden]);
       await expect(openIslandSession({ sessionId: hidden.id }, opener)).resolves.toEqual({
         handled: false,
@@ -189,14 +153,22 @@ describe('island session opener', () => {
     }
   });
 
-  it('knows which threads the navigator can bring forward', () => {
-    expect(canNavigateTo(session(), false)).toBe(true);
-    expect(canNavigateTo(session({ id: 'codex:not-a-task-id' }), true)).toBe(false);
-    expect(canNavigateTo(session({ surface: 'cli' }), true)).toBe(false);
-    expect(canNavigateTo(session({ id: 'claude:x', provider: 'claude' }), false)).toBe(true);
-    const claudeCli = session({ id: 'claude:x', provider: 'claude', surface: 'cli' });
-    // A Claude CLI thread opens only once its launching terminal is known.
-    expect(canNavigateTo(claudeCli, true)).toBe(true);
-    expect(canNavigateTo(claudeCli, false)).toBe(false);
+  it('opens a Codex thread exactly only from Desktop with a task id', () => {
+    expect(navigationTarget(session())).toEqual({
+      kind: 'codex-thread',
+      nativeSessionId: CODEX_ID,
+    });
+    for (const other of [session({ id: 'codex:not-a-task-id' }), session({ surface: 'cli' })]) {
+      expect(navigationTarget(other)).toEqual({
+        kind: 'application',
+        application: 'codex-desktop',
+      });
+    }
+    for (const surface of ['desktop', 'cli'] as const) {
+      expect(navigationTarget(session({ id: 'claude:x', provider: 'claude', surface }))).toEqual({
+        kind: 'application',
+        application: 'claude-desktop',
+      });
+    }
   });
 });
