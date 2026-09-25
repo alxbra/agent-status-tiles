@@ -39,7 +39,6 @@ export interface ClaudeJournalSummary {
   projectName?: string;
   /** Desktop when the newest identified record came from Claude Desktop, else CLI. */
   surface: Surface;
-  host?: ClaudeHost;
   /** The newest record is `SessionEnd`; the session left the cohort. */
   ended: boolean;
   updatedAt: number;
@@ -317,7 +316,6 @@ export async function verifyJournal(
     nativeSessionId,
     ...(projectName === undefined ? {} : { projectName }),
     surface: surfaceForIdentity(host, entrypoint),
-    ...(host === undefined ? {} : { host }),
     ended: last.eventName === 'SessionEnd',
     updatedAt: Math.round(candidate.mtimeMs),
     endOffset: candidate.size,

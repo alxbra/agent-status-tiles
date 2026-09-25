@@ -27,10 +27,10 @@ incomplete coverage; the collection below keeps a long-lived install under
 that bound.
 
 Each inspected journal yields display-safe facts only: the session ID, the
-project folder name from the newest record, the surface, the recognised
-launching application (`host`), whether the newest record is `SessionEnd`,
-the modification time, and the active file size. The surface is `desktop`
-when the newest identified record carries `host: claude-desktop` or
+project folder name from the newest record, the surface, whether the newest
+record is `SessionEnd`, the modification time, and the active file size. The
+recognised launching application (`host`) only decides the surface, which is
+`desktop` when the newest identified record carries `host: claude-desktop` or
 `entrypoint: claude-desktop`, and `cli` otherwise, including an unrecognised
 host such as an IDE terminal. A session that moves surfaces (`/desktop`,
 `/resume`) changes cohort when its newest record does; the coordinator's owner

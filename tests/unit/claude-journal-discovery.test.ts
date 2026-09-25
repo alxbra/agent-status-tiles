@@ -52,7 +52,7 @@ function journalPath(root: string, sessionId: string): string {
 }
 
 describe('claude journal discovery', () => {
-  it('summarises verified journals with surface, host, title, and end state', async () => {
+  it('summarises verified journals with surface, title, and end state', async () => {
     const root = await appData();
     await writeFile(
       journalPath(root, 'desk'),
@@ -85,16 +85,16 @@ describe('claude journal discovery', () => {
     expect(Object.keys(byId).sort()).toEqual(['desk', 'ended', 'term', 'unknown']);
     expect(byId.desk).toMatchObject({
       surface: 'desktop',
-      host: 'claude-desktop',
       projectName: 'renamed',
       ended: false,
       baseName: makeHookJournalBaseName('claude', 'desk'),
     });
     expect(byId.desk!.endOffset).toBeGreaterThan(0);
-    expect(byId.term).toMatchObject({ surface: 'cli', host: 'ghostty', ended: false });
-    expect(byId.ended).toMatchObject({ surface: 'cli', host: 'terminal', ended: true });
+    expect(byId.term).toMatchObject({ surface: 'cli', ended: false });
+    expect(byId.ended).toMatchObject({ surface: 'cli', ended: true });
     expect(byId.unknown).toMatchObject({ surface: 'cli', ended: false });
-    expect(byId.unknown).not.toHaveProperty('host');
+    // The host only decides the surface; no summary carries it.
+    expect(summaries.every((summary) => !Object.hasOwn(summary, 'host'))).toBe(true);
     expect(byId.unknown).not.toHaveProperty('projectName');
     expect(JSON.stringify(summaries)).not.toContain(root);
   });
@@ -164,9 +164,9 @@ describe('claude journal discovery', () => {
 
     const summaries = await new ClaudeJournalDiscovery({ appDataPath: root }).list();
     expect(summaries.map((summary) => summary.nativeSessionId)).toEqual(['long']);
+    // The tail's Claude Desktop host decides the surface.
     expect(summaries[0]).toMatchObject({
       surface: 'desktop',
-      host: 'claude-desktop',
       projectName: 'last',
       ended: false,
     });
