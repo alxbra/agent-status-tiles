@@ -622,6 +622,17 @@ for (const testSessionCount of [0, 1, 12, 30]) {
               ['/usr/bin/open', '-b', 'com.openai.codex'],
               ['/usr/bin/open', '-g', '-b', 'com.openai.codex', `codex://threads/${task}`],
             ]);
+        } else if (testSessionCount === 12) {
+          // Claude's test threads run in a terminal, yet a click brings
+          // Claude Desktop forward rather than the terminal.
+          await page.locator('.dynamic-island__harness[data-provider="claude"]').click();
+          await expect
+            .poll(() =>
+              application!.evaluate(() =>
+                Reflect.get(globalThis, Symbol.for('agent-status-tiles.test.navigations')),
+              ),
+            )
+            .toEqual([['/usr/bin/open', '-b', 'com.anthropic.claudefordesktop']]);
         }
         // The island hangs from the window's top edge, centered horizontally.
         await expect

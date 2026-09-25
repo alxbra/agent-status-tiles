@@ -42,11 +42,12 @@ empty state; the reference states render from
   all, the island is hidden.
 - Width follows the content with one **420 ms** spring transition. Reduced
   motion stops the pulse and every transition, but not the sound.
-- Each column is its own button that opens its harness's thread, captured at
-  pointer-down: the one waiting for input, else the one that just finished
-  while it shows green, else the newest working one. Codex Desktop opens
-  the exact thread; Claude Desktop and terminals are only brought forward. The
-  island surface is the only native hit region.
+- Each column is its own button that opens its harness's Desktop app at the
+  thread captured at pointer-down: the one waiting for input, else the one
+  that just finished while it shows green, else the newest working one. Codex
+  Desktop opens the exact thread; any other thread, CLI threads included, only
+  brings Codex Desktop or Claude Desktop forward, never a terminal. The island
+  surface is the only native hit region.
 - The island does not expand yet. Do not add an expanded view without explicit
   product authorization.
 - Settings use stock shadcn/ui components and standard styling. Keep one

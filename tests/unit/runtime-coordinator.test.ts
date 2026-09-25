@@ -92,7 +92,7 @@ describe('runtime coordinator', () => {
     }
   });
 
-  it('marks exactly the threads the navigator can bring forward as openable', async () => {
+  it('marks every shown thread openable, since each opens its Desktop app', async () => {
     const dataPath = await appDataPath();
     const read = async (request: RuntimeReadRequest) => ({
       events: [],
@@ -126,11 +126,10 @@ describe('runtime coordinator', () => {
         ),
       ).toEqual({
         [`codex:${task}`]: true,
-        'codex:not-a-task-id': false,
-        'codex:cli-thread': false,
+        'codex:not-a-task-id': true,
+        'codex:cli-thread': true,
         'claude:claude-thread': true,
-        // Without an injected rule, no CLI terminal is known.
-        'claude:claude-cli-thread': false,
+        'claude:claude-cli-thread': true,
       });
     } finally {
       await runtime.stop();

@@ -8,7 +8,6 @@ import {
   isCodexTaskId,
   type NavigationResult,
   type QualifiedNavigationTarget,
-  type TerminalApplication,
 } from './macos-navigator';
 
 export interface SessionNavigator {
@@ -19,8 +18,6 @@ export interface SessionOpenerOptions {
   navigator: SessionNavigator;
   /** The sessions the island was shown; only these can be opened. */
   getState: () => OverlayState;
-  /** The terminal that launched a CLI session, when a harness recorded it. */
-  cliOwner: (session: SessionSnapshot) => Promise<TerminalApplication | 'unknown'>;
   acknowledge: (sessionId: string, completionId: string) => Promise<boolean>;
 }
 
@@ -32,40 +29,20 @@ function nativeSessionId(session: Pick<SessionSnapshot, 'id' | 'provider'>): str
 }
 
 /**
- * Whether the navigator can bring this thread forward: a Codex Desktop thread
- * with a task UUID, any Claude Desktop thread, and a Claude CLI thread whose
- * launching terminal is known. Codex CLI threads record no terminal.
+ * Every thread opens its harness's Desktop app (the user asked for this on
+ * 2026-09-25): a Codex Desktop thread with a task UUID opens exactly, and any
+ * other thread, CLI threads included, only brings its Desktop app forward.
  */
-export function canNavigateTo(
+export function navigationTarget(
   session: Pick<SessionSnapshot, 'id' | 'provider' | 'surface'>,
-  hasKnownTerminal: boolean,
-): boolean {
-  if (session.provider === 'codex') {
-    return session.surface === 'desktop' && isCodexTaskId(nativeSessionId(session));
-  }
-  return session.surface === 'desktop' || hasKnownTerminal;
-}
-
-async function navigationTarget(
-  session: SessionSnapshot,
-  cliOwner: SessionOpenerOptions['cliOwner'],
-): Promise<QualifiedNavigationTarget> {
+): QualifiedNavigationTarget {
   const native = nativeSessionId(session);
-  if (session.surface === 'desktop') {
-    return session.provider === 'codex'
-      ? { provider: 'codex', surface: 'desktop', nativeSessionId: native, owner: 'codex-desktop' }
-      : {
-          provider: 'claude',
-          surface: 'desktop',
-          nativeSessionId: native,
-          owner: 'claude-desktop',
-        };
+  if (session.provider === 'codex' && session.surface === 'desktop' && isCodexTaskId(native)) {
+    return { kind: 'codex-thread', nativeSessionId: native };
   }
   return {
-    provider: session.provider,
-    surface: 'cli',
-    nativeSessionId: native,
-    owner: await cliOwner(session),
+    kind: 'application',
+    application: session.provider === 'codex' ? 'codex-desktop' : 'claude-desktop',
   };
 }
 
@@ -82,23 +59,15 @@ export async function openIslandSession(
     .getState()
     .sessions.find((candidate) => candidate.id === request.sessionId);
   // Only a thread the island shows: top-level, not archived, and openable.
-  if (
-    session === undefined ||
-    !session.isTopLevel ||
-    session.isArchived ||
-    !session.canOpen ||
-    // The terminal of a CLI thread is resolved below.
-    !canNavigateTo(session, true)
-  ) {
+  if (session === undefined || !session.isTopLevel || session.isArchived || !session.canOpen) {
     return UNAVAILABLE;
   }
   let result: NavigationResult;
   try {
-    result = await options.navigator.navigate(await navigationTarget(session, options.cliOwner));
+    result = await options.navigator.navigate(navigationTarget(session));
   } catch {
     return FAILED;
   }
-  if (result.status === 'selection-required') return UNAVAILABLE;
   if (result.status === 'failed') {
     return result.reason === 'invalid-target' || result.reason === 'unsupported-platform'
       ? UNAVAILABLE

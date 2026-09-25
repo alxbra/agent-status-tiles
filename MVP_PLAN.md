@@ -17,7 +17,7 @@ The first publishable release targets macOS and supports:
 
 Each eligible top-level thread or task is tracked locally. The overlay considers the five most recently updated items across connected harnesses by default, configurable from one to ten. Spawned subagents remain represented by their parent.
 
-The main interface is a compact dynamic island: one black, notch-style shape hanging from the top center of the selected display, over the menu bar. It shows two mirrored columns, Codex on the left and Claude on the right, each with one status dot (needs input, working, or idle) beside the harness name, and it plays a short success cue when a turn finishes. Clicking a column foregrounds that harness and selects its most relevant thread where supported. The user authorized this island on 2026-09-23, replacing the document-tab dock of 2026-09-17 (which had itself replaced the rounded-square tiles and Dock-style magnification); the reference states render from `tests/fixtures/dynamic-island.html`. The same day, the user split it into per-harness columns and removed the done state. The island does not expand yet.
+The main interface is a compact dynamic island: one black, notch-style shape hanging from the top center of the selected display, over the menu bar. It shows two mirrored columns, Codex on the left and Claude on the right, each with one status dot (needs input, working, or idle) beside the harness name, and it plays a short success cue when a turn finishes. Clicking a column brings that harness's Desktop app forward and selects its most relevant thread where supported. The user authorized this island on 2026-09-23, replacing the document-tab dock of 2026-09-17 (which had itself replaced the rounded-square tiles and Dock-style magnification); the reference states render from `tests/fixtures/dynamic-island.html`. The same day, the user split it into per-harness columns and removed the done state. The island does not expand yet.
 
 ### Fixed scope
 
@@ -125,8 +125,8 @@ The notes to the right explain the mockup; they never appear in the island.
 - Sort eligible items by confirmed provider update or task activity, newest first, with a stable ID tie-break. Local acknowledgement and error dismissal do not change recency.
 - Apply the global Recent threads limit (default five, range one to ten) across connected harnesses, including idle items; the island summarizes only those items.
 - Items outside the configured recent limit remain in local state and return when they become recent enough.
-- Each column is a button for its harness (the user asked for click-to-open on 2026-09-23). A click opens that harness's thread captured on pointer-down: the one waiting for input, else the one that just finished while its green cue shows, else the newest working one. An idle harness shows no column, and the sleeping island opens nothing.
-- The runtime marks a thread openable when the navigator can bring it forward, and main opens only such a top-level, unarchived thread in the island's current state, through the navigator in `docs/navigation.md`: Codex Desktop selects the exact thread; Claude Desktop is activated; a Claude CLI thread activates the terminal its hook journal recorded and is openable only when that terminal is known; Codex CLI threads, which record none, are not openable yet.
+- Each column is a button for its harness (the user asked for click-to-open on 2026-09-23, and on 2026-09-25 for every click to open the harness's Desktop app). A click opens that harness's Desktop app at the thread captured on pointer-down: the one waiting for input, else the one that just finished while its green cue shows, else the newest working one. An idle harness shows no column, and the sleeping island opens nothing.
+- Every thread the island shows is openable, and main opens only a top-level, unarchived thread in the island's current state, through the navigator in `docs/navigation.md`: a Codex Desktop thread with a task UUID selects the exact thread; any other Codex thread, CLI threads included, activates Codex Desktop; every Claude thread, CLI threads included, activates Claude Desktop. Terminals are never brought forward. If the Desktop app is missing, the click fails and changes nothing.
 - Opening a thread with an unread completion (the just-finished one) acknowledges the completion the click saw, only after navigation was dispatched and only if it is still current; a failed or unavailable navigation acknowledges nothing. Unread completions otherwise stay in session state, where they no longer show.
 - Errors remain in session state until a new turn. Explicit dismissal stays available over IPC for the future expanded island; the compact island has no context menu.
 - Dismissal affects only the companion's display, never the underlying task.
@@ -328,10 +328,7 @@ The guaranteed action is **foreground the owning application**.
 
 - Codex Desktop: use the validated task link from the existing project.
 - Claude Desktop: activate Claude. Do not invent a session deep link.
-- Terminal sessions: resolve the owning application from bounded process ancestry and available terminal identity metadata.
-- Verify Terminal, Ghostty, Warp, and iTerm2 application activation.
-- Select an exact terminal session only where a verified, permission-free API supports it.
-- If ownership is unknown, offer a one-time terminal-app selection.
+- CLI (terminal) sessions: activate the harness's Desktop app, not the terminal (the product owner chose this on 2026-09-25, superseding terminal ownership, terminal activation, and the terminal-app selection).
 - Never open a duplicate agent session or submit a command as a navigation fallback.
 - Do not request Accessibility permission merely to satisfy basic navigation.
 
@@ -577,12 +574,12 @@ terminal validation and navigation remain pending.
 
 - [x] Add validated Codex task navigation (PR #11 main-process primitive; live task selection remains pending).
 - [x] Add Claude Desktop activation (PR #11 fixed bundle activation; live harness validation remains pending).
-- [x] Resolve and activate qualified terminal apps (PR #11 fixed bundle activation; ownership discovery remains pending).
-- [x] Return the one-time terminal selection-required result for unknown ownership (PR #11; selection UI remains pending).
+- [x] Resolve and activate qualified terminal apps (PR #11 fixed bundle activation; superseded on 2026-09-25, when CLI threads began opening their Desktop app and terminal activation was removed).
+- [x] Return the one-time terminal selection-required result for unknown ownership (PR #11; superseded and removed on 2026-09-25 with terminal activation).
 - [ ] Connect successful dispatch to completion acknowledgement. Implementation progress (not an acceptance checkoff): `feat/island-open-thread` wires island clicks through `openIslandSession` to the navigator and acknowledges a clicked completion only after dispatch; live harness validation remains pending.
 - [ ] Preserve unread state on launch failure.
 - [x] Prevent duplicate launches from rapid repeated clicks (PR #11 single-flight guard).
-- [ ] **E2E and corrections:** verify real harness activation, exact Codex task selection, terminal app fallback, missing-app errors, rapid clicks, and completion races; confirm no new agent session or prompt is created; fix, rerun, harden, and merge.
+- [ ] **E2E and corrections:** verify real harness activation, exact Codex task selection, Desktop-app activation for CLI threads, missing-app errors, rapid clicks, and completion races; confirm no new agent session or prompt is created; fix, rerun, harden, and merge.
 
 ### Epic 7 — Minimal settings and setup
 
@@ -804,7 +801,7 @@ Record corrections made after review and the commit used for final validation.
 - [ ] The compact island hangs from the top center of the selected display at 32 pixels tall, above the menu bar.
 - [ ] The island shows a Codex or Claude column only while that harness is active, one dot each (needs input or working) with the name in the dot's color; working dots pulse; with no harness active, a sleeping pixel cat shows instead.
 - [ ] A finished turn plays the success cue and pulses its harness green for 10 seconds before its current tone.
-- [ ] Clicking a column opens its harness's thread (the exact thread in Codex Desktop); transparent space around the island does not block underlying applications.
+- [ ] Clicking a column opens its harness's Desktop app (the exact thread in Codex Desktop), also for CLI threads; transparent space around the island does not block underlying applications.
 - [ ] Settings use stock shadcn without redundant copy.
 - [ ] The configured number of recent eligible items appears, including idle and acknowledged items.
 - [ ] Clicks foreground the correct owning app.

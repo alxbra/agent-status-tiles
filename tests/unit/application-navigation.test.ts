@@ -15,7 +15,6 @@ import {
 } from '../../src/main/navigation/macos-navigator';
 
 const codexId = '019f6b6d-644d-7701-8858-9da6837aaaaa';
-const claudeId = '019f6b6d-644d-7701-8858-9da6837aaaab';
 
 function createSuccessfulResult(): ProcessResult {
   return { exitCode: 0, stdout: '', stderr: '', hasTimedOut: false, isCleanupConfirmed: true };
@@ -58,12 +57,7 @@ describe('macOS application navigation', () => {
     const navigator = new MacOsNavigator(run, pause, 'darwin');
 
     await expect(
-      navigator.navigate({
-        provider: 'codex',
-        surface: 'desktop',
-        nativeSessionId: codexId,
-        owner: 'codex-desktop',
-      }),
+      navigator.navigate({ kind: 'codex-thread', nativeSessionId: codexId }),
     ).resolves.toEqual({ status: 'dispatched', target: 'session', application: 'codex-desktop' });
     expect(calls).toEqual([
       { executable: '/usr/bin/open', args: ['-b', MACOS_APPLICATIONS.codexDesktop.bundleId] },
@@ -83,40 +77,34 @@ describe('macOS application navigation', () => {
       'darwin',
     );
 
-    await expect(
-      navigator.navigate({
-        provider: 'codex',
-        surface: 'desktop',
-        nativeSessionId: '../../etc/passwd',
-        owner: 'codex-desktop',
-      }),
-    ).resolves.toMatchObject({ status: 'failed', reason: 'invalid-target' });
-    await expect(
-      navigator.navigate({
-        provider: 'claude',
-        surface: 'desktop',
-        nativeSessionId: claudeId,
-        owner: 'codex-desktop',
-      }),
-    ).resolves.toMatchObject({ status: 'failed', reason: 'invalid-target' });
-    await expect(
-      navigator.navigate({
-        provider: 'codex',
-        surface: 'desktop',
+    for (const target of [
+      { kind: 'codex-thread', nativeSessionId: '../../etc/passwd' },
+      { kind: 'codex-thread', nativeSessionId: codexId, application: 'claude-desktop' },
+      { kind: 'application', application: 'ghostty' },
+      { kind: 'application', application: '__proto__' },
+      { kind: 'application', application: 'codex-desktop', nativeSessionId: codexId },
+      { kind: 'session', nativeSessionId: codexId },
+      Object.create({ kind: 'codex-thread', nativeSessionId: codexId }),
+      // An inherited kind with two own fields still fails.
+      Object.assign(Object.create({ kind: 'codex-thread' }), {
         nativeSessionId: codexId,
-        owner: '__proto__',
+        application: 'codex-desktop',
       }),
-    ).resolves.toMatchObject({ status: 'failed', reason: 'invalid-target' });
-    const inherited = Object.create({
-      provider: 'codex',
-      surface: 'desktop',
-      nativeSessionId: codexId,
-      owner: 'codex-desktop',
-    });
-    await expect(navigator.navigate(inherited)).resolves.toMatchObject({
-      status: 'failed',
-      reason: 'invalid-target',
-    });
+      Object.assign(Object.create({ kind: 'application' }), {
+        application: 'claude-desktop',
+        extra: true,
+      }),
+      Object.assign(Object.create({ application: 'claude-desktop' }), {
+        kind: 'application',
+        extra: true,
+      }),
+      null,
+    ]) {
+      await expect(navigator.navigate(target)).resolves.toMatchObject({
+        status: 'failed',
+        reason: 'invalid-target',
+      });
+    }
     expect(calls).toHaveLength(0);
   });
 
@@ -129,12 +117,7 @@ describe('macOS application navigation', () => {
     );
 
     await expect(
-      navigator.navigate({
-        provider: 'claude',
-        surface: 'desktop',
-        nativeSessionId: claudeId,
-        owner: 'claude-desktop',
-      }),
+      navigator.navigate({ kind: 'application', application: 'claude-desktop' }),
     ).resolves.toEqual({ status: 'failed', target: 'application', reason: 'unsupported-platform' });
     expect(calls).toHaveLength(0);
   });
@@ -148,12 +131,7 @@ describe('macOS application navigation', () => {
     );
 
     await expect(
-      navigator.navigate({
-        provider: 'claude',
-        surface: 'desktop',
-        nativeSessionId: claudeId,
-        owner: 'claude-desktop',
-      }),
+      navigator.navigate({ kind: 'application', application: 'claude-desktop' }),
     ).resolves.toEqual({
       status: 'dispatched',
       target: 'application',
@@ -164,49 +142,22 @@ describe('macOS application navigation', () => {
     ]);
   });
 
-  it('activates only the selected fixed terminal application', async () => {
+  it('activates Codex Desktop for a thread it cannot open exactly', async () => {
     const { calls, run } = createRunner();
-    const navigator = new MacOsNavigator(
-      run,
-      vi.fn(() => Promise.resolve()),
-      'darwin',
-    );
+    const pause = vi.fn(() => Promise.resolve());
+    const navigator = new MacOsNavigator(run, pause, 'darwin');
 
     await expect(
-      navigator.navigate({
-        provider: 'claude',
-        surface: 'cli',
-        nativeSessionId: 'session-opaque-id',
-        owner: 'ghostty',
-      }),
-    ).resolves.toEqual({ status: 'dispatched', target: 'application', application: 'ghostty' });
-    expect(calls).toEqual([
-      { executable: '/usr/bin/open', args: ['-b', MACOS_APPLICATIONS.ghostty.bundleId] },
-    ]);
-  });
-
-  it('returns a selection-required result for unknown terminal ownership', async () => {
-    const { calls, run } = createRunner();
-    const navigator = new MacOsNavigator(
-      run,
-      vi.fn(() => Promise.resolve()),
-      'darwin',
-    );
-
-    await expect(
-      navigator.navigate({
-        provider: 'codex',
-        surface: 'cli',
-        nativeSessionId: 'session-opaque-id',
-        owner: 'unknown',
-      }),
-    ).resolves.toMatchObject({
-      status: 'selection-required',
+      navigator.navigate({ kind: 'application', application: 'codex-desktop' }),
+    ).resolves.toEqual({
+      status: 'dispatched',
       target: 'application',
-      reason: 'unknown-owner',
-      options: ['terminal', 'ghostty', 'warp', 'iterm2'],
+      application: 'codex-desktop',
     });
-    expect(calls).toHaveLength(0);
+    expect(calls).toEqual([
+      { executable: '/usr/bin/open', args: ['-b', MACOS_APPLICATIONS.codexDesktop.bundleId] },
+    ]);
+    expect(pause).not.toHaveBeenCalled();
   });
 
   it('reports missing apps and timeouts without exposing process output', async () => {
@@ -223,12 +174,7 @@ describe('macOS application navigation', () => {
       'darwin',
     );
     await expect(
-      navigator.navigate({
-        provider: 'claude',
-        surface: 'desktop',
-        nativeSessionId: claudeId,
-        owner: 'claude-desktop',
-      }),
+      navigator.navigate({ kind: 'application', application: 'claude-desktop' }),
     ).resolves.toEqual({
       status: 'failed',
       target: 'application',
@@ -249,12 +195,7 @@ describe('macOS application navigation', () => {
       'darwin',
     );
     await expect(
-      timedOutNavigator.navigate({
-        provider: 'codex',
-        surface: 'desktop',
-        nativeSessionId: codexId,
-        owner: 'codex-desktop',
-      }),
+      timedOutNavigator.navigate({ kind: 'codex-thread', nativeSessionId: codexId }),
     ).resolves.toMatchObject({ status: 'failed', reason: 'timeout', stage: 'activation' });
   });
 
@@ -279,12 +220,7 @@ describe('macOS application navigation', () => {
     );
 
     await expect(
-      navigator.navigate({
-        provider: 'codex',
-        surface: 'desktop',
-        nativeSessionId: codexId,
-        owner: 'codex-desktop',
-      }),
+      navigator.navigate({ kind: 'codex-thread', nativeSessionId: codexId }),
     ).resolves.toEqual({
       status: 'failed',
       target: 'session',
@@ -306,12 +242,7 @@ describe('macOS application navigation', () => {
       vi.fn(() => Promise.resolve()),
       'darwin',
     );
-    const target = {
-      provider: 'claude' as const,
-      surface: 'desktop' as const,
-      nativeSessionId: claudeId,
-      owner: 'claude-desktop' as const,
-    };
+    const target = { kind: 'application' as const, application: 'claude-desktop' as const };
     const first = navigator.navigate(target);
     await expect(navigator.navigate(target)).resolves.toEqual({
       status: 'failed',
@@ -465,12 +396,7 @@ describe('macOS application navigation', () => {
       vi.fn(() => Promise.resolve()),
       'darwin',
     );
-    const target = {
-      provider: 'claude' as const,
-      surface: 'desktop' as const,
-      nativeSessionId: claudeId,
-      owner: 'claude-desktop' as const,
-    };
+    const target = { kind: 'application' as const, application: 'claude-desktop' as const };
     await expect(navigator.navigate(target)).resolves.toMatchObject({
       status: 'failed',
       reason: 'cleanup-unconfirmed',

@@ -79,7 +79,7 @@ test('native restart publishes only ready surface observations', async () => {
     await expect
       .poll(() => readyOverlay.evaluate(() => window.agentStatusTilesOverlay.getState()))
       .toMatchObject({
-        sessions: [{ id: sessionId, title: 'Fixture project', canOpen: false }],
+        sessions: [{ id: sessionId, title: 'Fixture project', canOpen: true }],
       });
 
     await application.close();

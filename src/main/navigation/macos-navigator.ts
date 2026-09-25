@@ -1,7 +1,5 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 
-import type { Provider } from '../../shared/session';
-
 const OPEN_EXECUTABLE = '/usr/bin/open';
 const ACTIVATION_WAIT_MS = 175;
 const DEFAULT_TIMEOUT_MS = 2_000;
@@ -9,8 +7,6 @@ const MAX_TIMEOUT_MS = 5_000;
 const DEFAULT_MAX_OUTPUT_BYTES = 8_192;
 const MAX_OUTPUT_BYTES = 64 * 1024;
 const TERMINATION_GRACE_MS = 250;
-const MAX_NATIVE_ID_BYTES = 256;
-const CONTROL_CHARACTER_PATTERN = /\p{Cc}/u;
 
 const CODEX_UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -24,44 +20,18 @@ export const MACOS_APPLICATIONS = Object.freeze({
     application: 'claude-desktop',
     bundleId: 'com.anthropic.claudefordesktop',
   }),
-  terminal: Object.freeze({ application: 'terminal', bundleId: 'com.apple.Terminal' }),
-  ghostty: Object.freeze({ application: 'ghostty', bundleId: 'com.mitchellh.ghostty' }),
-  warp: Object.freeze({ application: 'warp', bundleId: 'dev.warp.Warp-Stable' }),
-  iterm2: Object.freeze({ application: 'iterm2', bundleId: 'com.googlecode.iterm2' }),
 } as const);
 
-export type TerminalApplication = keyof Pick<
-  typeof MACOS_APPLICATIONS,
-  'terminal' | 'ghostty' | 'warp' | 'iterm2'
->;
 export type NavigationApplication =
   (typeof MACOS_APPLICATIONS)[keyof typeof MACOS_APPLICATIONS]['application'];
 
+/**
+ * A Codex Desktop thread opens exactly; anything else only brings its
+ * harness's Desktop app forward.
+ */
 export type QualifiedNavigationTarget =
-  | {
-      provider: 'codex';
-      surface: 'desktop';
-      nativeSessionId: string;
-      owner: 'codex-desktop';
-    }
-  | {
-      provider: 'claude';
-      surface: 'desktop';
-      nativeSessionId: string;
-      owner: 'claude-desktop';
-    }
-  | {
-      provider: Provider;
-      surface: 'cli';
-      nativeSessionId: string;
-      owner: TerminalApplication;
-    }
-  | {
-      provider: Provider;
-      surface: 'cli';
-      nativeSessionId: string;
-      owner: 'unknown';
-    };
+  | { kind: 'codex-thread'; nativeSessionId: string }
+  | { kind: 'application'; application: NavigationApplication };
 
 export interface ProcessOptions {
   timeoutMs: number;
@@ -100,13 +70,7 @@ export type NavigationResult =
   | {
       status: 'dispatched';
       target: 'application';
-      application: Exclude<NavigationApplication, 'codex-desktop'>;
-    }
-  | {
-      status: 'selection-required';
-      target: 'application';
-      reason: 'unknown-owner';
-      options: readonly TerminalApplication[];
+      application: NavigationApplication;
     }
   | {
       status: 'failed';
@@ -115,13 +79,6 @@ export type NavigationResult =
       reason: NavigationFailureReason;
       stage?: 'activation' | 'session-link';
     };
-
-export const TERMINAL_SELECTION_OPTIONS: readonly TerminalApplication[] = Object.freeze([
-  'terminal',
-  'ghostty',
-  'warp',
-  'iterm2',
-]);
 
 export function isCodexTaskId(value: unknown): value is string {
   return typeof value === 'string' && CODEX_UUID_PATTERN.test(value);
@@ -132,46 +89,31 @@ export function createCodexTaskLink(nativeSessionId: string): string {
   return `codex://threads/${nativeSessionId}`;
 }
 
-function isBoundedNativeId(value: unknown): value is string {
-  return (
-    typeof value === 'string' &&
-    value.trim().length > 0 &&
-    !CONTROL_CHARACTER_PATTERN.test(value) &&
-    new TextEncoder().encode(value).byteLength <= MAX_NATIVE_ID_BYTES
-  );
-}
-
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object';
 }
 
-export function isTerminalApplication(value: unknown): value is TerminalApplication {
-  return value === 'terminal' || value === 'ghostty' || value === 'warp' || value === 'iterm2';
+/** Exactly these own keys, so nothing inherited or extra reaches the navigator. */
+function hasOnlyOwnKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {
+  const own = Object.keys(value);
+  return own.length === keys.length && keys.every((key) => Object.hasOwn(value, key));
 }
 
 function isValidTarget(value: unknown): value is QualifiedNavigationTarget {
   if (!isRecord(value)) return false;
   try {
-    if (
-      !Object.hasOwn(value, 'nativeSessionId') ||
-      !Object.hasOwn(value, 'provider') ||
-      !Object.hasOwn(value, 'surface') ||
-      !Object.hasOwn(value, 'owner') ||
-      !isBoundedNativeId(value.nativeSessionId)
-    ) {
-      return false;
+    if (value.kind === 'codex-thread') {
+      return (
+        hasOnlyOwnKeys(value, ['kind', 'nativeSessionId']) && isCodexTaskId(value.nativeSessionId)
+      );
     }
-    if (value.provider !== 'codex' && value.provider !== 'claude') return false;
-    if (value.surface !== 'desktop' && value.surface !== 'cli') return false;
-
-    if (value.provider === 'codex' && value.surface === 'desktop') {
-      return value.owner === 'codex-desktop' && isCodexTaskId(value.nativeSessionId);
+    if (value.kind === 'application') {
+      return (
+        hasOnlyOwnKeys(value, ['kind', 'application']) &&
+        (value.application === 'codex-desktop' || value.application === 'claude-desktop')
+      );
     }
-    if (value.provider === 'claude' && value.surface === 'desktop') {
-      return value.owner === 'claude-desktop';
-    }
-    if (value.surface !== 'cli') return false;
-    return value.owner === 'unknown' || isTerminalApplication(value.owner);
+    return false;
   } catch {
     return false;
   }
@@ -371,40 +313,19 @@ export class MacOsNavigator {
     if (!isValidTarget(target)) {
       return { status: 'failed', target: 'application', reason: 'invalid-target' };
     }
+    const resultTarget = target.kind === 'codex-thread' ? 'session' : 'application';
     if (this.platform !== 'darwin') {
-      return {
-        status: 'failed',
-        target:
-          target.surface === 'desktop' && target.provider === 'codex' ? 'session' : 'application',
-        reason: 'unsupported-platform',
-      };
+      return { status: 'failed', target: resultTarget, reason: 'unsupported-platform' };
     }
-    if (target.surface === 'cli' && target.owner === 'unknown') {
-      return {
-        status: 'selection-required',
-        target: 'application',
-        reason: 'unknown-owner',
-        options: TERMINAL_SELECTION_OPTIONS,
-      };
-    }
-    if (this.isInFlight) {
-      return {
-        status: 'failed',
-        target:
-          target.provider === 'codex' && target.surface === 'desktop' ? 'session' : 'application',
-        reason: 'busy',
-      };
-    }
+    if (this.isInFlight) return { status: 'failed', target: resultTarget, reason: 'busy' };
 
     this.isInFlight = true;
     try {
-      if (target.provider === 'codex' && target.surface === 'desktop') {
-        return await this.navigateCodex(target.nativeSessionId);
-      }
+      if (target.kind === 'codex-thread') return await this.navigateCodex(target.nativeSessionId);
       const application =
-        target.provider === 'claude' && target.surface === 'desktop'
-          ? MACOS_APPLICATIONS.claudeDesktop
-          : MACOS_APPLICATIONS[target.owner as TerminalApplication];
+        target.application === 'codex-desktop'
+          ? MACOS_APPLICATIONS.codexDesktop
+          : MACOS_APPLICATIONS.claudeDesktop;
       const activation = await this.activate(application.bundleId);
       if (activation !== undefined) {
         return {
