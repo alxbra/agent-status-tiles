@@ -165,25 +165,30 @@
   color: var(--dynamic-island-dot);
 }
 
-/* The empty state: a pixel cat asleep, breathing in two frames under z's. */
+/* The empty state: a pixel frenchie asleep, breathing in two frames under
+   z's, with a brief twitch (an ear or a paw) now and then. */
 .dynamic-island__sleeper {
   position: relative;
   display: inline-flex;
   align-items: flex-end;
   height: 24px;
-  padding: 0 18px 3px 0;
+  padding: 0 18px 0 0;
   box-sizing: border-box;
 }
 
-.dynamic-island__sleeper-cat {
+.dynamic-island__sleeper-sprite {
   display: block;
-  fill: var(--dynamic-island-text);
   transform-origin: 50% 100%;
   animation: dynamic-island-sleep-breathe 2.4s steps(1, end) infinite;
 }
 
-.dynamic-island__sleeper-eye {
-  fill: var(--dynamic-island-fill);
+.dynamic-island__sleeper-twitch {
+  visibility: hidden;
+  animation: dynamic-island-sleep-twitch 7.2s steps(1, end) infinite;
+}
+
+.dynamic-island__sleeper-frame {
+  animation: dynamic-island-sleep-rest 7.2s steps(1, end) infinite;
 }
 
 .dynamic-island__sleeper-z {
@@ -209,9 +214,29 @@
   100% {
     transform: none;
   }
-  /* One pixel row taller on each breath in: 18 of 16 px. */
+  /* One pixel row taller on each breath in: 26 of 24 px. */
   50% {
-    transform: scaleY(1.125);
+    transform: scaleY(1.0834);
+  }
+}
+
+/* The twitch frame replaces the resting one for the last half second of
+   each 7.2 s cycle. */
+@keyframes dynamic-island-sleep-twitch {
+  0% {
+    visibility: hidden;
+  }
+  93% {
+    visibility: visible;
+  }
+}
+
+@keyframes dynamic-island-sleep-rest {
+  0% {
+    visibility: visible;
+  }
+  93% {
+    visibility: hidden;
   }
 }
 
@@ -265,13 +290,15 @@
 .dynamic-island--reduced-motion .dynamic-island__shape,
 .dynamic-island--reduced-motion .dynamic-island__dot,
 .dynamic-island--reduced-motion .dynamic-island__dot::after,
-.dynamic-island--reduced-motion .dynamic-island__sleeper-cat,
+.dynamic-island--reduced-motion .dynamic-island__sleeper-sprite,
+.dynamic-island--reduced-motion .dynamic-island__sleeper-frame,
+.dynamic-island--reduced-motion .dynamic-island__sleeper-twitch,
 .dynamic-island--reduced-motion .dynamic-island__z {
   animation: none;
   transition: none;
 }
 
-/* Under reduced motion the cat sleeps still under a single z. */
+/* Under reduced motion the frenchie sleeps still under a single z. */
 .dynamic-island--reduced-motion .dynamic-island__z:first-child {
   opacity: 1;
   transform: translate(4px, -4px);

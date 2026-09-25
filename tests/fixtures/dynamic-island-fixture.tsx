@@ -3,6 +3,8 @@ import { createRoot } from 'react-dom/client';
 
 import type { SessionSnapshot, SessionStatus } from '../../src/shared/session';
 import { DynamicIsland } from '../../src/renderer/island/DynamicIsland';
+import { SLEEPING_POSES } from '../../src/renderer/island/frenchie-poses';
+import { SleepingSprite } from '../../src/renderer/island/SleepingSprite';
 import { playSuccessCue } from '../../src/renderer/island/success-cue';
 import type { OpenSessionTarget } from '../../src/renderer/island/interaction';
 import './dynamic-island-fixture.css';
@@ -102,11 +104,34 @@ function Gallery(): ReactElement {
   );
 }
 
+/** Every sleeping pose in an island-shaped pill, for review. */
+function Sleepers(): ReactElement {
+  return (
+    <div className="fixture-gallery">
+      {SLEEPING_POSES.map((pose, index) => (
+        <section key={pose.name}>
+          <div
+            className={
+              reducedMotion ? 'dynamic-island dynamic-island--reduced-motion' : 'dynamic-island'
+            }
+          >
+            <div className="fixture-sleeper">
+              <SleepingSprite pose={index} />
+            </div>
+          </div>
+        </section>
+      ))}
+    </div>
+  );
+}
+
 const state = params.get('state') ?? 'gallery';
 createRoot(document.getElementById('fixture-root')!).render(
   <StrictMode>
     {state === 'gallery' ? (
       <Gallery />
+    ) : state === 'sleepers' ? (
+      <Sleepers />
     ) : (
       <IslandFixture initial={FIXTURE_STATES[state] ?? FIXTURE_STATES.idle!} />
     )}
