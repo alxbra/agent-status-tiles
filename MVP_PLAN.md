@@ -17,7 +17,7 @@ The first publishable release targets macOS and supports:
 
 Each eligible top-level thread or task is tracked locally. The overlay considers the five most recently updated items across connected harnesses by default, configurable from one to ten. Spawned subagents remain represented by their parent.
 
-The main interface is a compact dynamic island: one black, notch-style shape hanging from the top center of the selected display, over the menu bar. It shows two mirrored columns, Codex on the left and Claude on the right, each with one status dot (needs input, working, or idle) beside the harness name, and it plays a short success cue when a turn finishes. Clicking a column brings that harness's Desktop app forward and selects its most relevant thread where supported. The user authorized this island on 2026-09-23, replacing the document-tab dock of 2026-09-17 (which had itself replaced the rounded-square tiles and Dock-style magnification); the reference states render from `tests/fixtures/dynamic-island.html`. The same day, the user split it into per-harness columns and removed the done state. The island does not expand yet.
+The main interface is a compact dynamic island: one black, notch-style shape hanging from the top center of the selected display, over the menu bar. It shows two columns, Codex on the left and Claude on the right, each with one status dot (needs input, working, or idle) beside the harness name, and it plays a short success cue when a turn finishes. Clicking a column brings that harness's Desktop app forward and selects its most relevant thread where supported. The user authorized this island on 2026-09-23, replacing the document-tab dock of 2026-09-17 (which had itself replaced the rounded-square tiles and Dock-style magnification); the reference states render from `tests/fixtures/dynamic-island.html`. The same day, the user split it into per-harness columns and removed the done state. The island does not expand yet.
 
 ### Fixed scope
 
@@ -87,10 +87,10 @@ Session state still distinguishes unread completions, unavailable items, and err
 
 ### 2.3 Harness columns
 
-The island shows one column per active harness (the user split it per harness on 2026-09-23 and hid idle harnesses on 2026-09-25), mirrored around its center with a **28 CSS px** gap when both show and centered when one shows:
+The island shows one column per active harness (the user split it per harness on 2026-09-23 and hid idle harnesses on 2026-09-25), hugging its center with a **28 CSS px** gap when both show and centered when one shows:
 
 - Codex on the left: an **8 CSS px** dot, then `Codex`, **8 CSS px** apart.
-- Claude on the right: `Claude`, then its dot.
+- Claude on the right: its dot, then `Claude` (the user moved the dot to the left on 2026-09-25).
 
 Each dot shows its harness's most important recent thread:
 
@@ -112,9 +112,9 @@ The island does not expand yet. An expanded view needs explicit product authoriz
           menu bar ─────────╮                       ╭───────── menu bar
                         ╰─ frenchie z ─╯               both idle: a frenchie sleeps
                         ╰─ ◉ Codex ─╯                  Codex working, Claude idle (hidden)
-                  ╰─ ◉ Codex      Claude ◉ ─╯          Claude finished its only turn: sound, green 10 s, then hidden
-                  ╰─ ◉ Codex      Claude ◉ ─╯          both working
-                  ╰─ ◉ Codex      Claude ◉ ─╯          Codex finished one of two: sound, green for 10 s
+                  ╰─ ◉ Codex      ◉ Claude ─╯          Claude finished its only turn: sound, green 10 s, then hidden
+                  ╰─ ◉ Codex      ◉ Claude ─╯          both working
+                  ╰─ ◉ Codex      ◉ Claude ─╯          Codex finished one of two: sound, green for 10 s
                         ╰─ ● Codex ─╯                  Codex needs input (orange), Claude idle
 ```
 
