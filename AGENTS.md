@@ -13,30 +13,38 @@ Do not add application scaffolding as part of the repository bootstrap.
 The overlay has a strict visual contract; it is not a redesign invitation.
 Keep the exact status palette and meanings in `MVP_PLAN.md`. The user replaced
 the document-tab dock with a compact dynamic island on 2026-09-23 and split
-it into one column per harness the same day; the reference states render from
+it into one column per harness the same day, then on 2026-09-25 hid idle
+harnesses, colored the names, lengthened the green cue, and added a sleeping
+empty state; the reference states render from
 `tests/fixtures/dynamic-island.html`. In particular:
 
 - The island is one black, notch-style shape hanging from the top edge of the
   selected display, centered horizontally over the menu bar: **32 px tall**, a
   flat top with **8 px** concave shoulders, a fully rounded bottom, at least
   **48 px** wide, and **14 px** of horizontal padding around its content.
-- The island always shows two mirrored columns: Codex on the left (dot, then
-  `Codex`) and Claude on the right (`Claude`, then dot), 28 px apart around
-  the center. Each **8 px** dot shows its harness's most important thread:
-  orange when one needs input, else pulsing blue while one works, else white
-  for idle. There is no done state: a finished, failed, or unavailable thread
-  is idle. Nothing else: no labels, icons, titles, counts, or badges.
+- The island shows a column only for an active harness: Codex on the left
+  (dot, then `Codex`) and Claude on the right (`Claude`, then dot), 28 px
+  apart around the center when both show, and centered when one shows. Each
+  **8 px** dot shows its harness's most important thread: orange when one
+  needs input, else pulsing blue while one works. An idle harness is hidden.
+  There is no done state: a finished, failed, or unavailable thread is idle.
+  Nothing else: no icons, titles, counts, or badges.
 - When a turn finishes, the island plays Cuelume's `success` cue and that
-  harness's dot pulses green for **5 seconds**, then shows its current tone
-  (white or blue). The green ends early for good once the harness's tone
-  changes, and a harness waiting for input stays orange throughout.
-- Both names use bundled Fira Code at weight 500 and 12 px in one gray.
+  harness's column pulses green for **10 seconds**, then shows its current
+  tone (blue, or hidden when idle). The green ends early for good once the
+  harness's tone changes, and a harness waiting for input stays orange
+  throughout.
+- Both names use bundled Fira Code at weight 500 and 12 px, each in its dot's
+  color.
+- When sessions exist but no harness is active, the island shows only a
+  sleeping pixel cat (a two-frame breath under drifting pixel z's); it opens
+  nothing, and reduced motion holds it still under one z. With no sessions at
+  all, the island is hidden.
 - Width follows the content with one **420 ms** spring transition. Reduced
   motion stops the pulse and every transition, but not the sound.
 - Each column is its own button that opens its harness's thread, captured at
   pointer-down: the one waiting for input, else the one that just finished
-  while it shows green, else the newest working one, else the harness's most
-  recent thread. A harness with no thread does nothing. Codex Desktop opens
+  while it shows green, else the newest working one. Codex Desktop opens
   the exact thread; Claude Desktop and terminals are only brought forward. The
   island surface is the only native hit region.
 - The island does not expand yet. Do not add an expanded view without explicit

@@ -76,6 +76,10 @@ async function columns(page: Page): Promise<readonly string[]> {
     );
 }
 
+function column(page: Page, provider: 'codex' | 'claude') {
+  return page.locator(`.dynamic-island__harness[data-provider="${provider}"]`);
+}
+
 function workingSession(overrides: Partial<SessionSnapshot> = {}): SessionSnapshot {
   return {
     id: 'codex:w',
@@ -93,23 +97,15 @@ function workingSession(overrides: Partial<SessionSnapshot> = {}): SessionSnapsh
 }
 
 const CASES = [
-  { state: 'idle', columns: ['Codex:idle', 'Claude:idle'], label: 'Codex idle, Claude idle' },
-  // A done thread reads as idle.
-  {
-    state: 'working',
-    columns: ['Codex:working', 'Claude:idle'],
-    label: 'Codex working, Claude idle',
-  },
+  // A done thread reads as idle, and idle harnesses are hidden.
+  { state: 'working', columns: ['Codex:working'], label: 'Codex working' },
+  { state: 'claude-only', columns: ['Claude:working'], label: 'Claude working' },
   {
     state: 'both-working',
     columns: ['Codex:working', 'Claude:working'],
     label: 'Codex working, Claude working',
   },
-  {
-    state: 'needs-input',
-    columns: ['Codex:needs-input', 'Claude:idle'],
-    label: 'Codex needs input, Claude idle',
-  },
+  { state: 'needs-input', columns: ['Codex:needs-input'], label: 'Codex needs input' },
   {
     state: 'mixed',
     columns: ['Codex:working', 'Claude:needs-input'],
@@ -130,7 +126,9 @@ for (const { state, columns: expected, label } of CASES) {
   });
 }
 
-test('mirrors Codex on the left and Claude on the right in one gray', async ({ page }) => {
+test('mirrors Codex on the left and Claude on the right, each name in its dot color', async ({
+  page,
+}) => {
   await openIsland(page, 'mixed');
   expect(await page.evaluate(() => document.fonts.check('500 12px "Fira Code"'))).toBe(true);
   const layout = await page.locator('.dynamic-island__harness').evaluateAll((cells) =>
@@ -146,7 +144,7 @@ test('mirrors Codex on the left and Claude on the right in one gray', async ({ p
   const colors = await page
     .locator('.dynamic-island__name')
     .evaluateAll((names) => names.map((name) => getComputedStyle(name).color));
-  expect(colors).toEqual(['rgba(241, 241, 237, 0.62)', 'rgba(241, 241, 237, 0.62)']);
+  expect(colors).toEqual(['rgb(141, 206, 245)', 'rgb(255, 138, 61)']);
   const dots = await page
     .locator('.dynamic-island__dot')
     .evaluateAll((elements) =>
@@ -156,7 +154,7 @@ test('mirrors Codex on the left and Claude on the right in one gray', async ({ p
 });
 
 test('pulses only working dots and stills them under reduced motion', async ({ page }) => {
-  await openIsland(page, 'working');
+  await openIsland(page, 'mixed');
   const animations = async (): Promise<readonly string[]> =>
     page
       .locator('.dynamic-island__dot')
@@ -165,7 +163,7 @@ test('pulses only working dots and stills them under reduced motion', async ({ p
   expect(codex).toContain('dynamic-island-breathe');
   expect(claude).not.toContain('dynamic-island-breathe');
 
-  await openIsland(page, 'working', '&motion=reduced');
+  await openIsland(page, 'mixed', '&motion=reduced');
   expect(await animations()).toEqual(['none', 'none']);
   expect(
     await page
@@ -174,7 +172,7 @@ test('pulses only working dots and stills them under reduced motion', async ({ p
   ).toBe('none');
 });
 
-test('cues every finished turn with five seconds of green, then the current tone', async ({
+test('cues every finished turn with ten seconds of green, then the current tone', async ({
   page,
 }) => {
   await page.clock.install();
@@ -197,7 +195,7 @@ test('cues every finished turn with five seconds of green, then the current tone
   await expect.poll(() => columns(page)).toEqual(['Codex:working', 'Claude:working']);
   expect(await page.evaluate(() => window.__islandTurnsFinished)).toBeUndefined();
 
-  // Codex finishes one thread while another still runs: green for five seconds.
+  // Codex finishes one thread while another still runs: green for ten seconds.
   await page.evaluate(
     (sessions) => window.__setIslandSessions?.(sessions),
     [doneA, codexB, claudeC],
@@ -209,8 +207,8 @@ test('cues every finished turn with five seconds of green, then the current tone
       .locator('.dynamic-island__harness[data-provider="codex"] .dynamic-island__dot')
       .evaluate((dot) => getComputedStyle(dot).backgroundColor),
   ).toBe('rgb(143, 234, 152)');
-  // Codex finishes a second thread after 3 s: the green restarts from there.
-  await page.clock.runFor(3_000);
+  // Codex finishes a second thread after 6 s: the green restarts from there.
+  await page.clock.runFor(6_000);
   const codexD = workingSession({ id: 'codex:d', updatedAt: 4 });
   await page.evaluate(
     (sessions) => window.__setIslandSessions?.(sessions),
@@ -223,40 +221,45 @@ test('cues every finished turn with five seconds of green, then the current tone
     [doneA, codexB, doneD, claudeC],
   );
   await expect.poll(() => page.evaluate(() => window.__islandTurnsFinished)).toBe(2);
-  await page.clock.runFor(4_900);
+  await page.clock.runFor(9_900);
   expect(await columns(page)).toEqual(['Codex:finished', 'Claude:working']);
   await page.clock.runFor(200);
   await expect.poll(() => columns(page)).toEqual(['Codex:working', 'Claude:working']);
 
-  // Claude finishes its only thread: green for five seconds, then idle.
+  // Claude finishes its only thread: green for ten seconds, then idle and hidden.
   await page.evaluate((sessions) => window.__setIslandSessions?.(sessions), [doneA, codexB, doneC]);
   await expect.poll(() => columns(page)).toEqual(['Codex:working', 'Claude:finished']);
   expect(await page.evaluate(() => window.__islandTurnsFinished)).toBe(3);
-  await page.clock.runFor(5_100);
-  await expect.poll(() => columns(page)).toEqual(['Codex:working', 'Claude:idle']);
+  expect(
+    await column(page, 'claude')
+      .locator('.dynamic-island__name')
+      .evaluate((name) => getComputedStyle(name).color),
+  ).toBe('rgb(143, 234, 152)');
+  await page.clock.runFor(10_100);
+  await expect.poll(() => columns(page)).toEqual(['Codex:working']);
 
   // Once the tone moves away, the green is over for good: a question and its
-  // answer inside the five seconds bring back blue, not green.
+  // answer inside the ten seconds bring back blue, not green.
   const againA = workingSession({ id: 'codex:a', status: 'unread', completionId: 'done-a3' });
   const askingB = workingSession({ id: 'codex:b', updatedAt: 3, status: 'needs-input' });
   const set = (sessions: readonly SessionSnapshot[]): Promise<void> =>
     page.evaluate((next) => window.__setIslandSessions?.(next), sessions);
   await set([againA, codexB, doneC]);
-  await expect.poll(() => columns(page)).toEqual(['Codex:finished', 'Claude:idle']);
+  await expect.poll(() => columns(page)).toEqual(['Codex:finished']);
   expect(await page.evaluate(() => window.__islandTurnsFinished)).toBe(4);
   await set([againA, askingB, doneC]);
-  await expect.poll(() => columns(page)).toEqual(['Codex:needs-input', 'Claude:idle']);
+  await expect.poll(() => columns(page)).toEqual(['Codex:needs-input']);
   await set([againA, codexB, doneC]);
-  await expect.poll(() => columns(page)).toEqual(['Codex:working', 'Claude:idle']);
+  await expect.poll(() => columns(page)).toEqual(['Codex:working']);
 
   // A question outranks the cue: Codex finishes a turn while another of its
   // threads waits for input, so it sounds but stays orange.
   const onceMoreA = workingSession({ id: 'codex:a', status: 'unread', completionId: 'done-a4' });
   await set([againA, askingB, doneC]);
-  await expect.poll(() => columns(page)).toEqual(['Codex:needs-input', 'Claude:idle']);
+  await expect.poll(() => columns(page)).toEqual(['Codex:needs-input']);
   await set([onceMoreA, askingB, doneC]);
   await expect.poll(() => page.evaluate(() => window.__islandTurnsFinished)).toBe(5);
-  expect(await columns(page)).toEqual(['Codex:needs-input', 'Claude:idle']);
+  expect(await columns(page)).toEqual(['Codex:needs-input']);
 });
 
 test('does not cue completions that already existed or re-cue on a re-render', async ({ page }) => {
@@ -294,7 +297,7 @@ test('does not cue completions that already existed or re-cue on a re-render', a
   });
   await page.waitForTimeout(100);
   expect(await page.evaluate(() => window.__islandTurnsFinished)).toBeUndefined();
-  expect(await columns(page)).toEqual(['Codex:working', 'Claude:idle']);
+  expect(await columns(page)).toEqual(['Codex:working']);
 });
 
 test('publishes the pill as the only hit region, centered at the top', async ({ page }) => {
@@ -319,10 +322,6 @@ test('publishes the pill as the only hit region, centered at the top', async ({ 
     .toEqual({ top: 0, height: 32, centered: true, regionCount: 1, matchesPill: true });
 });
 
-function column(page: Page, provider: 'codex' | 'claude') {
-  return page.locator(`.dynamic-island__harness[data-provider="${provider}"]`);
-}
-
 test("opens each column's own harness thread", async ({ page }) => {
   await openIsland(page, 'mixed');
   await column(page, 'codex').click();
@@ -345,7 +344,7 @@ test('opens the thread shown at pointer-down', async ({ page }) => {
       workingSession({ id: 'codex:later', status: 'needs-input', updatedAt: 9 }),
     ],
   );
-  await expect.poll(() => columns(page)).toEqual(['Codex:needs-input', 'Claude:idle']);
+  await expect.poll(() => columns(page)).toEqual(['Codex:needs-input']);
   await page.mouse.up();
   expect(await page.evaluate(() => window.__islandOpenTarget)).toEqual({ sessionId: 'codex:a' });
 });
@@ -357,7 +356,7 @@ test('opens the just-finished thread while its green cue shows', async ({ page }
     workingSession({ id: 'codex:b', updatedAt: 3 }),
   ];
   await page.evaluate((sessions) => window.__setIslandSessions?.(sessions), running);
-  await expect.poll(() => columns(page)).toEqual(['Codex:working', 'Claude:idle']);
+  await expect.poll(() => columns(page)).toEqual(['Codex:working']);
   await page.evaluate(
     (sessions) => window.__setIslandSessions?.(sessions),
     [
@@ -365,7 +364,7 @@ test('opens the just-finished thread while its green cue shows', async ({ page }
       workingSession({ id: 'codex:b', updatedAt: 3 }),
     ],
   );
-  await expect.poll(() => columns(page)).toEqual(['Codex:finished', 'Claude:idle']);
+  await expect.poll(() => columns(page)).toEqual(['Codex:finished']);
   await column(page, 'codex').click();
   expect(await page.evaluate(() => window.__islandOpenTarget)).toEqual({
     sessionId: 'codex:a',
@@ -373,27 +372,35 @@ test('opens the just-finished thread while its green cue shows', async ({ page }
   });
 });
 
-test("opens an idle harness's latest thread and nothing for a harness without one", async ({
-  page,
-}) => {
+test('hides idle harnesses and sleeps when none is active', async ({ page }) => {
   await openIsland(page, 'idle');
-  await page.evaluate(
-    (sessions) => window.__setIslandSessions?.(sessions),
-    [
-      workingSession({ id: 'codex:old', status: 'idle', updatedAt: 1 }),
-      workingSession({ id: 'codex:new', status: 'idle', updatedAt: 5 }),
-    ],
-  );
-  await column(page, 'codex').click();
-  expect(await page.evaluate(() => window.__islandOpenTarget)).toEqual({ sessionId: 'codex:new' });
-  await page.evaluate(() => {
-    window.__islandOpenTarget = undefined;
-  });
-  const claude = column(page, 'claude');
-  await expect(claude).toHaveAttribute('aria-disabled', 'true');
-  // aria-disabled keeps the empty column out of Playwright's actionability checks.
-  await claude.click({ force: true });
+  await expect(page.locator('.dynamic-island__harness')).toHaveCount(0);
+  const sleeper = page.getByRole('img', { name: 'All agents idle' });
+  await expect(sleeper).toBeVisible();
+  // The sleeping island is still the one hit region, and clicking it opens nothing.
+  expect(await page.evaluate(() => window.__islandHitRegions)).toHaveLength(1);
+  await page.locator('.dynamic-island__pill').click();
   expect(await page.evaluate(() => window.__islandOpenTarget)).toBeUndefined();
+  const animations = (): Promise<readonly string[]> =>
+    page
+      .locator('.dynamic-island__sleeper-cat, .dynamic-island__z')
+      .evaluateAll((elements) =>
+        elements.map((element) => getComputedStyle(element).animationName),
+      );
+  expect(await animations()).toEqual([
+    'dynamic-island-sleep-breathe',
+    'dynamic-island-z',
+    'dynamic-island-z',
+  ]);
+  await page.screenshot({ path: screenshotPath('idle'), animations: 'disabled' });
+
+  // A harness that starts working wakes the island.
+  await page.evaluate((session) => window.__setIslandSessions?.([session]), workingSession());
+  await expect.poll(() => columns(page)).toEqual(['Codex:working']);
+  await expect(sleeper).toHaveCount(0);
+
+  await openIsland(page, 'idle', '&motion=reduced');
+  expect(await animations()).toEqual(['none', 'none', 'none']);
 });
 
 test('takes keyboard focus from the menu bar entry and leaves it on Escape', async ({ page }) => {
@@ -417,27 +424,37 @@ test('lands keyboard entry on a column that can open, then on the newest thread'
   page,
 }) => {
   await openIsland(page, 'idle');
-  // Codex's only thread cannot open, so both idle columns rank by openability.
+  // Codex's only thread cannot open, so both working columns rank by openability.
   await page.evaluate(
     (sessions) => window.__setIslandSessions?.(sessions),
     [
-      workingSession({ id: 'codex:locked', status: 'idle', canOpen: false, updatedAt: 9 }),
-      workingSession({ id: 'claude:open', provider: 'claude', status: 'idle', updatedAt: 1 }),
+      workingSession({ id: 'codex:locked', canOpen: false, updatedAt: 9 }),
+      workingSession({ id: 'claude:open', provider: 'claude', updatedAt: 1 }),
     ],
   );
   await page.evaluate(() => window.__triggerKeyboardEntry?.());
   await expect(column(page, 'claude')).toBeFocused();
 
-  // Both can open and both are idle: the harness with the newer thread wins.
+  // Both can open and both are working: the harness with the newer thread wins.
   await page.evaluate(
     (sessions) => window.__setIslandSessions?.(sessions),
     [
-      workingSession({ id: 'codex:new', status: 'idle', updatedAt: 9 }),
-      workingSession({ id: 'claude:old', provider: 'claude', status: 'idle', updatedAt: 1 }),
+      workingSession({ id: 'codex:new', updatedAt: 9 }),
+      workingSession({ id: 'claude:old', provider: 'claude', updatedAt: 1 }),
     ],
   );
   await page.evaluate(() => window.__triggerKeyboardEntry?.());
   await expect(column(page, 'codex')).toBeFocused();
+});
+
+test('ends keyboard mode at once when the island is asleep', async ({ page }) => {
+  await openIsland(page, 'idle');
+  await page.evaluate(() => window.__triggerKeyboardEntry?.());
+  await expect.poll(() => page.evaluate(() => window.__islandKeyboardExits)).toBe(1);
+  // The entry is spent: a harness waking later does not take focus.
+  await page.evaluate((session) => window.__setIslandSessions?.([session]), workingSession());
+  await expect.poll(() => columns(page)).toEqual(['Codex:working']);
+  await expect(column(page, 'codex')).not.toBeFocused();
 });
 
 test('renders nothing without visible sessions', async ({ page }) => {

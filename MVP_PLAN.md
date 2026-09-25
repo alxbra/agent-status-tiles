@@ -68,8 +68,8 @@ Reuse the exact palette and status meanings from [the existing theme module](/Us
 
 | State | Color | Compact island |
 |---|---|---|
-| Idle / unavailable | `#F1F1ED` | White dot |
-| Completed | `#8FEA98` | Pulses green for 5 s, then the harness's current tone (idle is white) |
+| Idle / unavailable | `#F1F1ED` | Hidden column; the sleeping cat's color when no harness is active |
+| Completed | `#8FEA98` | Pulses green for 10 s, then the harness's current tone (hidden when idle) |
 | Working | `#8DCEF5` | Pulsing blue dot |
 | Waiting for input | `#FF8A3D` | Orange dot |
 | Error | `#FF6B73` | Reads as idle until the island expands |
@@ -79,14 +79,15 @@ Session state still distinguishes unread completions, unavailable items, and err
 ### 2.2 Compact island
 
 - The island is one black (`#000`) shape hanging from the top edge of the selected display, centered horizontally over the menu bar's empty center: **32 CSS px** tall, a flat top with **8 CSS px** concave shoulders on both sides, and a fully rounded bottom (16 px radius).
-- Its width follows its two columns with **14 CSS px** of horizontal padding and a minimum of **48 CSS px**.
+- Its width follows its visible columns, or the sleeping cat, with **14 CSS px** of horizontal padding and a minimum of **48 CSS px**.
 - The native window is **360 × 56 CSS px** at the display's top edge and sits above the menu bar at the status window level. Transparent space outside the island surface passes mouse events to applications underneath; the island surface is the only native hit region.
 - No title, toolbar, legend, settings button, icon, frosted backdrop, or native vibrancy window.
 - If no sessions qualify, hide the island completely. The menu-bar icon remains available.
+- If sessions qualify but no harness is active, the island shows only a sleeping pixel cat (the user asked for this empty state on 2026-09-25): a 16 × 8 cat on a 2 CSS px grid in `#F1F1ED` with closed eyes in the island's black, breathing in two frames (one pixel row taller, 2.4 s) under two 5-pixel z's that drift up and fade in turn, in the names' former gray. It is not a button and opens nothing; keyboard entry ends at once. Reduced motion holds the cat still under one z.
 
 ### 2.3 Harness columns
 
-The island always shows one column per harness (the user authorized this on 2026-09-23), mirrored around its center with a **28 CSS px** gap:
+The island shows one column per active harness (the user split it per harness on 2026-09-23 and hid idle harnesses on 2026-09-25), mirrored around its center with a **28 CSS px** gap when both show and centered when one shows:
 
 - Codex on the left: an **8 CSS px** dot, then `Codex`, **8 CSS px** apart.
 - Claude on the right: `Claude`, then its dot.
@@ -95,13 +96,13 @@ Each dot shows its harness's most important recent thread:
 
 1. Orange when one of its threads needs input.
 2. Else blue, pulsing (a breathing dot with a soft expanding ring), while one of its threads works.
-3. Else white for idle.
+3. Else the column is hidden, because the harness is idle.
 
-There is no done state: a finished, failed, or unavailable thread counts as idle. Nothing else appears in the island: no labels, thread titles, icons, counts, badges, or decorative copy. Both names use the bundled Fira Code typeface at weight 500 and 12 px in one gray (`#F1F1ED` at 62 % opacity).
+There is no done state: a finished, failed, or unavailable thread counts as idle. Nothing else appears in the island: no thread titles, icons, counts, badges, or decorative copy beyond the sleeping cat. Both names use the bundled Fira Code typeface at weight 500 and 12 px, each in its dot's color (the user asked for this on 2026-09-25).
 
-When a turn finishes live (a thread the island has seen gains a new, unacknowledged completion), the island plays the `success` cue from [Cuelume](https://cuelume.dev/). Its recipe is vendored in `src/renderer/island/success-cue.ts` (MIT) and synthesized locally with Web Audio, with no file loaded, because the Cuelume package refuses to play before a user gesture and the overlay never takes focus; the overlay window also allows audio without a gesture. That harness's dot pulses green (`#8FEA98`) for **5 seconds** and then shows its current tone, white or blue (the user extended the cue to every finished turn on 2026-09-23). Finishing again restarts the 5 seconds. The green ends early, for good, once the harness's tone changes from the one it finished with (it starts or stops working, or a question arrives); a harness waiting for input stays orange, because a question outranks a finished turn. The island remembers up to 256 threads' completions, including threads that left the recent list. Completions that existed before it first saw a thread, and replayed history that arrives already acknowledged, never sound; a brand-new thread whose first turn ends before the island ever shows it is also silent, as is a turn that finished while its thread was pruned from the runtime's recent set, because the runtime baselines a returning thread's history as acknowledged.
+When a turn finishes live (a thread the island has seen gains a new, unacknowledged completion), the island plays the `success` cue from [Cuelume](https://cuelume.dev/). Its recipe is vendored in `src/renderer/island/success-cue.ts` (MIT) and synthesized locally with Web Audio, with no file loaded, because the Cuelume package refuses to play before a user gesture and the overlay never takes focus; the overlay window also allows audio without a gesture. That harness's column pulses green (`#8FEA98`) for **10 seconds** (lengthened from 5 on 2026-09-25) and then shows its current tone, blue or hidden (the user extended the cue to every finished turn on 2026-09-23). Finishing again restarts the 10 seconds. The green ends early, for good, once the harness's tone changes from the one it finished with (it starts or stops working, or a question arrives); a harness waiting for input stays orange, because a question outranks a finished turn. The island remembers up to 256 threads' completions, including threads that left the recent list. Completions that existed before it first saw a thread, and replayed history that arrives already acknowledged, never sound; a brand-new thread whose first turn ends before the island ever shows it is also silent, as is a turn that finished while its thread was pruned from the runtime's recent set, because the runtime baselines a returning thread's history as acknowledged.
 
-Motion: the width changes with one **420 ms** spring transition, and a dot scales in whenever its tone changes. Reduced motion stops the pulse and every transition but keeps the sound.
+Motion: the width changes with one **420 ms** spring transition, and a dot scales in whenever its tone changes. Reduced motion stops the pulse, the sleeping cat's breath and z's, and every transition, but keeps the sound.
 
 The island does not expand yet. An expanded view needs explicit product authorization.
 
@@ -109,12 +110,12 @@ The island does not expand yet. An expanded view needs explicit product authoriz
 
 ```text
           menu bar ─────────╮                       ╭───────── menu bar
-                  ╰─ ● Codex      Claude ● ─╯          both idle
-                  ╰─ ◉ Codex      Claude ● ─╯          Codex working, Claude idle
-                  ╰─ ◉ Codex      Claude ◉ ─╯          Claude finished its only turn: sound, green 5 s, then white
+                          ╰─ ᓚᘏᗢ z ─╯                  both idle: the cat sleeps
+                        ╰─ ◉ Codex ─╯                  Codex working, Claude idle (hidden)
+                  ╰─ ◉ Codex      Claude ◉ ─╯          Claude finished its only turn: sound, green 10 s, then hidden
                   ╰─ ◉ Codex      Claude ◉ ─╯          both working
-                  ╰─ ◉ Codex      Claude ◉ ─╯          Codex finished one of two: sound, green for 5 s
-                  ╰─ ● Codex      Claude ● ─╯          Codex needs input (orange)
+                  ╰─ ◉ Codex      Claude ◉ ─╯          Codex finished one of two: sound, green for 10 s
+                        ╰─ ● Codex ─╯                  Codex needs input (orange), Claude idle
 ```
 
 The notes to the right explain the mockup; they never appear in the island.
@@ -124,9 +125,9 @@ The notes to the right explain the mockup; they never appear in the island.
 - Sort eligible items by confirmed provider update or task activity, newest first, with a stable ID tie-break. Local acknowledgement and error dismissal do not change recency.
 - Apply the global Recent threads limit (default five, range one to ten) across connected harnesses, including idle items; the island summarizes only those items.
 - Items outside the configured recent limit remain in local state and return when they become recent enough.
-- Each column is a button for its harness (the user asked for click-to-open on 2026-09-23). A click opens that harness's thread captured on pointer-down: the one waiting for input, else the one that just finished while its green cue shows, else the newest working one, else the harness's most recent thread; a harness with no visible thread does nothing.
-- The runtime marks a thread openable when the navigator can bring it forward, and main opens only such a top-level, unarchived thread in the island's current state, through the navigator in `docs/navigation.md`: Codex Desktop selects the exact thread; Claude Desktop is activated; a Claude CLI thread activates the terminal its hook journal recorded and is openable only when that terminal is known; Codex CLI threads, which record none, are not openable yet. An idle harness's click opens its newest openable thread.
-- Opening a thread with an unread completion (the just-finished one, or an idle harness's newest thread) acknowledges the completion the click saw, only after navigation was dispatched and only if it is still current; a failed or unavailable navigation acknowledges nothing. Unread completions otherwise stay in session state, where they no longer show.
+- Each column is a button for its harness (the user asked for click-to-open on 2026-09-23). A click opens that harness's thread captured on pointer-down: the one waiting for input, else the one that just finished while its green cue shows, else the newest working one. An idle harness shows no column, and the sleeping island opens nothing.
+- The runtime marks a thread openable when the navigator can bring it forward, and main opens only such a top-level, unarchived thread in the island's current state, through the navigator in `docs/navigation.md`: Codex Desktop selects the exact thread; Claude Desktop is activated; a Claude CLI thread activates the terminal its hook journal recorded and is openable only when that terminal is known; Codex CLI threads, which record none, are not openable yet.
+- Opening a thread with an unread completion (the just-finished one) acknowledges the completion the click saw, only after navigation was dispatched and only if it is still current; a failed or unavailable navigation acknowledges nothing. Unread completions otherwise stay in session state, where they no longer show.
 - Errors remain in session state until a new turn. Explicit dismissal stays available over IPC for the future expanded island; the compact island has no context menu.
 - Dismissal affects only the companion's display, never the underlying task.
 
@@ -801,8 +802,8 @@ Record corrections made after review and the commit used for final validation.
 
 - [ ] All four local harness surfaces have live validation evidence.
 - [ ] The compact island hangs from the top center of the selected display at 32 pixels tall, above the menu bar.
-- [ ] The island shows Codex and Claude columns with one dot each (needs input, working, or idle) and no other text; working dots pulse.
-- [ ] A finished turn plays the success cue and pulses its harness green for 5 seconds before its current tone.
+- [ ] The island shows a Codex or Claude column only while that harness is active, one dot each (needs input or working) with the name in the dot's color; working dots pulse; with no harness active, a sleeping pixel cat shows instead.
+- [ ] A finished turn plays the success cue and pulses its harness green for 10 seconds before its current tone.
 - [ ] Clicking a column opens its harness's thread (the exact thread in Codex Desktop); transparent space around the island does not block underlying applications.
 - [ ] Settings use stock shadcn without redundant copy.
 - [ ] The configured number of recent eligible items appears, including idle and acknowledged items.

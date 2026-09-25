@@ -104,6 +104,15 @@
   white-space: nowrap;
 }
 
+/* A lone active harness sits on the island's center. */
+.dynamic-island__content[data-columns='1'] {
+  grid-template-columns: auto;
+}
+
+.dynamic-island__content[data-columns='0'] {
+  display: inline-flex;
+}
+
 /* Each name hugs the center, so the columns mirror each other. */
 .dynamic-island__harness[data-side='start'] {
   justify-content: flex-end;
@@ -152,8 +161,75 @@
     'calt' 1,
     'liga' 1;
   letter-spacing: -0.01em;
-  /* One gray for both harness names. */
-  color: rgb(241 241 237 / 0.62);
+  /* Each name takes its dot's color. */
+  color: var(--dynamic-island-dot);
+}
+
+/* The empty state: a pixel cat asleep, breathing in two frames under z's. */
+.dynamic-island__sleeper {
+  position: relative;
+  display: inline-flex;
+  align-items: flex-end;
+  height: 24px;
+  padding: 0 18px 3px 0;
+  box-sizing: border-box;
+}
+
+.dynamic-island__sleeper-cat {
+  display: block;
+  fill: var(--dynamic-island-text);
+  transform-origin: 50% 100%;
+  animation: dynamic-island-sleep-breathe 2.4s steps(1, end) infinite;
+}
+
+.dynamic-island__sleeper-eye {
+  fill: var(--dynamic-island-fill);
+}
+
+.dynamic-island__sleeper-z {
+  position: absolute;
+  right: 0;
+  bottom: 10px;
+  width: 18px;
+  height: 18px;
+}
+
+.dynamic-island__z {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  display: block;
+  fill: rgb(241 241 237 / 0.62);
+  opacity: 0;
+  animation: dynamic-island-z 2.4s steps(6, end) infinite;
+}
+
+@keyframes dynamic-island-sleep-breathe {
+  0%,
+  100% {
+    transform: none;
+  }
+  /* One pixel row taller on each breath in: 18 of 16 px. */
+  50% {
+    transform: scaleY(1.125);
+  }
+}
+
+@keyframes dynamic-island-z {
+  0% {
+    opacity: 0;
+    transform: translate(0, 0);
+  }
+  17% {
+    opacity: 1;
+  }
+  83% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+    transform: translate(8px, -10px);
+  }
 }
 
 @keyframes dynamic-island-dot-in {
@@ -188,9 +264,17 @@
 
 .dynamic-island--reduced-motion .dynamic-island__shape,
 .dynamic-island--reduced-motion .dynamic-island__dot,
-.dynamic-island--reduced-motion .dynamic-island__dot::after {
+.dynamic-island--reduced-motion .dynamic-island__dot::after,
+.dynamic-island--reduced-motion .dynamic-island__sleeper-cat,
+.dynamic-island--reduced-motion .dynamic-island__z {
   animation: none;
   transition: none;
+}
+
+/* Under reduced motion the cat sleeps still under a single z. */
+.dynamic-island--reduced-motion .dynamic-island__z:first-child {
+  opacity: 1;
+  transform: translate(4px, -4px);
 }
 
 .dynamic-island--reduced-motion .dynamic-island__dot::after {
