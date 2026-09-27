@@ -2,14 +2,23 @@ import { describe, expect, it } from 'vitest';
 
 import {
   CODEX_DESKTOP_BUNDLE_ID,
-  CODEX_DESKTOP_BINARY_RELATIVE_PATH,
+  CODEX_DESKTOP_BINARY_RELATIVE_PATHS,
   resolveBundledCodexBinary,
   type CodexBinaryResolverOptions,
   type CodexFileStat,
 } from '../../src/main/providers/codex/bundled-binary-resolver';
 
 const bundle = '/tmp/ChatGPT.app';
-const binary = `${bundle}/${CODEX_DESKTOP_BINARY_RELATIVE_PATH}`;
+const binary = `${bundle}/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex`;
+const legacyBinary = `${bundle}/Contents/Resources/codex`;
+
+function existingPaths(...paths: string[]): (path: string) => Promise<string> {
+  const known = new Set([bundle, ...paths]);
+  return async (path) => {
+    if (!known.has(path)) throw new Error('ENOENT');
+    return path;
+  };
+}
 
 function options(overrides: Partial<CodexBinaryResolverOptions> = {}): CodexBinaryResolverOptions {
   const stats = new Map<string, CodexFileStat>([[binary, { mode: 0o100755, isFile: () => true }]]);
@@ -36,6 +45,30 @@ describe('bundled Codex binary resolver', () => {
       bundleId: CODEX_DESKTOP_BUNDLE_ID,
       version: '1.2.3',
     });
+  });
+
+  it('prefers the nested CodexCLI.app layout and falls back to the legacy location', async () => {
+    expect(CODEX_DESKTOP_BINARY_RELATIVE_PATHS.map((path) => `${bundle}/${path}`)).toEqual([
+      binary,
+      legacyBinary,
+    ]);
+    const executableStat = { mode: 0o100755, isFile: () => true };
+    await expect(
+      resolveBundledCodexBinary(
+        options({
+          realpath: existingPaths(binary, legacyBinary),
+          stat: async () => executableStat,
+        }),
+      ),
+    ).resolves.toMatchObject({ ok: true, binaryPath: binary });
+    await expect(
+      resolveBundledCodexBinary(
+        options({ realpath: existingPaths(legacyBinary), stat: async () => executableStat }),
+      ),
+    ).resolves.toMatchObject({ ok: true, binaryPath: legacyBinary });
+    await expect(
+      resolveBundledCodexBinary(options({ realpath: existingPaths() })),
+    ).resolves.toEqual({ ok: false, code: 'binary-missing' });
   });
 
   it('rejects bundle identity, missing version, and signature failures', async () => {
