@@ -5,7 +5,15 @@ import { join, relative, isAbsolute } from 'node:path';
 export const CODEX_DESKTOP_BUNDLE_PATH = '/Applications/ChatGPT.app';
 export const CODEX_DESKTOP_BUNDLE_ID = 'com.openai.codex';
 export const CODEX_DESKTOP_TEAM_ID = '2DC432GLL2';
-export const CODEX_DESKTOP_BINARY_RELATIVE_PATH = 'Contents/Resources/codex';
+/**
+ * The fixed bundle-relative executables, newest layout first. ChatGPT builds
+ * from 2026-09-26 on (Codex CLI 0.158.0-alpha.2) ship the signed Mach-O inside
+ * a nested `CodexCLI.app`; earlier builds placed it directly in Resources.
+ */
+export const CODEX_DESKTOP_BINARY_RELATIVE_PATHS: readonly string[] = [
+  'Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex',
+  'Contents/Resources/codex',
+];
 
 const PLUTIL_PATH = '/usr/bin/plutil';
 const CODESIGN_PATH = '/usr/bin/codesign';
@@ -46,7 +54,7 @@ export interface CodexBundleMetadata {
 export interface CodexBinaryResolverOptions {
   /** Production defaults to the signed ChatGPT application bundle. */
   bundlePath?: string;
-  /** Test seams; callers cannot replace the fixed bundle-relative executable. */
+  /** Test seams; callers cannot replace the fixed bundle-relative executables. */
   realpath?: (path: string) => Promise<string>;
   stat?: (path: string) => Promise<CodexFileStat>;
   readBundleMetadata?: (bundlePath: string) => Promise<CodexBundleMetadata>;
@@ -136,7 +144,7 @@ function containedWithin(root: string, candidate: string): boolean {
 }
 
 /**
- * Resolve only the fixed executable shipped in a trusted ChatGPT bundle.
+ * Resolve only a fixed executable shipped in a trusted ChatGPT bundle.
  * Diagnostics are stable codes; no filesystem path or subprocess output is
  * retained or returned on failure.
  */
@@ -170,13 +178,16 @@ export async function resolveBundledCodexBinary(
     return { ok: false, code: 'version-unavailable' };
   }
 
-  const binaryCandidate = join(bundleRealPath, CODEX_DESKTOP_BINARY_RELATIVE_PATH);
-  let binaryRealPath: string;
-  try {
-    binaryRealPath = await resolvePath(binaryCandidate);
-  } catch {
-    return { ok: false, code: 'binary-missing' };
+  let binaryRealPath: string | undefined;
+  for (const relativePath of CODEX_DESKTOP_BINARY_RELATIVE_PATHS) {
+    try {
+      binaryRealPath = await resolvePath(join(bundleRealPath, relativePath));
+      break;
+    } catch {
+      // A layout this build does not ship; try the next fixed location.
+    }
   }
+  if (binaryRealPath === undefined) return { ok: false, code: 'binary-missing' };
   if (!containedWithin(bundleRealPath, binaryRealPath)) {
     return { ok: false, code: 'binary-outside-bundle' };
   }
