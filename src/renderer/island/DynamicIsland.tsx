@@ -99,8 +99,9 @@ function HarnessCell({
   // A tone change is a new dot, so it scales in again.
   const dot = <span key={tone} className="dynamic-island__dot" data-tone={tone} />;
   const label = <span className="dynamic-island__name">{name}</span>;
-  // The columns mirror each other around the island's center; each one opens
-  // its own harness's Desktop app at its thread. The name takes its dot's color.
+  // Both columns read dot, then name (the user moved Claude's dot to the left
+  // on 2026-09-25); each one opens its own harness's Desktop app at its thread.
+  // The name takes its dot's color.
   return (
     <button
       ref={buttonRef}
@@ -116,8 +117,8 @@ function HarnessCell({
       onPointerCancel={onPointerCancel}
       onClick={onClick}
     >
-      {side === 'start' ? dot : label}
-      {side === 'start' ? label : dot}
+      {dot}
+      {label}
     </button>
   );
 }

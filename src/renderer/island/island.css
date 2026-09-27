@@ -113,7 +113,7 @@
   display: inline-flex;
 }
 
-/* Each name hugs the center, so the columns mirror each other. */
+/* Each column hugs the center, so the pair stays centered on the island. */
 .dynamic-island__harness[data-side='start'] {
   justify-content: flex-end;
 }

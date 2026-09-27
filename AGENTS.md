@@ -24,7 +24,7 @@ reference states render from
   flat top with **8 px** concave shoulders, a fully rounded bottom, at least
   **48 px** wide, and **14 px** of horizontal padding around its content.
 - The island shows a column only for an active harness: Codex on the left
-  (dot, then `Codex`) and Claude on the right (`Claude`, then dot), 28 px
+  (dot, then `Codex`) and Claude on the right (dot, then `Claude`), 28 px
   apart around the center when both show, and centered when one shows. Each
   **8 px** dot shows its harness's most important thread: orange when one
   needs input, else pulsing blue while one works. An idle harness is hidden.
