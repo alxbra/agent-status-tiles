@@ -52,18 +52,18 @@ describe('bundled Codex binary resolver', () => {
       binary,
       legacyBinary,
     ]);
-    const legacyStat = { mode: 0o100755, isFile: () => true };
+    const executableStat = { mode: 0o100755, isFile: () => true };
     await expect(
       resolveBundledCodexBinary(
         options({
           realpath: existingPaths(binary, legacyBinary),
-          stat: async () => legacyStat,
+          stat: async () => executableStat,
         }),
       ),
     ).resolves.toMatchObject({ ok: true, binaryPath: binary });
     await expect(
       resolveBundledCodexBinary(
-        options({ realpath: existingPaths(legacyBinary), stat: async () => legacyStat }),
+        options({ realpath: existingPaths(legacyBinary), stat: async () => executableStat }),
       ),
     ).resolves.toMatchObject({ ok: true, binaryPath: legacyBinary });
     await expect(
